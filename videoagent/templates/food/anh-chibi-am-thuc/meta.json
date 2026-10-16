@@ -1,0 +1,22 @@
+{
+  "type": "ai_image",
+  "name": "Ảnh Chibi Ẩm Thực Mini",
+  "description": "Ảnh 3D chibi Việt Nam đáng yêu quây quanh món ăn khổng lồ trong làng quê mini — làm ảnh bìa / thumbnail",
+  "tags": ["ẩm thực", "chibi", "3d", "thumbnail", "làng quê"],
+  "variables": [
+    {"key": "MonAn", "label": "Món ăn / sản phẩm khổng lồ", "default": "tô phở bò khổng lồ bốc khói", "required": true},
+    {"key": "TieuDe", "label": "Tiêu đề trên ảnh (để trống nếu không cần chữ)", "default": "", "required": false}
+  ],
+  "attachments": [
+    {"key": "style", "label": "Ảnh mẫu phong cách", "default": "reference.png",
+     "role": "style reference", "prompt": "match this cute 3D chibi style and rural Vietnamese village look, with original characters"}
+  ],
+  "prompt": [
+    "Cute high-quality 3D animated illustration, vertical composition.",
+    "Adorable Vietnamese chibi characters with round faces, rosy cheeks and big expressive eyes gather happily around an enormous {MonAn} placed in the middle of a warm rural Vietnamese village.",
+    "Traditional tiled-roof wooden houses, bamboo fences, banana trees, clay pots, wooden tables and woven baskets with fresh herbs.",
+    "Bright warm sunlight, soft cinematic lighting, vibrant natural colors, very detailed textures, charming miniature-world feeling.",
+    "Optional bold playful Vietnamese title at the top (omit if blank):",
+    "“{TieuDe}”"
+  ]
+}

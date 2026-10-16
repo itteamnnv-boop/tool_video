@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="vi"><head>{% include "head.html" %}
+<style>
+:root{--accent:{{ accent }};--yellow:#ffe14d;--red:#e8202a}
+body{background:#111}
+.photo{position:absolute;inset:-3%;background:center 30%/cover no-repeat;animation:kb var(--dur) cubic-bezier(.3,.1,.3,1) both}
+.v0 .photo{transform-origin:50% 30%}
+.v1 .photo{transform-origin:20% 40%}
+.v2 .photo{transform-origin:80% 45%}
+@keyframes kb{from{transform:scale(1.14)}to{transform:scale(1.02)}}
+.ph{position:absolute;inset:0;display:grid;place-items:center;background:linear-gradient(160deg,#6d8b74,#24352a);color:#ffffffaa;font-weight:900;letter-spacing:.14em;font-size:3.4vmin}
+.flash{position:absolute;inset:0;background:#fff;animation:flash .35s ease-out both}
+@keyframes flash{from{opacity:.75}to{opacity:0}}
+.shade{position:absolute;inset:0;background:linear-gradient(180deg,#0006 0%,transparent 22%,transparent 52%,#000c 100%)}
+
+.bubble{position:absolute;top:6.5%;left:4.5%;max-width:64%;display:flex;gap:2vmin;align-items:center;padding:1.8vmin 2.6vmin 1.8vmin 1.8vmin;background:#fff;color:#151515;border-radius:2.6vmin;box-shadow:0 1vmin 3vmin #0005}
+.bubble.pop{animation:pop .5s .15s cubic-bezier(.2,.9,.3,1.3) both}
+@keyframes pop{from{opacity:0;transform:scale(.6) translateY(-2vmin);transform-origin:left top}}
+.bubble::after{content:'';position:absolute;left:4vmin;bottom:-1.6vmin;border:1vmin solid transparent;border-top:1.4vmin solid #fff;border-bottom:0}
+.av{flex:none;width:9vmin;height:9vmin;border-radius:50%;display:grid;place-items:center;background:linear-gradient(145deg,#8bc34a,#2e7d32);color:#fff;font-weight:900;font-size:3.4vmin;border:.5vmin solid #e8f5e9}
+.bubble small{display:block;color:#666;font-size:2.3vmin;font-weight:600}
+.bubble p{font-weight:800;font-size:3.5vmin;line-height:1.25;max-height:9vmin;overflow:hidden}
+
+.sticker{position:absolute;right:4%;top:40%;width:25vmin;height:25vmin;display:grid;place-items:center;text-align:center;background:var(--yellow);color:var(--red);font-weight:900;font-size:calc(5.2vmin * var(--fit,1));line-height:1.1;white-space:nowrap;clip-path:polygon(50% 0,61% 13%,77% 6%,80% 23%,96% 26%,89% 41%,100% 52%,88% 62%,93% 78%,77% 79%,72% 95%,58% 87%,46% 100%,37% 86%,21% 94%,19% 77%,3% 72%,11% 58%,0 46%,12% 36%,6% 20%,23% 19%,28% 3%,41% 12%);transform:rotate(-12deg);filter:drop-shadow(0 1vmin 2vmin #0006);animation:stickerIn .55s 1.2s cubic-bezier(.2,.9,.3,1.5) both}
+@keyframes stickerIn{from{opacity:0;transform:rotate(-60deg) scale(0)}}
+
+.caption{position:absolute;left:5%;right:5%;bottom:21%}
+.kicker{display:inline-block;max-width:100%;padding:.8vmin 2.2vmin;background:var(--yellow);color:#111;font-weight:900;letter-spacing:.06em;font-size:calc(3vmin * var(--fit,1));white-space:nowrap;transform:rotate(-2deg);animation:fadeUp .45s .3s both}
+h1{margin-top:2vmin;max-width:80%;font-weight:900;line-height:1.14;font-size:calc(8.4vmin * var(--fit,1));max-height:30vmin;color:#fff;-webkit-text-stroke:1.3vmin #000;paint-order:stroke fill;text-shadow:0 .8vmin 2vmin #0008}
+h1 .w{--d0:.45s}
+h1 .hl{color:var(--yellow)}
+p.sub{display:inline-block;margin-top:1.8vmin;max-width:86%;padding:1.2vmin 2.2vmin;border-radius:1.4vmin;background:#000a;color:#fff;font-weight:600;font-size:calc(3.3vmin * var(--fit,1));line-height:1.4;max-height:14vmin;animation:fadeUp .6s 1.1s both}
+
+.brand{position:absolute;left:5%;right:5%;bottom:9.5%;display:flex;align-items:center;gap:1.8vmin;animation:fadeIn .6s .6s both}
+.logo{flex:none;width:7vmin;height:7vmin;border-radius:50%;display:grid;place-items:center;background:#fff}
+.logo svg{width:4.6vmin;height:4.6vmin}
+.brand b{color:#fff;font-size:3.4vmin;font-weight:800;text-shadow:0 .4vmin 1.6vmin #000;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cta{position:absolute;right:5%;bottom:13%;padding:1.8vmin 4.4vmin;border-radius:99px;background:var(--red);color:#fff;font-weight:900;font-size:3.4vmin;letter-spacing:.06em;box-shadow:0 1vmin 3vmin #e8202a88;animation:fadeUp .5s 1.6s both,pulse 1.4s 2.4s infinite}
+@media (min-aspect-ratio:1/1){.caption{right:40%}.sticker{top:30%;right:6%}.bubble{max-width:40%}}
+</style></head>
+<body class="v{{ index % 3 }}" style="--dur:{{ duration }}s"><div class="stage">
+  {% if bg_video %}<video class="va-bg-video" src="{{ bg_video }}#t={{ bg_start }}" autoplay muted loop playsinline></video>
+  {% elif product_image %}<div class="photo" style="background-image:url('{{ product_image }}')"></div>
+  {% else %}<div class="ph">ẢNH NGƯỜI MẪU CẦM SẢN PHẨM</div>{% endif %}
+  <div class="shade"></div>
+  {% if index > 1 %}<div class="flash"></div>{% endif %}
+
+  {% if comment_text %}
+  <div class="bubble{{ ' pop' if index == 1 else '' }}">
+    <div class="av">{{ comment_initials }}</div>
+    <div><small>Trả lời bình luận của {{ comment_name or 'khách hàng' }}</small><p>{{ comment_text }}</p></div>
+  </div>
+  {% endif %}
+
+  {% if stat %}<div class="sticker" data-fit="stat">{{ stat }}</div>{% endif %}
+
+  <div class="caption">
+    {% if kicker %}<div class="kicker" data-fit="kicker">{{ kicker }}</div>{% endif %}
+    <h1 data-fit="headline">{% for w in words %}<span class="w{% if w.hl %} hl{% endif %}" style="--i:{{ loop.index0 }}">{{ w.text }}</span> {% endfor %}</h1>
+    {% if subtext %}<p class="sub" data-fit="subtext">{{ subtext }}</p>{% endif %}
+  </div>
+
+  {% if brand %}
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24"><path d="M12 21c-1-4-4-6-8-6 0-6 4-9 8-9s8 3 8 9c-4 0-7 2-8 6Z" fill="#43a047"/><path d="M12 21V9" stroke="#fff" stroke-width="1.6"/></svg></div>
+    <b>{{ brand }}</b>
+  </div>
+  {% endif %}
+  {% if index == total and total > 1 %}<div class="cta">ĐẶT HÀNG NGAY</div>{% endif %}
+</div></body></html>

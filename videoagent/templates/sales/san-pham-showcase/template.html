@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="vi"><head>{% include "head.html" %}
+<style>
+:root{--accent:{{ accent }};--bg:{{ bg }};--bg2:{{ bg2 }}}
+body{background:radial-gradient(95% 60% at 50% 32%,var(--bg2) 0%,var(--bg) 72%)}
+.layout{position:absolute;inset:0;background:center/cover no-repeat;animation:slowZoom var(--dur) linear both}
+.shade{position:absolute;inset:0;background:linear-gradient(180deg,transparent 35%,color-mix(in srgb,var(--bg) 75%,transparent) 62%,var(--bg) 100%)}
+.glow{position:absolute;left:50%;top:33%;width:85vmin;height:85vmin;margin:-42.5vmin;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--accent) 42%,transparent),transparent 65%);animation:pulse 3.2s ease-in-out infinite}
+.product{position:absolute;left:12%;right:12%;top:8%;height:47%;animation:productIn .9s .1s cubic-bezier(.2,.9,.25,1.15) both}
+.v1 .product{left:4%;right:24%;--tilt:-3deg}
+.v2 .product{left:24%;right:4%;--tilt:3deg}
+@keyframes productIn{from{opacity:0;transform:translateY(7vmin) scale(.8)}}
+.float{position:relative;width:100%;height:100%;display:grid;place-items:center;animation:float 3.6s ease-in-out infinite}
+@keyframes float{50%{transform:translateY(-2.2vmin) rotate(var(--tilt,0deg))}}
+.float img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 3vmin 3vmin #000b)}
+.sweep{position:absolute;inset:0;-webkit-mask:url("{{ product_image }}") center/contain no-repeat;mask:url("{{ product_image }}") center/contain no-repeat;background:linear-gradient(110deg,transparent 38%,#ffffffa8 50%,transparent 62%) no-repeat;background-size:260% 100%;animation:sweep 2.2s 1.1s ease-in-out both}
+@keyframes sweep{from{background-position:130% 0}to{background-position:-70% 0}}
+.ph{width:60%;height:82%;border-radius:4vmin;background:linear-gradient(145deg,color-mix(in srgb,var(--accent) 75%,#fff),var(--bg2));display:grid;place-items:center;color:var(--bg);font-weight:900;letter-spacing:.14em;font-size:3vmin}
+.floor{position:absolute;left:26%;right:26%;top:55.5%;height:3.4vmin;border-radius:50%;background:radial-gradient(#000c,transparent 70%);animation:fadeIn 1s .5s both}
+.sticker{position:absolute;top:9%;right:7%;min-width:21vmin;height:21vmin;padding:0 2vmin;border-radius:50%;display:grid;place-items:center;background:var(--accent);color:var(--bg);font-weight:900;font-size:calc(5vmin * var(--fit,1));line-height:1.15;text-align:center;white-space:nowrap;transform:rotate(-10deg);box-shadow:0 1.5vmin 4vmin #0008;animation:stickerIn .6s 1.3s cubic-bezier(.2,.9,.3,1.5) both}
+@keyframes stickerIn{from{opacity:0;transform:rotate(-40deg) scale(0)}}
+.copy{position:absolute;left:7%;right:7%;bottom:14%}
+.kicker{display:inline-block;max-width:100%;padding:1vmin 2.6vmin;border-radius:99px;background:var(--accent);color:var(--bg);font-weight:800;letter-spacing:.12em;font-size:calc(2.6vmin * var(--fit,1));white-space:nowrap;animation:fadeUp .5s .5s both}
+h1{margin-top:2.4vmin;font-weight:900;line-height:1.12;font-size:calc(8.2vmin * var(--fit,1));max-height:28vmin;letter-spacing:-.01em;text-shadow:0 .6vmin 3vmin #0009}
+h1 .w{--d0:.7s}
+h1 .hl{color:var(--accent)}
+p.sub{margin-top:2vmin;color:#ffffffd0;font-size:calc(3.4vmin * var(--fit,1));line-height:1.45;max-height:15vmin;animation:fadeUp .7s 1.3s both}
+.cta{display:inline-block;margin-top:3vmin;padding:2vmin 5.5vmin;border-radius:99px;background:var(--accent);color:var(--bg);font-weight:900;letter-spacing:.08em;font-size:3.4vmin;box-shadow:0 0 4vmin color-mix(in srgb,var(--accent) 55%,transparent);animation:fadeUp .6s 1.8s both,pulse 1.5s 2.6s infinite}
+.dots{position:absolute;left:0;right:0;bottom:8.5%;display:flex;justify-content:center;gap:1.2vmin}
+.dots i{width:1.3vmin;height:1.3vmin;border-radius:50%;background:#ffffff40}
+.dots i.on{width:4vmin;border-radius:9px;background:var(--accent)}
+@media (min-aspect-ratio:1/1){
+  .product,.v1 .product,.v2 .product{left:5%;right:52%;top:10%;height:78%}
+  .floor{left:14%;right:61%;top:87%}
+  .glow{left:28%;top:50%}
+  .copy{left:52%;right:6%;bottom:auto;top:24%}
+  .sticker{right:auto;left:38%}
+}
+</style></head>
+<body class="v{{ index % 3 }}" style="--dur:{{ duration }}s"><div class="stage">
+  {% if layout_image %}<div class="layout" style="background-image:url('{{ layout_image }}')"></div><div class="shade"></div>{% endif %}
+  <div class="glow"></div>
+  <div class="floor"></div>
+  <div class="product"><div class="float">
+    {% if product_image %}<img src="{{ product_image }}" alt=""><div class="sweep"></div>
+    {% else %}<div class="ph">ẢNH SẢN PHẨM</div>{% endif %}
+  </div></div>
+  {% if stat %}<div class="sticker" data-fit="stat">{{ stat }}</div>{% endif %}
+  <div class="copy">
+    {% if kicker %}<div class="kicker" data-fit="kicker">{{ kicker }}</div>{% endif %}
+    <h1 data-fit="headline">{% for w in words %}<span class="w{% if w.hl %} hl{% endif %}" style="--i:{{ loop.index0 }}">{{ w.text }}</span> {% endfor %}</h1>
+    {% if subtext %}<p class="sub" data-fit="subtext">{{ subtext }}</p>{% endif %}
+    {% if index == total and total > 1 %}<div class="cta">MUA NGAY</div>{% endif %}
+  </div>
+  <div class="dots">{% for i in range(total) %}<i class="{{ 'on' if i + 1 == index else '' }}"></i>{% endfor %}</div>
+</div></body></html>

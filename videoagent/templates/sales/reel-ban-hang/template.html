@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="vi"><head>{% include "head.html" %}
+<style>
+:root{--green:#1f9d55;--green2:#0f6b36;--yellow:#ffe14d;--red:#e8202a}
+body{background:#0d1a12}
+.photo{position:absolute;inset:-3%;background:center 30%/cover no-repeat;animation:kb var(--dur) cubic-bezier(.3,.1,.3,1) both}
+@keyframes kb{from{transform:scale(1.12)}to{transform:scale(1.02)}}
+.ph{position:absolute;inset:0;display:grid;place-items:center;background:linear-gradient(160deg,#4f7d5c,#163322);color:#ffffffaa;font-weight:900;letter-spacing:.14em;font-size:3.2vmin;text-align:center}
+.shade{position:absolute;inset:0;background:linear-gradient(180deg,#0007 0%,transparent 20%,transparent 45%,#000d 100%)}
+{% if index > 1 %}.flash{position:absolute;inset:0;background:#fff;animation:flash .3s ease-out both}{% endif %}
+@keyframes flash{from{opacity:.7}to{opacity:0}}
+
+/* bong bóng logo / trả lời bình luận (góc trái trên) */
+.bubble{position:absolute;top:5.5%;left:4%;max-width:70%;display:flex;gap:1.8vmin;align-items:center;padding:1.4vmin 2.4vmin 1.4vmin 1.4vmin;background:#fffffff2;color:#151515;border-radius:2.4vmin;box-shadow:0 1vmin 3vmin #0005}
+.bubble.pop{animation:pop .5s .15s cubic-bezier(.2,.9,.3,1.3) both}
+@keyframes pop{from{opacity:0;transform:scale(.6) translateY(-2vmin);transform-origin:left top}}
+.logo{flex:none;width:9vmin;height:9vmin;border-radius:50%;display:grid;place-items:center;background:#fff;border:.5vmin solid #c8e6c9}
+.logo svg{width:5.6vmin;height:5.6vmin}
+.bubble small{display:block;color:#666;font-size:2.2vmin;font-weight:600}
+.bubble p{font-weight:800;font-size:3.2vmin;line-height:1.25;max-height:8.4vmin;overflow:hidden}
+
+/* tag giá nhỏ (góc phải trên, các khung trước khung cuối) */
+.pricetag{position:absolute;top:6%;right:4%;max-width:34%;padding:1.2vmin 2vmin;border-radius:1.6vmin;background:var(--red);color:#fff;font-weight:900;font-size:calc(3.2vmin * var(--fit,1));line-height:1.15;text-align:center;white-space:nowrap;box-shadow:0 1vmin 3vmin #e8202a77;transform:rotate(3deg);animation:fadeUp .5s .9s both}
+.pricetag small{display:block;font-size:2vmin;font-weight:700;opacity:.9}
+
+/* checklist lợi ích */
+.features{position:absolute;right:4%;top:24%;display:flex;flex-direction:column;align-items:flex-end;gap:1.4vmin}
+.features div{display:flex;align-items:center;gap:1.4vmin;padding:1.2vmin 2.4vmin 1.2vmin 1.4vmin;border-radius:99px;background:#ffffffee;color:var(--green2);font-weight:900;font-size:3.3vmin;box-shadow:0 .8vmin 2vmin #0004;opacity:0;animation:slideL .5s cubic-bezier(.2,.8,.2,1) forwards;animation-delay:calc(.6s + var(--i) * .25s)}
+.features i{width:4.4vmin;height:4.4vmin;border-radius:50%;display:grid;place-items:center;background:var(--green);color:#fff;font-style:normal;font-size:2.6vmin}
+@keyframes slideL{from{opacity:0;transform:translateX(12vmin)}to{opacity:1;transform:none}}
+
+/* khối chữ chính */
+.caption{position:absolute;left:5%;right:5%;bottom:20%}
+.kicker{display:inline-flex;align-items:center;gap:1vmin;max-width:100%;padding:.9vmin 2.2vmin;border-radius:1vmin;background:var(--green);color:#fff;font-weight:900;letter-spacing:.04em;font-size:calc(2.9vmin * var(--fit,1));white-space:nowrap;animation:fadeUp .45s .3s both}
+h1{margin-top:1.8vmin;max-width:88%;font-weight:900;line-height:1.14;font-size:calc(8vmin * var(--fit,1));max-height:28vmin;color:#fff;-webkit-text-stroke:1.2vmin #000;paint-order:stroke fill;text-shadow:0 .8vmin 2vmin #0008}
+h1 .w{--d0:.45s}
+h1 .hl{color:var(--yellow)}
+p.sub{display:inline-block;margin-top:1.6vmin;max-width:90%;padding:1.1vmin 2.2vmin;border-radius:1.4vmin;background:#000b;color:#fff;font-weight:600;font-size:calc(3.2vmin * var(--fit,1));line-height:1.4;max-height:13vmin;animation:fadeUp .6s 1.1s both}
+
+/* thẻ giá ưu đãi (khung cuối) */
+.offer{position:absolute;left:5%;right:5%;bottom:17%;padding:3vmin 3.4vmin;border-radius:3vmin;background:linear-gradient(160deg,#fffdf2,#fff3c4);color:#1b1b1b;box-shadow:0 2vmin 5vmin #0008;border:.6vmin solid var(--yellow);animation:offerIn .7s .2s cubic-bezier(.2,.9,.3,1.2) both}
+@keyframes offerIn{from{opacity:0;transform:translateY(8vmin) scale(.9)}}
+.offer .label{display:inline-block;padding:.6vmin 2vmin;border-radius:99px;background:var(--red);color:#fff;font-weight:900;font-size:2.8vmin;letter-spacing:.06em}
+.offer .name{margin-top:1.6vmin;font-weight:900;font-size:calc(4.6vmin * var(--fit,1));line-height:1.15;color:var(--green2);max-height:11vmin}
+.offer .price{margin-top:1.2vmin;font-weight:900;font-size:calc(8.4vmin * var(--fit,1));line-height:1.1;color:var(--red);white-space:nowrap;animation:pulse 1.6s 1.6s infinite}
+.offer .old{font-size:3.4vmin;font-weight:700;color:#777;text-decoration:line-through;text-decoration-thickness:.4vmin}
+.offer .perk{margin-top:1.6vmin;display:flex;align-items:center;gap:1.4vmin;font-weight:800;font-size:3.2vmin;color:var(--green2)}
+.offer .perk svg{width:5vmin;height:5vmin;flex:none}
+.offer .cta{margin-top:2vmin;padding:1.6vmin 2vmin;border-radius:1.6vmin;background:var(--green);color:#fff;text-align:center;font-weight:900;font-size:3.2vmin;animation:fadeUp .5s 1.4s both}
+
+.footer{position:absolute;left:5%;right:5%;bottom:9%;display:flex;align-items:center;gap:1.4vmin;color:#fff;font-size:2.6vmin;font-weight:700;text-shadow:0 .4vmin 1.4vmin #000;white-space:nowrap;overflow:hidden;animation:fadeIn .6s .6s both}
+.footer b{font-weight:900}
+.footer span{opacity:.85;overflow:hidden;text-overflow:ellipsis}
+@media (min-aspect-ratio:1/1){.caption,.offer{right:42%}.features{top:30%}}
+</style></head>
+<body style="--dur:{{ duration }}s"><div class="stage">
+  {% if bg_video %}<video class="va-bg-video" src="{{ bg_video }}#t={{ bg_start }}" autoplay muted loop playsinline></video>
+  {% elif product_image %}<div class="photo" style="background-image:url('{{ product_image }}')"></div>
+  {% else %}<div class="ph">VIDEO / ẢNH NGƯỜI BÁN<br>CẦM SẢN PHẨM</div>{% endif %}
+  <div class="shade"></div>
+  {% if index > 1 %}<div class="flash"></div>{% endif %}
+
+  <div class="bubble{{ ' pop' if index == 1 else '' }}">
+    <div class="logo"><svg viewBox="0 0 24 24"><path d="M12 21c-1-4-4-6-8-6 0-6 4-9 8-9s8 3 8 9c-4 0-7 2-8 6Z" fill="#2e9d4f"/><path d="M12 21V9" stroke="#fff" stroke-width="1.6"/></svg></div>
+    {% if comment_text %}
+    <div><small>Trả lời bình luận của {{ comment_name or 'khách hàng' }}</small><p>{{ comment_text }}</p></div>
+    {% else %}
+    <div><p>{{ brand or title }}</p><small>Chính hãng · Tư vấn miễn phí</small></div>
+    {% endif %}
+  </div>
+
+  {% set last = index == total and total > 1 %}
+  {% if offer_price and not last %}
+  <div class="pricetag" data-fit="stat"><small>GIÁ ƯU ĐÃI</small>{{ offer_price }}</div>
+  {% endif %}
+
+  {% if features and (index == 2 or total < 3) and not last %}
+  <div class="features">
+    {% for f in features %}<div style="--i:{{ loop.index0 }}"><i>✓</i>{{ f }}</div>{% endfor %}
+  </div>
+  {% endif %}
+
+  {% if last and (offer_price or offer_perk) %}
+  <div class="offer">
+    <span class="label">🔥 GIÁ ƯU ĐÃI</span>
+    <div class="name" data-fit="headline">{{ title }}</div>
+    {% if offer_price %}<div class="price">{{ offer_price }}</div>{% endif %}
+    {% if offer_old_price %}<div class="old">Giá cũ: {{ offer_old_price }}</div>{% endif %}
+    {% if offer_perk %}<div class="perk"><svg viewBox="0 0 24 24" fill="none" stroke="#0f6b36" stroke-width="1.8"><path d="M2 6h11v9H2zM13 9h4l3 3v3h-7z"/><circle cx="6" cy="17" r="1.8" fill="#fff"/><circle cx="17" cy="17" r="1.8" fill="#fff"/></svg>{{ offer_perk }}</div>{% endif %}
+    <div class="cta">Bình luận “TƯ VẤN” hoặc nhắn tin để được hỗ trợ</div>
+  </div>
+  {% else %}
+  <div class="caption">
+    {% if kicker %}<div class="kicker" data-fit="kicker">🌿 {{ kicker }}</div>{% endif %}
+    <h1 data-fit="headline">{% for w in words %}<span class="w{% if w.hl %} hl{% endif %}" style="--i:{{ loop.index0 }}">{{ w.text }}</span> {% endfor %}</h1>
+    {% if subtext %}<p class="sub" data-fit="subtext">{{ subtext }}</p>{% endif %}
+  </div>
+  {% endif %}
+
+  {% if brand or offer_contact %}
+  <div class="footer">{% if brand %}<b>{{ brand }}</b>{% endif %}{% if offer_contact %}<span>· {{ offer_contact }}</span>{% endif %}</div>
+  {% endif %}
+</div></body></html>

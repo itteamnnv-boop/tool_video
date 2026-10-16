@@ -1,0 +1,7 @@
+{
+  "name": "Sản Phẩm Showcase",
+  "description": "Ảnh sản phẩm tải lên nổi ở giữa, nền theo layout mẫu, màu lấy từ layout — dùng cho thể loại Theo layout & sản phẩm mẫu",
+  "tags": ["sản phẩm", "bán hàng", "showcase"],
+  "subtitle_margin": 0.05,
+  "hidden": true
+}

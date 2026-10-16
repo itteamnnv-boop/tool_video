@@ -1,0 +1,12 @@
+{
+  "type": "ai_image",
+  "name": "Poster Quảng Cáo Nông Nghiệp",
+  "description": "Poster dọc kiểu quảng cáo: nông dân cầm sản phẩm giữa cánh đồng xanh, chữ tiêu đề lớn, lợi ích nổi bật",
+  "tags": ["nông nghiệp", "poster", "quảng cáo", "hạt giống", "phân bón"],
+  "variables": [
+    {"key": "TenSanPham", "label": "Tên sản phẩm", "default": "Baby Cucumbers F1", "required": true},
+    {"key": "TieuDe", "label": "Tiêu đề lớn trên poster", "default": "HẠT GIỐNG NĂNG SUẤT CAO", "required": true},
+    {"key": "LoiIch", "label": "Lợi ích nổi bật (ngắn)", "default": "Nảy mầm đều · Kháng bệnh · Trái đẹp", "required": true}
+  ],
+  "prompt": "Vertical advertising poster for a Vietnamese agricultural product. A smiling Vietnamese farmer wearing a conical hat crouches in a lush green field and holds the product package labeled '{TenSanPham}' toward the camera. Bright warm sunlight, blue sky, fresh green and yellow colors, a modern greenhouse and an agricultural drone in the background. Large bold Vietnamese headline at the top: '{TieuDe}'. A clean ribbon below with the benefits: '{LoiIch}'. Professional commercial photography, sharp product details, premium social-media advertising design."
+}

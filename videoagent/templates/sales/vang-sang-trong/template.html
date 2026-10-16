@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="vi"><head>{% include "head.html" %}
+<style>
+:root{--gold:#e5c07b;--gold2:#a8803c}
+body{background:radial-gradient(90% 60% at 50% 30%,#2a2216 0%,#0b0a08 60%,#050505 100%)}
+.shine{position:absolute;inset:0;background:linear-gradient(115deg,transparent 40%,#e5c07b1c 50%,transparent 60%);animation:shine var(--dur) ease-in-out both}
+@keyframes shine{from{transform:translateX(-70%)}to{transform:translateX(70%)}}
+.frame{position:absolute;inset:4.5%;width:91%;height:91%}
+.frame rect{fill:none;stroke:url(#g);stroke-width:.35;stroke-dasharray:1;stroke-dashoffset:1;animation:draw 2s .2s cubic-bezier(.6,0,.2,1) forwards}
+.kicker{position:absolute;top:11%;left:12%;right:12%;text-align:center;color:var(--gold);font-weight:700;letter-spacing:.32em;font-size:calc(2.6vmin * var(--fit,1));white-space:nowrap;animation:fadeIn 1s .5s both}
+.orn{position:absolute;top:15.5%;left:50%;width:18vmin;margin-left:-9vmin;height:1px;background:linear-gradient(90deg,transparent,var(--gold),transparent);animation:fadeIn 1s .8s both}
+.copy{position:absolute;left:12%;right:12%;top:24%;text-align:center}
+h1{font-weight:800;line-height:1.18;font-size:calc(8.2vmin * var(--fit,1));max-height:38vmin;letter-spacing:-.01em}
+h1 .hl{background:linear-gradient(180deg,#fff1c9,var(--gold) 50%,var(--gold2));-webkit-background-clip:text;color:transparent}
+p.sub{margin-top:3vmin;color:#d9cfbf;font-size:calc(3.4vmin * var(--fit,1));line-height:1.5;max-height:16vmin;animation:fadeUp .8s 1.2s both}
+.stat{position:absolute;left:12%;right:12%;bottom:27%;text-align:center;font-weight:900;font-size:calc(11vmin * var(--fit,1));white-space:nowrap;background:linear-gradient(180deg,#fff1c9,var(--gold) 55%,var(--gold2));-webkit-background-clip:text;color:transparent;filter:drop-shadow(0 1vmin 3vmin #e5c07b44);animation:fadeUp .8s 1.4s both}
+.cta{position:absolute;left:50%;bottom:16%;transform:translateX(-50%);padding:2.2vmin 6vmin;border-radius:99px;background:linear-gradient(180deg,#f3d697,var(--gold2));color:#1a1408;font-weight:900;letter-spacing:.08em;font-size:3.4vmin;white-space:nowrap;box-shadow:0 0 4vmin #e5c07b55;animation:fadeUp .6s 1.8s both,pulse 1.6s 2.6s infinite}
+</style></head>
+<body style="--dur:{{ duration }}s"><div class="stage">
+  <div class="shine"></div>
+  <svg class="frame" viewBox="0 0 100 100" preserveAspectRatio="none">
+    <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f3d697"/><stop offset="1" stop-color="#a8803c"/></linearGradient></defs>
+    <rect x="0" y="0" width="100" height="100" pathLength="1"/>
+  </svg>
+  {% if kicker %}<div class="kicker" data-fit="kicker">{{ kicker }}</div>{% endif %}
+  <div class="orn"></div>
+  <div class="copy">
+    <h1 data-fit="headline">{% for w in words %}<span class="w{% if w.hl %} hl{% endif %}" style="--i:{{ loop.index0 }};--d0:.6s">{{ w.text }}</span> {% endfor %}</h1>
+    {% if subtext %}<p class="sub" data-fit="subtext">{{ subtext }}</p>{% endif %}
+  </div>
+  {% if stat %}<div class="stat" data-fit="stat">{{ stat }}</div>{% endif %}
+  {% if index == total %}<div class="cta">LIÊN HỆ NGAY</div>{% endif %}
+</div></body></html>

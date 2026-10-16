@@ -1,0 +1,17 @@
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden}
+body{font-family:'Be Vietnam Pro','Segoe UI',Arial,sans-serif;color:#fff;background:#000;-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision}
+.stage{position:absolute;inset:0;overflow:hidden}
+[data-fit]{overflow:hidden}
+/* Video nền: khi xem trước thì phát trong trang; khi render thì renderer ghép video bằng ffmpeg nên ẩn đi và để nền trong suốt */
+.va-bg-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.va-render body,.va-render .stage{background:transparent!important}
+.va-render .va-bg-video{display:none}
+.w{display:inline-block;opacity:0;transform:translateY(.45em);animation:wordIn .55s cubic-bezier(.2,.8,.2,1) forwards;animation-delay:calc(var(--d0,.35s) + var(--i) * .08s)}
+@keyframes wordIn{to{opacity:1;transform:none}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(3vmin)}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes slowZoom{from{transform:scale(1)}to{transform:scale(1.1)}}
+@keyframes pulse{50%{opacity:.35}}
+@keyframes draw{to{stroke-dashoffset:0}}
+.grain{position:absolute;inset:-50%;opacity:.08;pointer-events:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")}

@@ -1,0 +1,11 @@
+{
+  "type": "ai_image",
+  "name": "Ảnh Sản Phẩm Studio Cao Cấp",
+  "description": "Ảnh sản phẩm chụp studio sang trọng: sản phẩm trung tâm, ánh sáng mềm, bối cảnh theo ngành — đính kèm ảnh sản phẩm thật để giữ đúng bao bì",
+  "tags": ["sản phẩm", "studio", "quảng cáo", "ecommerce"],
+  "variables": [
+    {"key": "TenSanPham", "label": "Tên / mô tả sản phẩm", "default": "Chai thuốc Aben 10S", "required": true},
+    {"key": "BoiCanh", "label": "Bối cảnh / đạo cụ xung quanh", "default": "lá lúa xanh, giọt sương, ánh nắng sớm trên cánh đồng", "required": true}
+  ],
+  "prompt": "Premium studio product photograph of {TenSanPham}, centered in the frame on a clean pedestal. Surrounded by {BoiCanh}. Soft professional key light with subtle rim light, shallow depth of field, crisp sharp packaging details, realistic reflections, high-end commercial advertising look. Keep the product packaging, logo, colors and text exactly as in the reference photo if one is provided. No extra text, no watermark."
+}

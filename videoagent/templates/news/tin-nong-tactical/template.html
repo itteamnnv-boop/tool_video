@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="vi"><head>{% include "head.html" %}
+<style>
+:root{--red:#e8202a;--navy:#06101f}
+body{background:linear-gradient(160deg,#0b1d38 0%,var(--navy) 60%,#02060d 100%)}
+.stripes{position:absolute;inset:-20%;background:repeating-linear-gradient(115deg,#ffffff06 0 2vmin,transparent 2vmin 5vmin);animation:drift var(--dur) linear both}
+@keyframes drift{to{transform:translateX(-8vmin)}}
+.scan{position:absolute;inset:0;background:repeating-linear-gradient(0deg,#0000 0 3px,#0003 3px 4px);opacity:.5}
+.slab{position:absolute;left:-10%;top:31%;width:120%;height:22%;background:linear-gradient(90deg,#e8202a00,#e8202a33 30%,#e8202a22 70%,#e8202a00);transform:skewY(-6deg);animation:fadeIn 1s .2s both}
+.badge{position:absolute;top:6%;left:6%;display:flex;align-items:center;gap:1.6vmin;animation:fadeUp .5s both}
+.badge b{background:var(--red);padding:1vmin 2.4vmin;font-weight:900;letter-spacing:.12em;font-size:3vmin;clip-path:polygon(0 0,100% 0,92% 100%,0 100%)}
+.badge span{display:flex;align-items:center;gap:1vmin;font:700 2.4vmin 'JetBrains Mono',monospace;color:#ff6b6b}
+.badge span i{width:1.6vmin;height:1.6vmin;border-radius:50%;background:var(--red);animation:pulse 1s infinite}
+.count{position:absolute;top:6.6%;right:6%;font:700 2.6vmin 'JetBrains Mono',monospace;color:#8fb3ff}
+.stat{position:absolute;top:34%;left:0;right:0;text-align:center;font-weight:900;font-size:calc(17vmin * var(--fit,1));letter-spacing:-.03em;color:#fff;text-shadow:0 0 4vmin #e8202a88;white-space:nowrap;animation:statIn .8s .5s cubic-bezier(.2,.9,.2,1.2) both}
+@keyframes statIn{from{opacity:0;transform:scale(.6)}}
+.lower{position:absolute;left:0;right:0;bottom:16%;padding:0 6%;animation:slideIn .7s .25s cubic-bezier(.2,.8,.2,1) both}
+@keyframes slideIn{from{transform:translateX(-105%)}}
+.kicker{display:inline-block;max-width:100%;background:var(--red);padding:1vmin 2.4vmin;font-weight:800;letter-spacing:.1em;font-size:calc(2.8vmin * var(--fit,1));white-space:nowrap}
+.panel{background:#000000b8;border-left:1.2vmin solid var(--red);padding:2.6vmin 3vmin;backdrop-filter:blur(6px)}
+h1{font-weight:900;line-height:1.14;font-size:calc(7.6vmin * var(--fit,1));max-height:28vmin}
+h1 .hl{color:#ffd23f}
+p.sub{margin-top:1.8vmin;color:#cfd8e6;font-size:calc(3.3vmin * var(--fit,1));line-height:1.4;max-height:14vmin;animation:fadeIn .6s 1.2s both}
+.ticker{position:absolute;left:0;right:0;bottom:6%;height:5.4vmin;background:#fff;color:#06101f;display:flex;align-items:center;overflow:hidden;font-weight:800;font-size:2.7vmin}
+.ticker em{flex:none;height:100%;display:flex;align-items:center;padding:0 2.4vmin;background:var(--red);color:#fff;font-style:normal;z-index:1}
+.ticker div{white-space:nowrap;padding-left:100%;animation:ticker calc(var(--dur) * 1.4) linear both}
+@keyframes ticker{to{transform:translateX(-100%)}}
+@media (min-aspect-ratio:1/1){.lower{right:30%}.stat{top:26%}}
+</style></head>
+<body style="--dur:{{ duration }}s"><div class="stage">
+  <div class="stripes"></div><div class="slab"></div><div class="scan"></div>
+  <div class="badge"><b>TIN NÓNG</b><span><i></i>LIVE</span></div>
+  <div class="count">{{ index2 }}/{{ '%02d' % total }}</div>
+  {% if stat %}<div class="stat" data-fit="stat">{{ stat }}</div>{% endif %}
+  <div class="lower">
+    {% if kicker %}<div class="kicker" data-fit="kicker">{{ kicker }}</div>{% endif %}
+    <div class="panel">
+      <h1 data-fit="headline">{% for w in words %}<span class="w{% if w.hl %} hl{% endif %}" style="--i:{{ loop.index0 }};--d0:.7s">{{ w.text }}</span> {% endfor %}</h1>
+      {% if subtext %}<p class="sub" data-fit="subtext">{{ subtext }}</p>{% endif %}
+    </div>
+  </div>
+  <div class="ticker"><em>{{ brand or 'CẬP NHẬT' }}</em><div>{{ title }} • {{ subtext }} • {{ title }}</div></div>
+</div></body></html>

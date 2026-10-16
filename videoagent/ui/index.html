@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Video Agent Tool</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 48 48" aria-hidden="true">
+      <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e8ff8a"/><stop offset="1" stop-color="#7fd34e"/></linearGradient></defs>
+      <path d="M24 3 42 13.5v21L24 45 6 34.5v-21Z" fill="none" stroke="url(#lg)" stroke-width="3.2" stroke-linejoin="round"/>
+      <path d="M19 16.5v15l13-7.5Z" fill="url(#lg)"/>
+      <path d="M2 22h8M1 27h6" stroke="url(#lg)" stroke-width="2.6" stroke-linecap="round"/>
+    </svg>
+    <div>
+      <div class="brand-name">Video<span>Agent</span></div>
+      <div class="brand-sub">AI video generation tool</div>
+    </div>
+  </div>
+  <div class="top-right">
+    <button class="chip mono path" id="outDirChip" title="Đổi thư mục lưu video">Video lưu tại: …</button>
+    <button class="chip license" id="licenseChip">…</button>
+    <button class="chip user" id="userChip"><span class="avatar" id="userAvatar"></span><span id="userName">…</span></button>
+    <button class="icon-btn" id="settingsBtn" title="Cài đặt">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+    </button>
+  </div>
+</header>
+
+<div class="shell">
+<nav class="sidebar" id="sidebar">
+  <button class="sb-toggle" id="sbToggle" title="Thu gọn / mở rộng menu">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg>
+  </button>
+  <div class="sb-group">CHỨC NĂNG</div>
+  <button class="sb-item active" data-view="create" title="Tạo video">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="13" height="14" rx="2.5"/><path d="M16 10l5-3v10l-5-3z"/></svg></span>
+    <span class="sb-label">Tạo video</span><i class="sb-dot hidden" id="sbRunning" title="Đang xử lý"></i>
+  </button>
+  <button class="sb-item" data-view="library" title="Thư viện video">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg></span>
+    <span class="sb-label">Thư viện video</span><span class="sb-badge" id="sbVideoCount">0</span>
+  </button>
+  <button class="sb-item" data-view="images" title="Tạo hình ảnh">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 9"/></svg></span>
+    <span class="sb-label">Tạo hình ảnh</span><span class="sb-badge" id="sbImageCount">0</span><i class="sb-dot hidden" id="sbImgRunning" title="Đang tạo ảnh"></i>
+  </button>
+  <button class="sb-item" data-view="templates" title="Template">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z"/></svg></span>
+    <span class="sb-label">Template</span><span class="sb-badge" id="sbTplCount">0</span>
+  </button>
+  <button class="sb-item" data-view="facebook" title="Fanpage Facebook">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M15.5 7.5h-2a2 2 0 0 0-2 2V21M9 12.5h6"/></svg></span>
+    <span class="sb-label">Fanpage Facebook</span><span class="sb-badge" id="sbFbCount">0</span>
+  </button>
+  <button class="sb-item" data-view="ads" title="Quảng cáo Facebook">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 10v4a1 1 0 0 0 1 1h2l5 4V5L6 9H4a1 1 0 0 0-1 1z"/><path d="M15 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg></span>
+    <span class="sb-label">Quảng cáo Facebook</span><span class="sb-badge" id="sbAdsCount">0</span>
+  </button>
+  <div class="sb-group">HỆ THỐNG</div>
+  <button class="sb-item" data-view="profiles" title="Profile trình duyệt">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.2A4.5 4.5 0 0 1 21 18.5"/></svg></span>
+    <span class="sb-label">Profile trình duyệt</span><span class="sb-badge" id="sbProfileCount">1</span>
+  </button>
+  <button class="sb-item" data-view="settings" title="Cài đặt">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg></span>
+    <span class="sb-label">Cài đặt</span>
+  </button>
+  <button class="sb-item" data-view="folder" title="Mở thư mục video">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+    <span class="sb-label">Mở thư mục video</span>
+  </button>
+  <button class="sb-item" data-view="help" title="Hướng dẫn">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.3a2.6 2.6 0 0 1 5 .9c0 1.8-2.5 2.2-2.5 3.8M12 17.2v.1"/></svg></span>
+    <span class="sb-label">Hướng dẫn</span>
+  </button>
+  <div class="sb-foot"><span class="sb-label" id="sbVersion"></span></div>
+</nav>
+
+<main class="layout" id="workspace">
+  <section class="panel config">
+    <div class="panel-title">CẤU HÌNH</div>
+    <div class="config-scroll">
+      <div class="card">
+        <div class="card-title">NỘI DUNG</div>
+        <textarea id="topic" rows="3" placeholder="Ví dụ: Tạo video về tình hình chứng khoán hiện nay"></textarea>
+      </div>
+
+      <div class="card">
+        <div class="card-title">THỂ LOẠI &amp; TEMPLATE</div>
+        <div class="grid2">
+          <button class="picker" id="genrePicker">
+            <span class="pk-icon">◫</span>
+            <span class="pk-text"><small>Thể loại</small><b id="genreLabel">…</b></span>
+            <span class="chev">›</span>
+          </button>
+          <button class="picker" id="templatePicker">
+            <span class="pk-icon">✦</span>
+            <span class="pk-text"><small>Template</small><b id="templateLabel">…</b></span>
+            <span class="chev">›</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="card hidden" id="aiVideoCard">
+        <div class="card-title">VIDEO AI <span class="tag" id="aiTplName"></span></div>
+        <div class="engine-line" id="aiEngine"></div>
+        <label class="field hidden gemini-mode" id="geminiModeBox"><span>Cách tạo với Gemini Browser</span>
+          <select id="geminiMode">
+            <option value="veo">Veo — tự chuyển sang video thông thường nếu tài khoản không có Veo</option>
+            <option value="regular">Video thông thường — Gemini viết kịch bản, app tự dựng</option>
+          </select>
+        </label>
+        <div class="ai-vars" id="aiVars"></div>
+        <div class="ai-attach hidden" id="aiAttachBox">
+          <div class="sub-title">ẢNH THAM CHIẾU GỬI KÈM <small>(không bắt buộc)</small></div>
+          <div id="aiAttach"></div>
+        </div>
+        <div class="grid2" id="aiOptions">
+          <label class="field"><span>Thời lượng</span>
+            <select id="aiDuration"></select></label>
+          <label class="field"><span>Độ phân giải</span>
+            <select id="aiResolution"></select></label>
+        </div>
+        <div class="field asset-field"><span>Prompt gửi AI (đã điền biến)</span>
+          <textarea class="mono" id="aiPrompt" rows="7" readonly></textarea></div>
+        <div class="row ai-actions">
+          <button class="btn ghost" id="copyPromptBtn" type="button">Sao chép prompt</button>
+          <small class="muted">Engine tạo video theo Provider AI: Grok Browser → Grok Imagine · Gemini Browser / Gemini API → Veo. Ô Nội dung không dùng cho template này.</small>
+        </div>
+      </div>
+
+      <div class="card hidden" id="assetsCard">
+        <div class="card-title">LAYOUT &amp; SẢN PHẨM MẪU</div>
+        <label class="field asset-style"><span>Kiểu video</span>
+          <select id="productStyle">
+            <option value="reel">Reel bán hàng (giá ưu đãi, lợi ích, kêu gọi TƯ VẤN)</option>
+            <option value="presenter">Người mẫu giới thiệu (kiểu TikTok bán hàng)</option>
+            <option value="showcase">Sản phẩm nổi (showcase)</option>
+          </select>
+        </label>
+        <div class="asset-row">
+          <div class="asset-info"><b>Layout mẫu</b><small id="layoutName"></small></div>
+          <div class="row">
+            <button class="btn ghost" id="pickLayoutBtn" type="button">Chọn file…</button>
+            <button class="btn ghost sq" id="clearLayoutBtn" type="button" title="Bỏ chọn">✕</button>
+          </div>
+        </div>
+        <div class="asset-row">
+          <div class="asset-info"><b id="productsLabel">Ảnh sản phẩm</b><small id="productNames"></small></div>
+          <div class="row">
+            <button class="btn ghost" id="pickProductsBtn" type="button">Chọn file…</button>
+            <button class="btn ghost sq" id="clearProductsBtn" type="button" title="Bỏ chọn">✕</button>
+          </div>
+        </div>
+        <label class="check asset-field" id="keepAudioBox"><input type="checkbox" id="keepAudio"> Giữ tiếng gốc của video (không dùng giọng AI)</label>
+        <label class="field asset-field"><span>Tên thương hiệu / shop</span><input id="brand" placeholder="Ví dụ: Nông Nghiệp Việt Chính Hãng"></label>
+        <div class="grid2 asset-field">
+          <label class="field"><span>Giá bán</span><input id="price" placeholder="679.000đ/xô 22kg"></label>
+          <label class="field"><span>Giá cũ (gạch ngang)</span><input id="oldPrice" placeholder="720.000đ"></label>
+          <label class="field"><span>Ưu đãi</span><input id="perk" placeholder="Miễn phí giao hàng toàn quốc"></label>
+          <label class="field"><span>Website / hotline</span><input id="contact" placeholder="phanbon.vn · 0909 xxx xxx"></label>
+        </div>
+        <div class="grid2 asset-field" id="commentBox">
+          <label class="field"><span>Trả lời bình luận của</span><input id="commentName" placeholder="Tên khách (tuỳ chọn)"></label>
+          <label class="field"><span>Nội dung bình luận</span><input id="commentText" placeholder="Bình luận thật của khách"></label>
+        </div>
+        <p class="hint" id="assetsHint"></p>
+      </div>
+
+      <div class="card">
+        <div class="card-title">AI TẠO NỘI DUNG &amp; HÌNH ẢNH <span class="tag">Provider · API · Model</span></div>
+        <div class="grid2">
+          <label class="field"><span>Provider AI</span>
+            <select id="provider">
+              <option value="gemini_browser">Gemini Browser (free)</option>
+              <option value="grok_browser">Grok Browser (free)</option>
+              <option value="dola_browser">Dola Browser (free)</option>
+              <option value="gemini_api">Gemini API (API key)</option>
+              <option value="offline">Offline (không dùng AI)</option>
+            </select>
+          </label>
+          <div class="field" id="browserBox"><span id="browserLabel">Gemini Browser</span>
+            <div class="inline">
+              <select class="profile-select" id="browserProfile" title="Profile trình duyệt (tài khoản) dùng cho tác vụ"></select>
+              <label class="check"><input type="checkbox" id="showBrowser"> Hiện Chrome</label>
+              <button class="btn ghost" id="geminiLoginBtn" type="button">Đăng nhập</button>
+            </div>
+          </div>
+          <label class="field hidden" id="modelBox"><span>Model</span><input id="geminiModel" placeholder="gemini-2.5-flash"></label>
+        </div>
+        <label class="field hidden" id="keyBox"><span>Gemini API key</span><input id="geminiKey" type="password" placeholder="AIza…"></label>
+      </div>
+
+      <div class="card">
+        <div class="card-title">KHUNG HÌNH &amp; THỜI LƯỢNG</div>
+        <div class="grid2">
+          <label class="field"><span>Tỉ lệ khung hình</span><select id="aspect"></select></label>
+          <label class="field"><span>Thời lượng</span><select id="preset"></select></label>
+          <label class="field"><span>Mỗi khung (giây)</span><input id="seconds" type="number" min="3" max="20" step="0.5"></label>
+          <label class="field"><span>Số khung</span><input id="scenes" type="number" min="1" max="20" step="1"></label>
+        </div>
+        <p class="hint" id="pacingHint"></p>
+      </div>
+
+      <div class="card">
+        <div class="card-title">GIỌNG ĐỌC &amp; HẬU KỲ</div>
+        <div class="grid2">
+          <label class="field"><span>Giọng đọc</span><select id="voice"></select></label>
+          <label class="field"><span>Tốc độ đọc</span><select id="rate"></select></label>
+        </div>
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="subtitles"> Phụ đề karaoke</label>
+          <label class="check"><input type="checkbox" id="bgm"> Nhạc nền + SFX</label>
+        </div>
+      </div>
+    </div>
+    <footer class="config-foot">
+      <div class="estimate"><b id="estimate">4 khung · ~32s</b><small>Ước tính theo cấu hình</small></div>
+      <button class="btn primary big" id="createBtn">Tạo video →</button>
+    </footer>
+  </section>
+
+  <section class="panel output">
+    <div class="tabs-row">
+      <div class="tabs">
+        <button class="tab active" data-tab="progress">Tiến trình</button>
+        <button class="tab" data-tab="results">Kết quả <span class="count" id="videoCount">0</span></button>
+      </div>
+      <div class="status-pill mono" id="statusPill">Sẵn sàng</div>
+    </div>
+
+    <div class="view" id="view-progress">
+      <div class="task-panel" id="vTaskPanel">
+        <div class="task-head"><b>HÀNG ĐỢI TÁC VỤ</b><span class="muted" id="vTaskSummary">Chưa có tác vụ</span>
+          <div class="row"><button class="link" id="vTaskStopAll" type="button">Dừng tất cả</button>
+            <button class="link" id="vTaskClear" type="button">Xoá tác vụ đã xong</button></div></div>
+        <div class="task-list" id="vTaskList"></div>
+      </div>
+      <div class="progress"><div class="bar"><i id="progressFill"></i></div><span class="mono" id="progressPct">0%</span></div>
+      <div class="status-box" id="statusBox">Chưa có tác vụ</div>
+      <div class="log-card">
+        <div class="log-head"><span>NHẬT KÝ XỬ LÝ</span><button class="link on" id="autoScrollBtn">TỰ CUỘN</button></div>
+        <div class="log mono" id="log"></div>
+      </div>
+      <div class="stepper" id="stepper"></div>
+    </div>
+
+    <div class="view hidden" id="view-results">
+      <div class="results-head">
+        <span class="muted" id="resultsCount">0 video</span>
+        <div class="row">
+          <button class="btn ghost" id="openFolderBtn">Mở thư mục video</button>
+          <button class="btn ghost" id="reloadBtn">Tải lại</button>
+        </div>
+      </div>
+      <div class="results-body">
+        <div class="video-list" id="videoList"></div>
+        <div class="player"><video id="player" controls class="hidden"></video><div class="empty" id="playerEmpty">Chọn một video để xem</div></div>
+      </div>
+    </div>
+
+    <div class="view hidden" id="view-detail">
+      <div class="detail-head">
+        <button class="btn ghost" id="backBtn">← Danh sách</button>
+        <div class="detail-title"><b id="detailTitle"></b><small class="mono" id="detailMeta"></small></div>
+        <div class="row">
+          <button class="btn ghost" id="openFileBtn">Mở file</button>
+          <button class="btn ghost" id="watchFinalBtn">Xem video cuối</button>
+        </div>
+      </div>
+      <div class="detail-body">
+        <div class="stage-col">
+          <div class="stage" id="stage"></div>
+          <div class="filmstrip" id="filmstrip"></div>
+        </div>
+        <aside class="html-panel">
+          <div class="card-title">HTML CẢNH</div>
+          <small class="muted" id="sceneLabel">—</small>
+          <div class="grid2 tight">
+            <button class="btn ghost" id="viewHtmlBtn">Xem HTML</button>
+            <button class="btn ghost" id="applyHtmlBtn">Áp dụng</button>
+            <button class="btn ghost" id="saveHtmlBtn">Lưu file</button>
+            <button class="btn ghost" id="rerenderBtn">Render lại</button>
+          </div>
+          <textarea class="mono" id="htmlEditor" spellcheck="false" placeholder="Chọn một cảnh rồi bấm “Xem HTML”"></textarea>
+          <small class="hint">Áp dụng = xem trước. Lưu file = ghi vào HTML cảnh. MP4 đã xuất không tự render lại — bấm “Render lại”.</small>
+        </aside>
+      </div>
+    </div>
+  </section>
+</main>
+
+<main class="layout hidden" id="imgWorkspace">
+  <section class="panel config">
+    <div class="panel-title">CẤU HÌNH TẠO ẢNH</div>
+    <div class="config-scroll">
+      <div class="card">
+        <div class="card-title">NỘI DUNG ẢNH</div>
+        <label class="field"><span>Template ảnh</span><select id="imgTemplate"></select></label>
+        <div class="ai-vars img-vars" id="imgVars"></div>
+        <label class="field" id="imgPromptBox"><span>Mô tả ảnh (prompt)</span>
+          <textarea id="imgPrompt" rows="4" placeholder="Ví dụ: Poster dọc, cô gái nông dân cầm bao phân bón giữa cánh đồng lúa xanh, nắng sớm…"></textarea></label>
+        <div class="field hidden" id="imgPreviewBox"><span>Prompt gửi AI (đã điền biến)</span>
+          <textarea class="mono" id="imgPreview" rows="5" readonly></textarea></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">MODEL TẠO ẢNH <span class="tag">OpenAI · Gemini · Grok · Dola</span></div>
+        <label class="field"><span>Model</span><select id="imgEngine"></select></label>
+        <div class="engine-line img-engine-line" id="imgEngineNote"></div>
+        <div class="inline hidden" id="imgBrowserBox">
+          <select class="profile-select" id="imgBrowserProfile" title="Profile trình duyệt (tài khoản) dùng cho tác vụ"></select>
+          <label class="check"><input type="checkbox" id="imgShowBrowser"> Hiện trình duyệt</label>
+          <button class="btn ghost" id="imgLoginBtn" type="button">Đăng nhập</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">KHUNG ẢNH</div>
+        <div class="grid3">
+          <label class="field"><span>Tỉ lệ</span><select id="imgAspect"></select></label>
+          <label class="field"><span>Số ảnh</span><select id="imgCount"></select></label>
+          <label class="field" id="imgQualityBox"><span>Chất lượng</span>
+            <select id="imgQuality"><option value="auto">Tự động</option><option value="high">Cao</option><option value="medium">Vừa</option><option value="low">Thấp</option></select></label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">ẢNH THAM CHIẾU <span class="tag">không bắt buộc</span></div>
+        <div id="imgRefs"></div>
+        <button class="btn ghost img-add-ref" id="imgPickRefs" type="button">+ Thêm ảnh tham chiếu</button>
+      </div>
+
+      <div class="card">
+        <div class="card-title">THAM KHẢO ẢNH PINTEREST
+          <label class="check card-switch"><input type="checkbox" id="pinOn"> Bật</label></div>
+        <small class="muted" id="pinOffHint">Bật để tìm ảnh trên Pinterest theo từ khoá, tải về và dùng làm ảnh tham chiếu khi tạo ảnh.</small>
+        <div class="hidden" id="pinBox">
+          <div class="pin-search">
+            <input id="pinKeyword" placeholder="Từ khoá / chủ đề, vd: poster quảng cáo phân bón">
+            <button class="btn ghost" id="pinSearchBtn" type="button">Tìm ảnh</button>
+          </div>
+          <div class="pin-meta">
+            <label class="field"><span>Số ảnh dùng làm tham chiếu</span>
+              <select id="pinCount"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option><option>6</option></select></label>
+            <small class="muted" id="pinStatus">Bấm “Tìm ảnh” để xem trước và chọn ảnh. Không tìm trước thì app tự lấy các ảnh đầu tiên khi tạo.</small>
+          </div>
+          <div class="pin-grid" id="pinGrid"></div>
+        </div>
+      </div>
+    </div>
+    <footer class="config-foot">
+      <div class="estimate"><b id="imgEstimate">1 ảnh · 9:16</b><small id="imgEstimateModel">Ước tính theo cấu hình</small></div>
+      <button class="btn primary big" id="imgCreateBtn" type="button">Tạo ảnh →</button>
+    </footer>
+  </section>
+
+  <section class="panel output">
+    <div class="tabs-row">
+      <div class="tabs">
+        <button class="tab active" data-imgtab="progress">Tiến trình</button>
+        <button class="tab" data-imgtab="results">Kết quả <span class="count" id="imgTabCount">0</span></button>
+      </div>
+      <div class="status-pill mono" id="imgStatusPill">Sẵn sàng</div>
+    </div>
+    <div class="view" id="img-view-progress">
+      <div class="task-panel" id="imgTaskPanel">
+        <div class="task-head"><b>HÀNG ĐỢI TÁC VỤ</b><span class="muted" id="imgTaskSummary">Chưa có tác vụ</span>
+          <div class="row"><button class="link" id="imgTaskStopAll" type="button">Dừng tất cả</button>
+            <button class="link" id="imgTaskClear" type="button">Xoá tác vụ đã xong</button></div></div>
+        <div class="task-list" id="imgTaskList"></div>
+      </div>
+      <div class="progress"><div class="bar"><i id="imgProgressFill"></i></div><span class="mono" id="imgProgressPct">0%</span></div>
+      <div class="status-box" id="imgStatusBox">Chưa có tác vụ</div>
+      <div class="log-card">
+        <div class="log-head"><span>NHẬT KÝ TẠO ẢNH</span></div>
+        <div class="log mono" id="imgLog"></div>
+      </div>
+      <div class="stepper" id="imgStepper"></div>
+    </div>
+    <div class="view hidden" id="img-view-results">
+      <div class="results-head">
+        <span class="muted" id="imgTotal">0 bộ ảnh</span>
+        <div class="row">
+          <button class="btn ghost" id="imgOpenRoot">Mở thư mục ảnh</button>
+          <button class="btn ghost" id="imgReload">Tải lại</button>
+        </div>
+      </div>
+      <div class="img-gallery" id="imgGallery"></div>
+    </div>
+  </section>
+</main>
+
+<section class="panel page hidden" id="page-facebook">
+  <div class="page-head">
+    <small class="eyebrow">FANPAGE FACEBOOK</small>
+    <h2>Kết nối & quản lý Fanpage</h2>
+    <p class="muted">Lấy User Access Token trên Graph API Explorer → dán vào đây → app lấy danh sách Fanpage và Page Token tương ứng.</p>
+  </div>
+  <div class="fb-layout page-body">
+    <div class="fb-col">
+      <div class="card">
+        <div class="card-title">① USER ACCESS TOKEN</div>
+        <ol class="fb-steps">
+          <li>Mở <b>Graph API Explorer</b> (nút bên dưới), chọn <b>Meta App</b> của bạn.</li>
+          <li>Ở <b>User or Page</b> chọn <b>User Token</b>, thêm quyền: <code>pages_show_list</code> <code>pages_read_engagement</code> <code>pages_manage_posts</code>
+            — dùng <b>Quảng cáo Facebook</b> thì thêm <code>ads_read</code> <code>ads_management</code>.</li>
+          <li>Bấm <b>Generate Access Token</b>, đăng nhập và cho phép các page cần dùng.</li>
+          <li>Copy <b>Access Token</b> (bắt đầu bằng EAA…) và dán vào ô dưới.</li>
+        </ol>
+        <label class="field fb-gap"><span>User Access Token</span>
+          <textarea class="mono" id="fbToken" rows="3" spellcheck="false" placeholder="EAA…"></textarea></label>
+        <div class="row fb-gap">
+          <button class="btn ghost" id="fbOpenExplorer" type="button">Mở Graph API Explorer ↗</button>
+          <button class="btn primary" id="fbConnect" type="button">Kết nối & tải Fanpage</button>
+        </div>
+        <div class="fb-user fb-gap" id="fbUser"></div>
+        <div class="fb-perms" id="fbPerms"></div>
+        <button class="btn ghost fb-gap" id="fbLogout" type="button">Ngắt kết nối</button>
+      </div>
+      <div class="card">
+        <div class="card-title">② APP META <span class="tag" id="fbAppTag">tuỳ chọn</span></div>
+        <p class="hint">Token lấy từ Graph API Explorer chỉ sống ~1–2 giờ. Nhập App ID + App Secret của <b>đúng app đã chọn trong Explorer</b> để app tự đổi sang token dài hạn (~60 ngày) — Page Token cũng dài hạn theo.</p>
+        <label class="field fb-gap"><span>App ID</span><input id="fbAppId" placeholder="Ví dụ: 1234567890123456"></label>
+        <label class="field fb-gap"><span>App Secret</span><input id="fbAppSecret" type="password" placeholder="App Secret"></label>
+        <label class="field fb-gap"><span>Graph API version</span><input id="fbVersion" placeholder="v21.0"></label>
+        <button class="btn ghost fb-gap" id="fbSaveApp" type="button">Lưu & kiểm tra App</button>
+      </div>
+    </div>
+    <div class="fb-col">
+      <div class="results-head">
+        <span class="muted" id="fbPagesTotal">③ Chưa có fanpage</span>
+        <button class="btn ghost" id="fbLoadPages" type="button">Tải danh sách Fanpage</button>
+      </div>
+      <div class="fb-pages" id="fbPages"></div>
+    </div>
+  </div>
+</section>
+
+<section class="panel page hidden" id="page-ads">
+  <div class="page-head ads-head">
+    <div>
+      <small class="eyebrow">QUẢNG CÁO FACEBOOK</small>
+      <h2>Quản lý quảng cáo</h2>
+      <p class="muted">Theo dõi chi tiêu & hiệu quả, bật/tắt, đổi ngân sách và tạo quảng cáo từ bài viết của Fanpage.</p>
+    </div>
+    <button class="btn primary" id="adsCreate" type="button">+ Tạo quảng cáo</button>
+  </div>
+  <div class="ads-alert hidden" id="adsAlert"></div>
+  <div class="ads-toolbar">
+    <label class="field"><span>Tài khoản quảng cáo</span><select id="adsAccount"></select></label>
+    <label class="field"><span>Khoảng thời gian</span><select id="adsRange">
+      <option value="today">Hôm nay</option><option value="yesterday">Hôm qua</option>
+      <option value="last_7d">7 ngày qua</option><option value="last_30d">30 ngày qua</option>
+      <option value="this_month">Tháng này</option><option value="last_month">Tháng trước</option>
+      <option value="maximum">Toàn bộ</option></select></label>
+    <button class="btn ghost" id="adsRefresh" type="button">↻ Làm mới</button>
+    <button class="btn ghost" id="adsOpenManager" type="button">Mở Ads Manager ↗</button>
+  </div>
+  <div class="ads-account muted" id="adsAccountInfo"></div>
+  <div class="ads-kpis" id="adsKpis"></div>
+  <div class="ads-crumbs" id="adsCrumbs"></div>
+  <div class="ads-table-wrap"><table class="ads-table" id="adsTable"></table></div>
+</section>
+
+<section class="panel page hidden" id="page-profiles">
+  <div class="page-head">
+    <small class="eyebrow">PROFILE TRÌNH DUYỆT</small>
+    <h2>Tài khoản theo từng model</h2>
+    <p class="muted">Mỗi profile là một Chrome riêng với tài khoản đăng nhập riêng. Gán profile cho model (Gemini, Grok, ChatGPT, Dola) —
+      khi tạo video/ảnh, app tự chọn profile <b>rảnh</b> của model đó, nên nhiều profile = nhiều tác vụ chạy song song.</p>
+  </div>
+  <div class="prof-sites" id="profSites"></div>
+  <div class="card prof-new">
+    <div class="card-title">THÊM PROFILE</div>
+    <div class="prof-new-row">
+      <label class="field"><span>Tên profile</span><input id="profName" placeholder="VD: Grok – tài khoản 2" maxlength="40"></label>
+      <div class="field"><span>Dùng cho model</span><div class="prof-chips" id="profNewSites"></div></div>
+      <label class="field"><span>Trình duyệt</span><select id="profNewChannel"></select></label>
+      <button class="btn primary" id="profCreate" type="button">+ Thêm profile</button>
+    </div>
+  </div>
+  <div class="prof-list" id="profList"></div>
+</section>
+
+<section class="panel page hidden" id="page-templates">
+  <div class="page-head">
+    <small class="eyebrow">THƯ VIỆN TEMPLATE</small>
+    <h2>Template</h2>
+    <p class="muted">Chọn template để dùng ngay: HTML động (app tự dựng) hoặc Video AI (Grok / Gemini).</p>
+  </div>
+  <div class="page-body" id="tplPageBody"></div>
+</section>
+
+<section class="panel page hidden" id="page-help">
+  <div class="page-head">
+    <small class="eyebrow">HƯỚNG DẪN</small>
+    <h2>Bắt đầu nhanh</h2>
+  </div>
+  <div class="page-body help">
+    <ol class="steps">
+      <li><b>Chọn Provider AI</b> ở mục “AI tạo nội dung & hình ảnh” — Gemini / Grok / Dola Browser (đăng nhập 1 lần bằng nút Đăng nhập), Gemini API (nhập API key trong Cài đặt) hoặc Offline để thử.</li>
+      <li><b>Chọn Thể loại & Template.</b> Template <span class="badge html">HTML động</span> do app tự dựng hình; template <span class="badge ai">Video AI · Grok / Gemini</span> nhờ AI tạo video như quay thật.</li>
+      <li><b>Nhập nội dung</b> (với template HTML) hoặc <b>điền các biến</b> trong thẻ Video AI (với template AI). Có thể đính kèm ảnh sản phẩm, nhân vật, layout.</li>
+      <li><b>Bấm “Tạo video →”</b> và theo dõi ở tab Tiến trình. Video xong nằm trong <b>Thư viện video</b>.</li>
+      <li>Trong Thư viện: <b>Chi tiết</b> để xem từng cảnh, sửa HTML và <b>Render lại</b> (template HTML).</li>
+    </ol>
+    <h3>Engine tạo video cho template Video AI</h3>
+    <table class="help-table">
+      <tr><th>Provider AI</th><th>Engine</th><th>Ghi chú</th></tr>
+      <tr><td>Grok Browser</td><td>Grok Imagine</td><td>6/10/15s, tối đa 10 ảnh tham chiếu</td></tr>
+      <tr><td>Gemini Browser</td><td>Veo hoặc Video thông thường</td><td>Veo cần gói Google AI Pro/Ultra — không có thì tự chuyển sang video thông thường</td></tr>
+      <tr><td>Dola Browser</td><td>Dola AI Creation · Seedance</td><td>5/10s, tối đa 4 ảnh tham chiếu, cần đăng nhập dola.com</td></tr>
+      <tr><td>Gemini API</td><td>Veo (API key)</td><td>4/6/8s, tối đa 3 ảnh tham chiếu, tính phí theo giây</td></tr>
+    </table>
+    <h3>Mẹo</h3>
+    <ul>
+      <li>Bấm biểu tượng ⟨ trên menu để thu gọn thanh bên.</li>
+      <li>Ctrl + Enter trong ô Nội dung để tạo video nhanh.</li>
+      <li>Thêm template mới: tạo thư mục trong <code>templates/</code> (xem README).</li>
+    </ul>
+  </div>
+</section>
+</div>
+
+<div class="modal hidden" id="modal">
+  <div class="modal-card" id="modalCard">
+    <div class="modal-head">
+      <div><small class="eyebrow" id="modalEyebrow"></small><h2 id="modalTitle"></h2></div>
+      <button class="icon-btn round" id="modalClose" title="Đóng">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+<div class="toast hidden" id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>

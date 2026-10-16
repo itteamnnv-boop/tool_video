@@ -1,0 +1,21 @@
+{
+  "type": "ai_video",
+  "engine": "grok_imagine",
+  "name": "Cô Gái Giới Thiệu Phân Bón",
+  "description": "Grok Imagine tạo video như quay thật: cô gái trong cửa hàng vật tư nông nghiệp giới thiệu xô phân bón, bong bóng thoại nêu hiệu quả. Đính kèm được ảnh nhân vật, ảnh sản phẩm, layout mẫu",
+  "tags": ["phân bón", "nông nghiệp", "bán hàng", "reel", "grok"],
+  "options": {"aspect": "9:16", "duration": "15s", "resolution": "720p"},
+  "variables": [
+    {"key": "TenSanPham", "label": "Tên sản phẩm (in trên xô)", "placeholder": "BOSS 2 NUÔI TRÁI", "required": true},
+    {"key": "HieuQua", "label": "Câu trong bong bóng thoại (hiệu quả)", "placeholder": "Trái to, chắc ruột, bóng đẹp!", "required": true}
+  ],
+  "attachments": [
+    {"key": "character", "label": "Ảnh nhân vật (người mẫu)", "hint": "Ảnh rõ mặt, đủ sáng",
+     "role": "character photo", "prompt": "the woman must look exactly like this person (same face, hairstyle and outfit)"},
+    {"key": "product", "label": "Ảnh sản phẩm", "hint": "Ảnh xô/bao bì rõ nhãn",
+     "role": "product photo", "prompt": "the fertilizer bucket must look exactly like this product (same shape, label design and colors)"},
+    {"key": "layout", "label": "Layout video (bố cục mẫu)", "hint": "Ảnh hoặc video mẫu — video sẽ được cắt 1 khung hình", "video": true,
+     "role": "layout reference", "prompt": "follow its framing, camera angle and composition"}
+  ],
+  "prompt": "Vertical 9:16 smartphone video, realistic commercial style, bright natural lighting inside a Vietnamese agricultural supply store. A cheerful young Vietnamese woman with long straight black hair, wearing a beige blouse, smiles warmly at the camera while standing beside a large white plastic bucket of fertilizer labeled '{TenSanPham}'. She gestures with her hand toward the bucket, presenting it proudly. Shelves in the background are filled with colorful fertilizer and pesticide packages. A white speech bubble appears with the text: '{HieuQua}'. Soft camera push-in, energetic yet trustworthy mood, social media Reel aesthetic, no text overlay except the speech bubble."
+}
