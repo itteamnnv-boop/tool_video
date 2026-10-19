@@ -59,6 +59,17 @@ class Template:
     video_prompt: str = ""  # prompt dùng thay khi ô tham chiếu (send_video) là file video ("video_reference_prompt")
     computed: dict = field(default_factory=dict)  # biến tự ghép từ biến khác, vd. {"FULL_SCRIPT": "{HOOK} {CTA}"}
     user: bool = False  # template người dùng tự tạo (sửa / xoá được)
+    genres: tuple = field(default_factory=tuple)  # thể loại khai báo riêng trong meta.json (trống = theo nhóm)
+
+    def fits(self, genre: str) -> bool:
+        """Template hợp với thể loại: khai báo "genres" trong meta.json, hoặc nhóm nằm trong GENRE_CATEGORIES."""
+        from .genres import GENRE_CATEGORIES
+
+        if not genre or genre not in GENRE_CATEGORIES:
+            return True
+        if self.genres:
+            return genre in self.genres
+        return self.category in GENRE_CATEGORIES[genre]
 
     @property
     def thumb(self) -> Path | None:
@@ -71,7 +82,7 @@ class Template:
                 "attachments": list(self.attachments), "image_steps": list(self.image_steps),
                 "video_inputs": list(self.video_inputs), "video_engine": self.video_engine,
                 "video_prompt": self.video_prompt, "computed": dict(self.computed),
-                "has_thumb": self.thumb is not None, "user": self.user}
+                "has_thumb": self.thumb is not None, "user": self.user, "genres": list(self.genres)}
 
 
 def _image_steps(raw) -> tuple:
@@ -118,14 +129,16 @@ class TemplateRegistry:
                 video_inputs=tuple(meta.get("video_inputs", [])), video_engine=meta.get("video_engine", ""), user=user,
                 video_prompt="\n".join(meta["video_reference_prompt"]) if isinstance(meta.get("video_reference_prompt"), list)
                 else meta.get("video_reference_prompt", ""),
-                computed=dict(meta.get("computed", {})),
+                computed=dict(meta.get("computed", {})), genres=tuple(meta.get("genres", [])),
             ))
         self._templates = {t.id: t for t in templates}
         self._envs.clear()
 
-    def all(self) -> list[Template]:
-        """Template HTML chọn được — dùng cho 'Ngẫu nhiên' và 'AI chọn template'."""
-        return [t for t in self._templates.values() if not t.hidden and t.kind == "html"]
+    def all(self, genre: str = "") -> list[Template]:
+        """Template HTML chọn được — dùng cho 'Ngẫu nhiên' và 'AI chọn template'.
+        genre: chỉ lấy template hợp thể loại (không có template nào hợp thì lấy tất cả)."""
+        pool = [t for t in self._templates.values() if not t.hidden and t.kind == "html"]
+        return [t for t in pool if t.fits(genre)] or pool
 
     def listed(self) -> list[Template]:
         """Mọi template video hiện trong bộ chọn (HTML + video AI)."""
@@ -144,20 +157,20 @@ class TemplateRegistry:
     def categories(self) -> list[dict]:
         return [{**c, "templates": [t.as_dict() for t in self.listed() if t.category == c["id"]]} for c in CATEGORIES]
 
-    def pick(self, choice: str) -> Template | None:
+    def pick(self, choice: str, genre: str = "") -> Template | None:
         """'random' | 'category:<id>' | '<template id>' → Template; 'ai' → None (để AI chọn)."""
         if choice == "random":
-            return random.choice(self.all())
+            return random.choice(self.all(genre))
         if choice.startswith("category:"):
             pool = self.in_category(choice.split(":", 1)[1])
-            return random.choice(pool) if pool else random.choice(self.all())
+            return random.choice(pool) if pool else random.choice(self.all(genre))
         found = self.get(choice)
         return found if found is not None and found.kind == "html" else None
 
-    def guess(self, topic: str) -> Template:
+    def guess(self, topic: str, genre: str = "") -> Template:
         """Chọn template theo từ khoá khi AI không chọn được."""
         text = topic.lower()
-        scored = [(sum(tag in text for tag in t.tags), t) for t in self.all()]
+        scored = [(sum(tag in text for tag in t.tags), t) for t in self.all(genre)]
         best = max(score for score, _ in scored)
         pool = [t for score, t in scored if score == best]
         return random.choice(pool)

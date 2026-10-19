@@ -9,6 +9,9 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 
 DEFAULTS = {
     "output_dir": str(Path.home() / "Videos" / "VideoAgent"),
+    "browser_engine": "cdp",  # cdp = Chrome thật (cờ tối thiểu, không headless) · playwright = cách cũ
+    "browser_keepalive": False,  # kiểu HaoHao: giữ Chrome mở sẵn cho mỗi profile, task dùng lại (cần chế độ cdp)
+    "show_browser": False,  # cài đặt chung: hiện cửa sổ Chrome khi model chạy qua trình duyệt (tắt = chạy ẩn, ẩn cả icon taskbar)
     "provider": "gemini_browser",
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash",

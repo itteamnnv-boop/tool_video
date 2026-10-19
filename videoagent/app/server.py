@@ -85,6 +85,13 @@ class Handler(BaseHTTPRequestHandler):
             from .posts import MEDIA_DIR
 
             base, rel = MEDIA_DIR, path[len("/post-media/"):]
+        elif path.startswith("/mhub-asset/"):
+            # Studio Muse AI: ảnh tư liệu / ảnh tham chiếu đã chép vào kho riêng — chỉ phục vụ ẢNH (không trả *.json)
+            if Path(path).suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+                return self.send_error(404)
+            from .muse_hub import STORE as MHUB_STORE
+
+            base, rel = MHUB_STORE, path[len("/mhub-asset/"):]
         elif path.startswith("/seedance-image/"):
             base, rel = DATA_DIR / "seedance" / "images", path[len("/seedance-image/"):]
         elif path.startswith("/media/"):

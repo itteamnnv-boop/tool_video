@@ -58,6 +58,12 @@ class Api:
         from .studio import StudioRunner
         self._studio = StudioRunner(settings, self._license, self._emit, images=self._images, videos=self._runner)
         self._studio.cast = self._cast  # Studio dùng nhân vật / layout cố định
+        # Studio Muse AI: cùng chức năng Studio, dự án riêng, mọi bước chỉ dùng Muse (sự kiện mstudio_*)
+        self._studio_muse = StudioRunner(settings, self._license, self._emit, images=self._images, videos=self._runner,
+                                         variant="muse")
+        self._studio_muse.cast = self._cast
+        from .muse_hub import MuseHub
+        self._muse_hub = MuseHub(settings, self._emit)  # Studio Muse AI: tài khoản, hàng đợi, tư liệu, thư viện
         from .workflow.runner import WorkflowRunner
         self._workflows = WorkflowRunner(settings, self._license, self._emit, facebook=self._facebook, ads=self._ads,
                                          studio=self._studio)
@@ -206,7 +212,64 @@ class Api:
 
     def attach(self, window) -> None:
         self._window = window
+        self._win_max = False
         self._license.start_heartbeat()
+
+    # ------------------------------------------------------------------ cửa sổ không viền (header = thanh tiêu đề)
+    def win_info(self) -> dict:
+        w = self._window
+        min_w, min_h = getattr(w, "min_size", (1200, 760)) if w else (1200, 760)
+        return {"frameless": bool(w is not None and getattr(w, "frameless", False)),
+                "maximized": getattr(self, "_win_max", False), "min_w": min_w, "min_h": min_h}
+
+    def win_minimize(self) -> None:
+        self._window.minimize()
+
+    def win_close(self) -> None:
+        self._window.destroy()
+
+    def win_toggle_maximize(self) -> dict:
+        self._win_max = getattr(self, "_win_max", False)
+        if self._win_max:
+            self._window.restore()
+        else:
+            self._maximize()
+        self._win_max = not self._win_max
+        return {"maximized": self._win_max}
+
+    def _maximize(self) -> None:
+        """Phóng to vừa vùng làm việc của màn hình (form không viền mặc định phóng to đè cả thanh taskbar)."""
+        form = getattr(self._window, "native", None)
+        try:
+            from System import Func, Type
+            from System.Drawing import Rectangle
+            from System.Windows.Forms import FormWindowState, Screen
+
+            def apply():
+                screen = Screen.FromHandle(form.Handle)
+                work, full = screen.WorkingArea, screen.Bounds
+                form.MaximizedBounds = Rectangle(work.X - full.X, work.Y - full.Y, work.Width, work.Height)
+                form.WindowState = FormWindowState.Maximized
+
+            form.Invoke(Func[Type](apply))
+        except Exception:  # không phải WinForms (macOS / Linux) → cách mặc định của pywebview
+            self._window.maximize()
+
+    def win_set_bounds(self, x: float, y: float, width: float, height: float) -> None:
+        """Kéo giãn cửa sổ từ mép / góc (toạ độ CSS px) — 1 lệnh SetWindowPos để không giật."""
+        w = self._window
+        min_w, min_h = getattr(w, "min_size", (1200, 760))
+        width, height = max(min_w, float(width)), max(min_h, float(height))
+        form = getattr(w, "native", None)
+        try:
+            from ctypes import windll
+
+            scale = form._scale
+            windll.user32.SetWindowPos(form.Handle.ToInt32(), None, int(x * scale), int(y * scale),
+                                       int(width * scale), int(height * scale), 0x0004 | 0x0010)  # NOZORDER|NOACTIVATE
+        except Exception:
+            w.resize(int(width), int(height))
+            w.move(int(x), int(y))
 
     def _emit(self, event: str, data) -> None:
         if self._window is None:
@@ -242,7 +305,12 @@ class Api:
         }
 
     def save_settings(self, values: dict) -> dict:
-        return settings.update(values)
+        before = (settings.get("browser_engine"), settings.get("browser_keepalive"))
+        result = settings.update(values)
+        if before != (settings.get("browser_engine"), settings.get("browser_keepalive")):
+            from .llm import chrome_pool  # đổi cách điều khiển Chrome → đóng Chrome mở sẵn đang rảnh
+            chrome_pool.stop_idle()
+        return result
 
     def pick_output_dir(self) -> dict:
         folder_dialog = getattr(getattr(webview, "FileDialog", None), "FOLDER", None) or webview.FOLDER_DIALOG
@@ -347,6 +415,8 @@ class Api:
             return self._workflows.pool
         if kind == "studio":
             return self._studio.pool
+        if kind == "mstudio":
+            return self._studio_muse.pool
         return self._images.pool if kind == "image" else self._runner.pool
 
     def list_tasks(self, kind: str = "video") -> list:
@@ -504,6 +574,68 @@ class Api:
 
     def ads_create_boost(self, form: dict) -> dict:
         return self._ads_call("result", self._ads.create_boost, form)
+
+    # ------------------------------------------------------------------ 🤖 trợ lý quảng cáo Meta
+    def _adbot(self, key: str, fn, *args, **kwargs) -> dict:
+        from .ad_assistant import AssistantError
+        from .facebook import FacebookError
+        from .llm.base import LLMError
+        from .studio import StudioError
+
+        try:
+            return _ok(**{key: fn(*args, **kwargs)})
+        except (AssistantError, FacebookError, LLMError, StudioError, OSError, ValueError) as exc:
+            return _fail(exc)
+
+    def adbot_meta(self) -> dict:
+        from .ad_assistant import STATUSES
+        from .content_writer import models
+        from .facebook_ads import OBJECTIVES
+
+        return _ok(models=models(settings), objectives={k: v["name"] for k, v in OBJECTIVES.items()}, statuses=STATUSES,
+                   ads=self._ads.status())
+
+    def adbot_list(self) -> dict:
+        return self._adbot("plans", self._adbot_store().list)
+
+    def adbot_get(self, pid: str) -> dict:
+        return self._adbot("plan", self._adbot_store().get, pid)
+
+    def adbot_create(self, data: dict | None = None) -> dict:
+        return self._adbot("plan", self._adbot_store().create, data or {})
+
+    def adbot_save(self, pid: str, data: dict) -> dict:
+        return self._adbot("plan", self._adbot_store().save, pid, data or {})
+
+    def adbot_clone(self, pid: str) -> dict:
+        return self._adbot("plan", self._adbot_store().clone, pid)
+
+    def adbot_delete(self, pid: str) -> dict:
+        return self._adbot("deleted", lambda: self._adbot_store().delete(pid) or True)
+
+    def adbot_chat(self, pid: str, message: str, model: str = "chatgpt_browser", profile: str = "",
+                   show_browser: bool = False) -> dict:
+        """Gửi yêu cầu cho model (1–3 phút với model trình duyệt): trả lời + tự điền form bản nháp."""
+        return self._adbot("plan", self._adbot_store().chat, pid, message, model=model, profile=profile,
+                           show_browser=bool(show_browser), log=lambda m, level="info": log.info("adbot: %s", m))
+
+    def adbot_submit(self, pid: str) -> dict:
+        return self._adbot("plan", self._adbot_store().submit, pid)
+
+    def adbot_approve(self, pid: str, mode: str, confirmed: bool = False) -> dict:
+        """Duyệt: paused = tạo tạm dừng · schedule = chạy theo giờ bắt đầu · now = chạy ngay (2 cách cuối tiêu tiền thật,
+        giao diện đã hỏi xác nhận → confirmed=True)."""
+        return self._adbot("plan", self._adbot_store().approve, pid, str(mode or ""), bool(confirmed))
+
+    def adbot_interests(self, query: str) -> dict:
+        return self._adbot("items", self._ads.search_interests, query, 10)
+
+    def _adbot_store(self):
+        if getattr(self, "_adbot_obj", None) is None:
+            from .ad_assistant import AdAssistant
+
+            self._adbot_obj = AdAssistant(settings, self._ads, self._license)
+        return self._adbot_obj
 
     # ------------------------------------------------------------------ chiến dịch (phòng marketing AI)
     def _camp(self, key: str, fn, *args) -> dict:
@@ -1034,14 +1166,25 @@ class Api:
         except (image_library.ImageLibraryError, OSError) as exc:
             return _fail(exc)
 
-    def open_images_folder(self, job_id: str = "") -> dict:
+    def open_images_folder(self, job_id: str = "", name: str = "") -> dict:
+        """Mở thư mục ảnh trong Explorer; có bộ ảnh → chọn sẵn đúng file ảnh (name, mặc định ảnh đầu tiên)."""
+        import subprocess
+
         try:
-            folder = (image_library.job_path(settings.output_dir, job_id) if job_id
-                      else image_library.root(settings.output_dir))
-            os.startfile(folder)
-            return _ok()
+            if not job_id:
+                os.startfile(image_library.root(settings.output_dir))
+                return _ok()
+            folder = image_library.job_path(settings.output_dir, job_id)
         except image_library.ImageLibraryError as exc:
             return _fail(exc)
+        target = folder / name if name and "/" not in name and "\\" not in name else None
+        if target is None or not target.is_file():
+            target = next((p for p in sorted(folder.iterdir()) if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")), None)
+        if target is not None and target.is_file():
+            subprocess.Popen(["explorer", "/select,", str(target)])
+        else:
+            os.startfile(folder)
+        return _ok(path=str(target or folder))
 
     # ------------------------------------------------------------------ thư viện
     def list_videos(self) -> list:
@@ -1147,3 +1290,162 @@ class Api:
 
     def license_refresh(self) -> dict:
         return _ok(license=self._license.verify())
+
+
+# ---------------------------------------------------------------------- Studio Muse AI (mstudio_*)
+class _MuseStudioView:
+    """Api nhìn qua Studio Muse AI: mọi thuộc tính lấy từ Api, riêng _studio là runner Muse — dùng lại nguyên các
+    hàm studio_* cho màn Studio Muse AI (không đổi trạng thái chung, an toàn khi nhiều luồng gọi cùng lúc)."""
+
+    def __init__(self, api: Api) -> None:
+        self._api = api
+        self._studio = api._studio_muse
+
+    def __getattr__(self, name):
+        return getattr(self._api, name)
+
+
+def _muse_studio_method(name: str):
+    base = getattr(Api, f"studio_{name}")
+
+    def method(self, *args, **kwargs):
+        if name == "analyze_video":  # video tham khảo cũng do Muse phân tích
+            args = (args[0] if args else kwargs.pop("source", ""), "muse_browser", *args[2:])
+            kwargs.pop("model", None)
+        return base(_MuseStudioView(self), *args, **kwargs)
+
+    method.__name__ = f"mstudio_{name}"
+    method.__doc__ = f"Studio Muse AI — như studio_{name}, mọi bước chỉ dùng Muse."
+    return method
+
+
+for _name in ("meta", "list", "get", "create", "create_batch", "resume_all", "voice_preview", "logs", "analyze_video",
+              "clone", "set_logo", "save", "start", "cancel", "delete"):
+    setattr(Api, f"mstudio_{_name}", _muse_studio_method(_name))
+
+
+# ---------------------------------------------------------------------- Studio Muse AI · dây chuyền (mhub_*)
+def _hub_call(key: str, fn, *args):
+    from .llm.base import LLMError
+    from .muse_hub import HubError
+    from .muse_script import ScriptError
+    from .studio import StudioError
+
+    try:
+        return _ok(**{key: fn(*args)})
+    except (HubError, ScriptError, LLMError, StudioError, ValueError, OSError) as exc:
+        return _fail(exc)
+
+
+def _mhub_methods():
+    def mhub_state(self) -> dict:
+        return _ok(state=self._muse_hub.state())
+
+    def mhub_settings(self, patch: dict) -> dict:
+        return _hub_call("state", self._muse_hub.set_settings, patch or {})
+
+    def mhub_account(self, pid: str, patch: dict) -> dict:
+        return _hub_call("state", self._muse_hub.set_account, str(pid or ""), patch or {})
+
+    def mhub_quota(self, pid: str = "") -> dict:
+        """Đọc lại hạn mức tuần (1 tài khoản / tất cả) — mở muse.ai ở profile đó, chỉ đọc, không tốn lượt."""
+        self._muse_hub.refresh_quota(str(pid or ""))
+        return _ok()
+
+    def mhub_login(self, pid: str) -> dict:
+        """Đăng nhập Muse trong đúng profile hệ thống (dùng chung màn Profile trình duyệt)."""
+        res = self.browser_login("muse_browser", str(pid or ""))
+        if res.get("ok"):
+            self._muse_hub.set_account(str(pid), {"relogin": True})
+        return res
+
+    def mhub_project(self, action: str, pid: str = "", name: str = "") -> dict:
+        return _hub_call("state", self._muse_hub.project, str(action or ""), str(pid or ""), str(name or ""))
+
+    def mhub_asset(self, kind: str, data: dict) -> dict:
+        return _hub_call("state", self._muse_hub.asset, str(kind or ""), data or {})
+
+    def mhub_add(self, form: dict) -> dict:
+        return _hub_call("result", self._muse_hub.add_tasks, form or {})
+
+    def mhub_tasks(self, ids: list, action: str) -> dict:
+        return _hub_call("state", self._muse_hub.task_action, list(ids or []), str(action or ""))
+
+    def mhub_stop(self) -> dict:
+        return _ok(state=self._muse_hub.stop_all())
+
+    def mhub_resume(self) -> dict:
+        return _ok(state=self._muse_hub.resume())
+
+    def mhub_import(self, paths: list) -> dict:
+        return _hub_call("images", self._muse_hub.import_images, list(paths or []))
+
+    # ---- Kịch bản (mỗi dòng 1 cảnh, dòng trống = video mới) / Từ ảnh
+    def mhub_script(self, form: dict) -> dict:
+        return _hub_call("result", self._muse_hub.add_script, form or {})
+
+    def mhub_approve(self, group_id: str) -> dict:
+        """Duyệt storyboard của 1 video → các task video vào hàng đợi."""
+        return _hub_call("state", self._muse_hub.approve, str(group_id or ""))
+
+    def mhub_group_delete(self, group_id: str) -> dict:
+        return _hub_call("state", self._muse_hub.delete_group, str(group_id or ""))
+
+    def mhub_bgm(self, action: str = "open") -> dict:
+        """Thư mục nhạc nền: open = mở thư mục; pick = chọn thư mục khác."""
+        if action == "pick":
+            folder_dialog = getattr(getattr(webview, "FileDialog", None), "FOLDER", None) or webview.FOLDER_DIALOG
+            res = self._window.create_file_dialog(folder_dialog)
+            return _ok(state=self._muse_hub.set_settings({"bgm_dir": str(res[0])}) if res else self._muse_hub.state())
+        os.startfile(self._muse_hub.bgm_dir())
+        return _ok()
+
+    # ---- LadiPage → 3 kịch bản
+    def mhub_ladi_fetch(self, url: str) -> dict:
+        """Đọc landing page: tên sản phẩm, ảnh, giá, chữ trên trang (chỉ là dữ liệu)."""
+        from . import muse_script
+
+        return _hub_call("page", muse_script.fetch_ladi, str(url or ""))
+
+    def mhub_ladi_scripts(self, page: dict, no_price: bool = True, scenes: int = 3, seconds: int = 30,
+                          profile: str = "", show_browser: bool = False) -> dict:
+        """Muse viết 3 kịch bản phân cảnh từ dữ liệu trang (1–3 phút, chạy bằng profile Muse)."""
+        from . import muse_script
+
+        def run():
+            return muse_script.write_scripts(settings, page or {}, no_price=bool(no_price),
+                                             scenes=max(2, min(8, int(scenes or 3))), seconds=int(seconds or 30),
+                                             profile=str(profile or ""), show_browser=bool(show_browser),
+                                             log=lambda m, level="info": log.info("ladi: %s", m))
+
+        return _hub_call("result", run)
+
+    def mhub_ladi_images(self, urls: list) -> dict:
+        return _hub_call("images", self._muse_hub.ladi_images, list(urls or []))
+
+    def mhub_library(self, project: str = "") -> dict:
+        return _hub_call("items", self._muse_hub.library, str(project or ""))
+
+    def mhub_merge(self, paths: list, name: str = "", project: str = "") -> dict:
+        return _hub_call("job", self._muse_hub.merge, list(paths or []), str(name or ""), str(project or ""))
+
+    def mhub_open(self, path: str = "") -> dict:
+        """Mở thư mục kết quả Studio Muse AI; có path → Explorer chọn sẵn đúng file (chỉ file trong thư mục kết quả)."""
+        import subprocess
+        from pathlib import Path
+
+        root = self._muse_hub.out_root().resolve()
+        target = Path(path).resolve() if path else root
+        if not target.is_relative_to(root) or not target.exists():
+            return _fail(ValueError("File không thuộc thư mục Studio Muse AI"))
+        if target.is_file():
+            subprocess.Popen(["explorer", "/select,", str(target)])
+        else:
+            os.startfile(target)
+        return _ok()
+
+    return {name: fn for name, fn in locals().items() if name.startswith("mhub_")}
+
+
+for _name, _fn in _mhub_methods().items():
+    setattr(Api, _name, _fn)

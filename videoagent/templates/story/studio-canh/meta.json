@@ -3,26 +3,71 @@
   "hidden": true,
   "name": "Studio · cảnh",
   "description": "Dùng nội bộ cho Studio: làm ảnh khung đầu của 1 cảnh storyboard chuyển động thành clip",
-  "tags": ["studio", "storyboard", "image to video"],
-  "options": {"aspect": "9:16", "duration": "10s", "resolution": "720p"},
+  "tags": [
+    "studio",
+    "storyboard",
+    "image to video"
+  ],
+  "options": {
+    "aspect": "9:16",
+    "duration": "10s",
+    "resolution": "720p"
+  },
   "variables": [
-    {"key": "MoTa", "label": "Mô tả cảnh & chuyển động", "required": true, "max": 700},
-    {"key": "LoiThoai", "label": "Lời thoại nhân vật nói trong cảnh", "required": false, "max": 700},
-    {"key": "CamKy", "label": "Những thứ không được có trong hình (Studio → Ràng buộc prompt)", "required": false, "max": 400}
+    {
+      "key": "KhoaNhanVat",
+      "label": "Khoá nhân vật (khuôn mặt luôn giữ; trang phục theo lựa chọn)",
+      "required": false,
+      "max": 1500
+    },
+    {
+      "key": "MoTa",
+      "label": "Mô tả cảnh & chuyển động",
+      "required": true,
+      "max": 700
+    },
+    {
+      "key": "LoiThoai",
+      "label": "Lời thoại nhân vật nói trong cảnh",
+      "required": false,
+      "max": 1500
+    },
+    {
+      "key": "CamKy",
+      "label": "Những thứ không được có trong hình (Studio → Ràng buộc prompt)",
+      "required": false,
+      "max": 400
+    }
   ],
   "attachments": [
-    {"key": "image", "label": "Ảnh khung đầu", "required": true,
-     "role": "first frame", "prompt": "start the clip from exactly this frame — same characters, product, outfit, background, lighting and style"},
-    {"key": "ref1", "label": "Ảnh nhân vật cố định", "required": false,
-     "role": "character reference", "prompt": "the same person as in the frame — keep this exact face, age, skin tone, hairstyle, outfit and style for the whole clip"},
-    {"key": "ref2", "label": "Ảnh sản phẩm / bối cảnh cố định", "required": false,
-     "role": "product or setting reference", "prompt": "keep this product (packaging, label, logo, colours) or this setting (background, props, lighting) exactly as shown"}
+    {
+      "key": "image",
+      "label": "Ảnh khung đầu",
+      "required": true,
+      "role": "first frame",
+      "prompt": "start the clip from exactly this frame — same characters, product, outfit, background, lighting and style"
+    },
+    {
+      "key": "ref1",
+      "label": "Ảnh nhân vật cố định",
+      "required": false,
+      "role": "character reference",
+      "prompt": "the same person as in the frame — keep this exact face, age, skin tone, hairstyle and identity for the whole clip (never redraw or swap the face)"
+    },
+    {
+      "key": "ref2",
+      "label": "Ảnh sản phẩm / bối cảnh cố định",
+      "required": false,
+      "role": "product or setting reference",
+      "prompt": "keep this product (packaging, label, logo, colours) or this setting (background, props, lighting) exactly as shown"
+    }
   ],
   "prompt": [
-    "Cinematic shot for one scene of a longer story video. Animate the attached first frame.",
+    "Cinematic shot for one scene of a longer story video. Animate the attached first frame (image-to-video) — do not create a new image.",
+    "{KhoaNhanVat}",
     "{MoTa}",
     "Dialogue: {LoiThoai}",
-    "Keep every character's face, hair, body and outfit, the product, the background and the visual style exactly as in the frame.",
+    "Keep the product, the background and the visual style exactly as in the frame.",
     "Smooth natural motion, realistic physics, stable camera unless the scene asks for a move; sharp and well lit.",
     "{CamKy}",
     "No cuts — one continuous shot."

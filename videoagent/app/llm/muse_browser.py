@@ -192,13 +192,19 @@ def muse_images(prompt: str, *, aspect: str, count: int, images: list[Path], cha
 def muse_video(prompt: str, out_path: Path, *, channel: str = "chrome", show_browser: bool = False,
                aspect: str = "9:16", duration: str = "10s", resolution: str = "720p",
                images: list[Path] | None = None, log=print, check_cancel=lambda: None, on_progress=None,
-               timeout_s: int = 900) -> None:
+               timeout_s: int = 900, refs_note: str | None = None) -> None:
+    """refs_note: câu mô tả ảnh đính kèm thay cho mặc định (vd. ảnh 1 là storyboard, không phải khung mở đầu)."""
     with profile_session(SITE) as prof, sync_playwright() as pw:
         ctx, page, box = _open_chat(pw, channel, show_browser, prof)
         try:
             _attach(page, images or [], log)
             baseline = _activity_now(page)
-            refs = " Dùng các ảnh đính kèm làm ảnh tham chiếu (nhân vật / sản phẩm)." if images else ""
+            refs = (f" {refs_note}" if refs_note is not None and images else
+                    " Ảnh đính kèm ĐẦU TIÊN là khung hình mở đầu: tạo video trực tiếp từ đúng ảnh này (image-to-video), KHÔNG"
+                    " tạo ảnh mới. Các ảnh sau là ảnh tham chiếu nhân vật / sản phẩm. GIỮ NGUYÊN khuôn mặt từng nhân vật"
+                    " như trong ảnh (dáng mặt, mắt, mũi, miệng, màu da, tuổi, kiểu tóc) suốt video — không vẽ lại, không làm"
+                    " đẹp, không đổi mặt. Khi chuyển yêu cầu cho công cụ tạo video, chép NGUYÊN VĂN đoạn IDENTITY LOCK."
+                    if images else "")
             marker = _send(page, box, f"Hãy tạo 1 video tỉ lệ {aspect}, dài khoảng {duration}, độ phân giải {resolution} "
                                       f"theo mô tả sau.{refs} {ONLY_MEDIA} Chỉ trả về video.\n{prompt}")
             log(f"Đã gửi prompt (mã {marker}) — Muse đang tạo video, thường 2–4 phút…")

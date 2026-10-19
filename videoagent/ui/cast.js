@@ -155,7 +155,7 @@
       ${eng.browser && state.profiles && (state.profileSites || {})[siteOf(C.gen.engine)] ? `<label class="field"><span>Profile</span><select data-gen="profile">${profileOptions(siteOf(C.gen.engine), C.gen.profile)}</select></label>` : ''}
       ${layout ? `<label class="field"><span>Tỉ lệ</span><select data-gen="aspect">${(eng.aspects || ['9:16']).map(a => `<option ${a === C.gen.aspect ? 'selected' : ''}>${a}</option>`).join('')}</select></label>
         <label class="field"><span>Số phương án</span><select data-gen="count">${(eng.counts || [1]).map(n => `<option ${String(n) === String(C.gen.count) ? 'selected' : ''}>${n}</option>`).join('')}</select></label>` : ''}
-      <label class="check"><input type="checkbox" data-gen="show_browser" ${C.gen.show_browser ? 'checked' : ''}> Hiện Chrome</label></div>`;
+</div>`;
   }
 
   // Bộ kết hợp: chọn nhân vật (tối đa N) + 1 layout từ danh sách đã có

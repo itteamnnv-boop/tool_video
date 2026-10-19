@@ -56,7 +56,7 @@ const SIDEBAR_KEY = 'va.sidebar.collapsed';
 function initSidebar() {
   state.view = 'create';
   $('#sbTplCount').textContent = state.boot.template_count;
-  $('#sbVersion').textContent = `VideoAgent v${state.boot.version}`;
+  $('#sbVersion').textContent = `v${state.boot.version}`;
   try {  // nhớ trạng thái thu gọn (localStorage có thể bị chặn)
     $('#sidebar').classList.toggle('collapsed', localStorage.getItem(SIDEBAR_KEY) === '1');
   } catch { /* bỏ qua */ }
@@ -65,6 +65,7 @@ function initSidebar() {
     try { localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0'); } catch { /* bỏ qua */ }
     requestAnimationFrame(fitFrame);
   };
+  // menu trái + các mục chính trên thanh tiêu đề (Tạo video, Thư viện, Tạo ảnh, Profile, Cài đặt…) dùng chung navigate()
   $$('.sb-item[data-view]').forEach(item => { item.onclick = () => navigate(item.dataset.view); });
 }
 
@@ -84,6 +85,8 @@ function navigate(view) {
   if (view === 'facebook') refreshFacebook();
   $('#page-ads').classList.toggle('hidden', view !== 'ads');
   if (view === 'ads') refreshAds();
+  $('#page-adbot').classList.toggle('hidden', view !== 'adbot');
+  if (view === 'adbot') window.AdBotPage.show();
   $('#page-cast').classList.toggle('hidden', view !== 'cast');
   if (view === 'cast') window.CastPage.show();
   $('#page-posts').classList.toggle('hidden', view !== 'posts');
@@ -97,6 +100,8 @@ function navigate(view) {
   if (view === 'workflow') window.WorkflowStudio.show();
   $('#page-studio').classList.toggle('hidden', view !== 'studio');
   if (view === 'studio') window.StudioPage.show();
+  $('#page-mstudio').classList.toggle('hidden', view !== 'mstudio');
+  if (view === 'mstudio') window.MuseHubPage.show();  // tab Kịch bản mới gọi MuseStudioPage.show()
   $('#page-content').classList.toggle('hidden', view !== 'content');
   if (view === 'content') window.ContentStudio.show();
   $('#page-seedance').classList.toggle('hidden', view !== 'seedance');
@@ -389,36 +394,74 @@ async function refreshImages() {
   $('#sbImageCount').textContent = state.images.length;
   $('#imgTabCount').textContent = state.images.length;
   $('#imgTotal').textContent = `${state.images.length} bộ ảnh`;
-  const ratio = a => { const [w, h] = String(a || '1:1').split(':').map(Number); return w && h ? `${w}/${h}` : '1'; };
-  $('#imgGallery').innerHTML = state.images.length ? state.images.map(set => `
-    <div class="img-set" data-id="${esc(set.id)}">
-      <div class="img-set-head">
-        <div><b>${esc(set.title)}</b><small>${esc(set.engine_name || set.engine)} · ${esc(set.aspect)} · ${fmtTime(set.created_at)}</small>
-          <p title="${esc(set.prompt)}">${esc(set.prompt)}</p></div>
-        <div class="row">
-          <button class="btn ghost sq" data-act="folder" title="Mở thư mục">↗</button>
-          <button class="btn danger sq" data-act="delete" title="Xoá">🗑</button>
-        </div>
-      </div>
-      <div class="img-thumbs" style="--ar:${ratio(set.aspect)}">
-        ${set.files.map(f => `<img src="${esc(f.url)}" data-full="${esc(f.url)}" alt="" loading="lazy">`).join('')}
-      </div>
-    </div>`).join('') : '<div class="empty">Chưa có ảnh nào. Nhập mô tả hoặc chọn template rồi bấm “Tạo ảnh”.</div>';
+  // lưới ảnh: mỗi ô 1 ảnh (bộ nhiều ảnh có nhãn 1/3…); thông tin chi tiết chỉ hiện khi bấm xem
+  state.imgTiles = state.images.flatMap(set => set.files.map((f, i) => ({ set, file: f, i })));
+  $('#imgGallery').innerHTML = state.imgTiles.length ? `<div class="img-grid">${state.imgTiles.map((t, k) => `
+    <div class="img-tile" data-k="${k}" title="${esc(t.set.title)}">
+      <img src="${esc(t.file.url)}" alt="" loading="lazy">
+      ${t.set.files.length > 1 ? `<i class="img-count">${t.i + 1}/${t.set.files.length}</i>` : ''}
+      <div class="img-tile-bar"><small>${esc(fmtTime(t.set.created_at).slice(0, 5))} ${esc(fmtDate(t.set.created_at))}</small>
+        <button class="img-tile-btn" data-act="folder" title="Mở thư mục, chọn sẵn file ảnh" type="button">📂</button>
+        <button class="img-tile-btn danger" data-act="delete" title="Xoá bộ ảnh" type="button">🗑</button></div>
+    </div>`).join('')}</div>` : '<div class="empty">Chưa có ảnh nào. Nhập mô tả hoặc chọn template rồi bấm “Tạo ảnh”.</div>';
 }
 
+async function deleteImageSet(id) {
+  if (!confirm('Xoá bộ ảnh này (xoá cả file trên ổ đĩa)?')) return false;
+  const r = await api('delete_images', id);
+  if (!r.ok) { toast(r.error, 'error'); return false; }
+  refreshImages();
+  return true;
+}
+
+// Xem ảnh: ảnh lớn + ‹ › (phím ← →) + thông tin bộ ảnh (model, tỉ lệ, thời gian, prompt) + mở thư mục / xoá
+function openImageViewer(k) {
+  const tiles = state.imgTiles || [];
+  if (!tiles[k]) return;
+  const t = tiles[k];
+  const set = t.set;
+  openModal(`ẢNH ${k + 1}/${tiles.length}`, set.title, `<div class="iv">
+      <div class="iv-stage">
+        <button class="iv-nav prev" data-iv="${k - 1}" type="button" ${k > 0 ? '' : 'disabled'} aria-label="Ảnh trước">‹</button>
+        <img src="${esc(t.file.url)}" alt="">
+        <button class="iv-nav next" data-iv="${k + 1}" type="button" ${k < tiles.length - 1 ? '' : 'disabled'} aria-label="Ảnh sau">›</button>
+      </div>
+      <aside class="iv-info">
+        <div class="iv-meta"><span>🎨 ${esc(set.engine_name || set.engine)}</span><span>▭ ${esc(set.aspect)}</span><span>🕒 ${esc(fmtTime(set.created_at))}</span>
+          ${set.files.length > 1 ? `<span>🖼 ảnh ${t.i + 1}/${set.files.length} của bộ</span>` : ''}<span class="mono">${esc(t.file.name)}</span></div>
+        <div class="iv-prompt"><b>Prompt</b><p>${esc(set.prompt)}</p></div>
+        <div class="iv-actions">
+          <button class="btn ghost sm" data-iv-act="copy" type="button">⧉ Sao chép prompt</button>
+          <button class="btn ghost sm" data-iv-act="folder" type="button">📂 Mở thư mục</button>
+          <button class="btn danger sm" data-iv-act="delete" type="button">🗑 Xoá bộ ảnh</button>
+        </div>
+      </aside></div>`);
+  $('#modalCard').classList.add('wide-viewer');
+  $('#modalBody').onclick = async e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.iv !== undefined) return openImageViewer(+b.dataset.iv);
+    const act = b.dataset.ivAct;
+    if (act === 'copy') { await navigator.clipboard.writeText(set.prompt || '').catch(() => {}); return toast('Đã sao chép prompt', 'ok'); }
+    if (act === 'folder') return api('open_images_folder', set.id, t.file.name);
+    if (act === 'delete' && await deleteImageSet(set.id)) closeModal();
+  };
+}
+
+document.addEventListener('keydown', e => {  // ← → chuyển ảnh khi đang xem
+  if (!$('#modalCard') || !$('#modalCard').classList.contains('wide-viewer') || $('#modal').classList.contains('hidden')) return;
+  const btn = $(`#modalBody .iv-nav.${e.key === 'ArrowLeft' ? 'prev' : e.key === 'ArrowRight' ? 'next' : 'x'}`);
+  if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
+});
+
 async function onImageGalleryClick(e) {
-  const set = e.target.closest('.img-set');
-  if (!set) return;
-  const img = e.target.closest('img[data-full]');
-  if (img) return openModal('ẢNH', set.querySelector('b').textContent, `<div class="viewer"><img src="${esc(img.dataset.full)}" alt=""></div>`, true);
+  const tile = e.target.closest('.img-tile');
+  if (!tile) return;
+  const t = state.imgTiles[+tile.dataset.k];
   const act = e.target.closest('[data-act]')?.dataset.act;
-  if (act === 'folder') return api('open_images_folder', set.dataset.id);
-  if (act === 'delete') {
-    if (!confirm('Xoá bộ ảnh này (xoá cả file trên ổ đĩa)?')) return;
-    const r = await api('delete_images', set.dataset.id);
-    if (!r.ok) return toast(r.error, 'error');
-    refreshImages();
-  }
+  if (act === 'folder') return api('open_images_folder', t.set.id, t.file.name);
+  if (act === 'delete') return deleteImageSet(t.set.id);
+  openImageViewer(+tile.dataset.k);
 }
 
 /* ------------------------------------------------------------------ fanpage Facebook */
@@ -1191,6 +1234,8 @@ function readForm() {
     attachments: currentAiTemplate() ? { ...aiValues(currentAiTemplate()).attachments } : {},
     // template nhiều bước: profile trình duyệt cho từng bước ({key bước | "video": profile id})
     step_profiles: currentAiTemplate() ? { ...(aiValues(currentAiTemplate()).profiles || {}) } : {},
+    // prompt sửa tay ở ô "Prompt gửi AI" (chỉ phần khác bản tự điền)
+    prompt_overrides: currentAiTemplate() ? promptOverrides(currentAiTemplate()) : {},
     // mong muốn của người dùng/template; backend tự chuẩn hoá theo engine (renderAiEngine hiện giá trị đã chuẩn hoá)
     ai_duration: state.form.ai_duration,
     ai_resolution: state.form.ai_resolution,
@@ -1476,10 +1521,40 @@ function renderAiPrompt() {
   }).split('\n').filter(l => !/^\s*[“"'‘]\s*[”"'’]\s*$/.test(l)).join('\n');
   const video = fill(t.prompt) + referenceSentence(t);
   const steps = t.image_steps || [];
-  $('#aiPrompt').value = steps.length
+  const auto = steps.length
     ? [...steps.map((s, i) => `[Bước ${i + 1} · ${s.label || s.key}]\n${fill(s.prompt)}${stepSentence(t, s)}`),
        `[Bước ${steps.length + 1} · Tạo video]\n${video}`].join('\n\n')
     : video;
+  state.aiAutoPrompt = auto;
+  // prompt đã sửa tay (lưu riêng từng template) → giữ nguyên, không ghi đè khi đổi biến
+  const edited = aiValues(t).prompt_text;
+  const box = $('#aiPrompt');
+  if (document.activeElement !== box) box.value = edited || auto;
+  const stale = edited && edited !== auto;
+  $('#aiPromptState').textContent = edited ? '· ✎ đã sửa tay — app gửi đúng nội dung này' : '· sửa trực tiếp được';
+  $('#aiPromptState').classList.toggle('edited', !!edited);
+  $('#resetPromptBtn').classList.toggle('hidden', !stale);
+}
+
+// Prompt sửa tay → {"video": …, "<key bước ảnh>": …}: chỉ các phần khác bản tự điền (template nhiều bước tách theo [Bước N · …])
+function promptOverrides(t) {
+  const edited = aiValues(t).prompt_text;
+  if (!edited || !state.aiAutoPrompt || edited === state.aiAutoPrompt) return {};
+  const steps = t.image_steps || [];
+  if (!steps.length) return { video: edited.trim() };
+  const split = text => {
+    const out = {};
+    const parts = text.split(/^\[Bước (\d+)[^\]\n]*\]\s*$/m);  // [trước, n1, nội dung1, n2, nội dung2, …]
+    for (let i = 1; i < parts.length; i += 2) {
+      const n = +parts[i];
+      const key = n === steps.length + 1 ? 'video' : (steps[n - 1] || {}).key;
+      if (key) out[key] = parts[i + 1].trim();
+    }
+    return out;
+  };
+  const mine = split(edited), auto = split(state.aiAutoPrompt);
+  if (!Object.keys(mine).length) return { video: edited.trim() };  // xoá mất tiêu đề bước → coi cả ô là prompt video
+  return Object.fromEntries(Object.entries(mine).filter(([k, v]) => v && v !== auto[k]));
 }
 
 // Giống ai_video.step_inputs + reference_sentence: ảnh gửi ở một bước tạo ảnh (video → 1 khung hình)
@@ -1635,6 +1710,65 @@ function renderHeader() {
   renderLicense(state.boot.license);
 }
 
+/* ------------------------------------------------------------------ cửa sổ không viền: header = thanh tiêu đề */
+const WIN_ICON = {
+  max: '<svg viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="1"/></svg>',
+  restore: '<svg viewBox="0 0 12 12"><rect x="1.5" y="3.5" width="7" height="7" rx="1"/><path d="M3.5 3.5V2.5a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-1"/></svg>',
+};
+
+async function initWindowFrame() {
+  let info;
+  try { info = await api('win_info'); } catch { return; }
+  if (!info || !info.frameless) return;  // chạy với khung Windows (VIDEOAGENT_NATIVE_FRAME=1) → giữ nguyên
+  $('#winCtrl').classList.remove('hidden');
+  $('#winGrips').classList.remove('hidden');
+  const setMax = max => {
+    document.body.classList.toggle('win-max', max);
+    $('#winMax').title = max ? 'Khôi phục' : 'Phóng to';
+    $('#winMax').innerHTML = WIN_ICON[max ? 'restore' : 'max'];
+  };
+  setMax(!!info.maximized);
+  const toggleMax = async () => setMax((await api('win_toggle_maximize')).maximized);
+  $('#winMin').onclick = () => api('win_minimize');
+  $('#winMax').onclick = toggleMax;
+  $('#winClose').onclick = () => api('win_close');
+  $$('.pywebview-drag-region').forEach(el => {
+    el.addEventListener('dblclick', toggleMax);
+    // đang phóng to thì không kéo dời (chặn trước bộ kéo của pywebview gắn ở body)
+    el.addEventListener('mousedown', e => { if (document.body.classList.contains('win-max')) e.stopPropagation(); });
+  });
+
+  // kéo giãn từ mép / góc: gửi kích thước mới về Python (chỉ 1 lệnh đang chờ, lệnh mới nhất thắng)
+  let drag = null, busy = false, pending = null;
+  const flush = () => {
+    if (busy || !pending) return;
+    const b = pending;
+    pending = null; busy = true;
+    Promise.resolve(api('win_set_bounds', b.x, b.y, b.w, b.h)).catch(() => {}).finally(() => { busy = false; flush(); });
+  };
+  $$('#winGrips [data-grip]').forEach(grip => {
+    grip.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      grip.setPointerCapture(e.pointerId);
+      drag = { g: grip.dataset.grip, sx: e.screenX, sy: e.screenY, x: window.screenX, y: window.screenY, w: window.outerWidth, h: window.outerHeight };
+    });
+    grip.addEventListener('pointermove', e => {
+      if (!drag) return;
+      const dx = e.screenX - drag.sx, dy = e.screenY - drag.sy;
+      let { x, y, w, h } = drag;
+      if (drag.g.includes('e')) w = Math.max(info.min_w, drag.w + dx);
+      if (drag.g.includes('s')) h = Math.max(info.min_h, drag.h + dy);
+      if (drag.g.includes('w')) { w = Math.max(info.min_w, drag.w - dx); x = drag.x + drag.w - w; }
+      if (drag.g.includes('n')) { h = Math.max(info.min_h, drag.h - dy); y = drag.y + drag.h - h; }
+      pending = { x, y, w, h };
+      flush();
+    });
+    const end = () => { drag = null; };
+    grip.addEventListener('pointerup', end);
+    grip.addEventListener('lostpointercapture', end);
+  });
+}
+
 function fmtDate(iso) {
   const d = new Date(iso);
   return isNaN(d) ? '' : `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
@@ -1738,6 +1872,8 @@ const OfferForm = (() => {
 
 /* ------------------------------------------------------------------ backend events */
 window.__onBackend = ({ event, data }) => {
+  if (event.startsWith('mstudio_')) return window.MuseStudioPage.update(`studio_${event.slice(8)}`, data);  // Studio Muse AI
+  if (event.startsWith('mhub_')) return window.MuseHubPage.update(event, data);  // Studio Muse AI · dây chuyền
   switch (event) {
     case 'seedance': window.SeedanceStudio.update(data); break;
     case 'studio_update': case 'studio_log': case 'studio_progress': case 'studio_done': case 'studio_error': case 'studio_cancelled':
@@ -1861,7 +1997,8 @@ function renderVideoList() {
       <div class="vactions">
         <button class="btn ghost sm" data-act="detail">Chi tiết</button>
         <div class="row">
-          <button class="btn ghost sq" data-act="open" title="Mở file">↗</button>
+          <button class="btn ghost sq" data-act="open" title="Mở file video">↗</button>
+          <button class="btn ghost sq" data-act="folder" title="Mở thư mục chứa video (chọn sẵn file)">📂</button>
           <button class="btn danger sq" data-act="delete" title="Xoá">🗑</button>
         </div>
       </div>
@@ -1889,6 +2026,7 @@ async function onVideoListClick(e) {
   const act = e.target.closest('[data-act]')?.dataset.act;
   if (act === 'detail') return openDetail(id);
   if (act === 'open') { const r = await api('open_video', id); if (!r.ok) toast(r.error, 'error'); return; }
+  if (act === 'folder') { const r = await api('open_video_folder', id); if (!r.ok) toast(r.error, 'error'); return; }
   if (act === 'delete') {
     if (!confirm('Xoá video này khỏi thư viện (xoá cả file trên ổ đĩa)?')) return;
     const r = await api('delete_video', id);
@@ -2014,6 +2152,7 @@ function openModal(eyebrow, title, html, narrow = false) {
   $('#modalTitle').textContent = title;
   $('#modalBody').innerHTML = html;
   $('#modalCard').classList.toggle('narrow', narrow);
+  $('#modalCard').classList.remove('wide-viewer');  // cửa sổ xem ảnh tự thêm lại khi cần
   $('#modal').classList.remove('hidden');
 }
 
@@ -2037,6 +2176,13 @@ function openGenreModal() {
     const row = e.target.closest('.mrow');
     if (!row) return;
     state.form.genre = row.dataset.key;
+    const t = findTemplate(state.form.template);  // template đang chọn không thuộc thể loại mới → để AI chọn lại
+    const cat = String(state.form.template).startsWith('category:') ? state.form.template.split(':')[1] : '';
+    const genre = genreOf(state.form.genre);
+    if ((t && !fitsGenre(t, state.form.genre)) || (cat && genre && (genre.categories || []).length && !genre.categories.includes(cat))) {
+      state.form.template = 'ai';
+      toast(`Template cũ không thuộc thể loại “${genre.name}” — đã chuyển về “AI chọn template”`, 'warn');
+    }
     updateLabels();
     onFormChange();
     closeModal();
@@ -2095,23 +2241,37 @@ function templateCard(t, active) {
   </button>`;
 }
 
-function openTemplateModal() {
-  const cats = state.boot.categories.filter(c => c.templates.length);
-  const current = findTemplate(state.form.template);
-  openModal(`${allTemplates().length} TEMPLATE · ${cats.length} NHÓM`, 'Chọn Template', '');
-  mountTemplateBrowser($('#modalBody'), setTemplate, current && current.kind === 'ai_video' ? 'ai_video' : 'all');
+// Thể loại → nhóm template phù hợp (app/genres.py GENRE_CATEGORIES); template khai báo "genres" thì theo khai báo
+const genreOf = id => (state.boot.genres || []).find(g => g.id === id);
+function fitsGenre(t, genreId) {
+  const g = genreOf(genreId);
+  if (!g || !(g.categories || []).length) return true;
+  return (t.genres || []).length ? t.genres.includes(genreId) : g.categories.includes(t.category);
 }
 
-// Bộ lọc nhóm + lưới thẻ template — dùng chung cho cửa sổ chọn template và trang Template ở sidebar
-function mountTemplateBrowser(root, onChoose, filter = 'all') {
-  const cats = state.boot.categories.filter(c => c.templates.length);
-  const templates = allTemplates();
+function openTemplateModal() {
+  const genre = genreOf(state.form.genre);
+  const count = allTemplates().filter(t => fitsGenre(t, state.form.genre)).length;
+  const current = findTemplate(state.form.template);
+  openModal(`${count} TEMPLATE · THỂ LOẠI ${genre ? genre.name.toUpperCase() : ''}`, 'Chọn Template', '');
+  mountTemplateBrowser($('#modalBody'), setTemplate, current && current.kind === 'ai_video' ? 'ai_video' : 'all', state.form.genre);
+}
+
+// Bộ lọc nhóm + lưới thẻ template — dùng chung cho cửa sổ chọn template (lọc theo thể loại) và trang Template ở sidebar
+function mountTemplateBrowser(root, onChoose, filter = 'all', genre = '') {
+  const templates = allTemplates().filter(t => fitsGenre(t, genre));
+  const cats = state.boot.categories.map(c => ({ ...c, n: templates.filter(t => t.category === c.id).length })).filter(c => c.n);
   const aiCount = templates.filter(t => t.kind === 'ai_video').length;
+  const g = genre && genreOf(genre);
+  root.dataset.genre = genre;
+  if (filter !== 'all' && filter !== 'ai_video' && !cats.some(c => c.id === filter)) filter = 'all';
+  if (filter === 'ai_video' && !aiCount) filter = 'all';
   root.innerHTML = `
+    ${g ? `<p class="hint tpl-genre-hint">Chỉ hiện template hợp thể loại <b>${esc(g.name)}</b> — đổi thể loại để xem template khác.</p>` : ''}
     <div class="chips tpl-chips">
       ${filterChip('all', 'Tất cả', templates.length)}
       ${aiCount ? filterChip('ai_video', '🎬 Video AI (Grok / Gemini)', aiCount) : ''}
-      ${cats.map(c => filterChip(c.id, `${c.icon} ${c.name}`, c.templates.length)).join('')}
+      ${cats.map(c => filterChip(c.id, `${c.icon} ${c.name}`, c.n)).join('')}
     </div>
     <div class="tpl-grid"></div>`;
   renderTemplateGrid(root, filter);
@@ -2126,11 +2286,14 @@ function mountTemplateBrowser(root, onChoose, filter = 'all') {
 function renderTemplateGrid(root, filter) {
   $$('.tpl-chips .chip-f', root).forEach(c => c.classList.toggle('active', c.dataset.filter === filter));
   const sel = state.form.template;
-  let items = allTemplates();
+  const genre = root.dataset.genre || '';
+  let items = allTemplates().filter(t => fitsGenre(t, genre));
   const special = [];
   if (filter === 'all') {
-    special.push(specialCard('ai', '✦', 'AI chọn template', 'AI đọc nội dung và chọn template HTML phù hợp nhất', sel === 'ai'));
-    special.push(specialCard('random', '⚡', 'Ngẫu nhiên toàn bộ', 'Bốc bất kỳ một template HTML', sel === 'random'));
+    special.push(specialCard('ai', '✦', 'AI chọn template', genre ? 'AI đọc nội dung và chọn template HTML phù hợp nhất trong thể loại'
+      : 'AI đọc nội dung và chọn template HTML phù hợp nhất', sel === 'ai'));
+    special.push(specialCard('random', '⚡', genre ? 'Ngẫu nhiên trong thể loại' : 'Ngẫu nhiên toàn bộ',
+      genre ? 'Bốc 1 template HTML hợp thể loại' : 'Bốc bất kỳ một template HTML', sel === 'random'));
   } else if (filter === 'ai_video') {
     items = items.filter(t => t.kind === 'ai_video');
   } else {
@@ -2157,6 +2320,16 @@ function openSettings() {
       <div class="field"><span>Thư mục lưu video</span>
         <div class="inline"><input id="setOut" value="${esc(s.output_dir)}" readonly><button class="btn ghost" id="setOutPick">Chọn…</button></div></div>
       <label class="check"><input type="checkbox" id="setCleanup" ${s.cleanup_temp ? 'checked' : ''}> Dọn file tạm sau khi render</label>
+      <div class="sec">TRÌNH DUYỆT</div>
+      <label class="field"><span>Cách điều khiển Chrome</span><select id="setBrowserEngine">
+        <option value="cdp" ${(s.browser_engine || 'cdp') === 'cdp' ? 'selected' : ''}>Chrome thật (CDP) — Chrome của máy, ít cờ tự động hoá, không chạy headless (khuyên dùng)</option>
+        <option value="playwright" ${s.browser_engine === 'playwright' ? 'selected' : ''}>Playwright — cách cũ (nhiều cờ tự động hoá, có thể chạy headless)</option>
+      </select></label>
+      <p class="hint">Cả hai đều điều khiển Chrome qua đường ống nội bộ (không mở cổng mạng), mỗi tài khoản một profile. Chrome thật giữ “vân tay” giống Chrome bạn dùng hằng ngày nên ít bị trang web (Muse, Grok, Gemini…) nghi là bot. Gặp lỗi thì chuyển về Playwright.</p>
+      <label class="check"><input type="checkbox" id="setKeepAlive" ${s.browser_keepalive ? 'checked' : ''}> Giữ Chrome mở sẵn cho mỗi tài khoản (kiểu HaoHao)</label>
+      <p class="hint">Chỉ áp dụng khi chọn Chrome thật (CDP). Bật: mỗi profile giữ một Chrome chạy liên tục, các lượt sau dùng lại nên nhanh hơn, phiên đăng nhập luôn sẵn; Chrome rảnh 20 phút tự đóng, thoát app thì đóng hết. Task nối vào Chrome qua cổng gỡ lỗi chỉ trên máy này (127.0.0.1). Tắt: quay về cách cũ, mỗi lượt mở rồi đóng Chrome.</p>
+      <label class="check"><input type="checkbox" id="setShowBrowser" ${s.show_browser ? 'checked' : ''}> Hiện cửa sổ Chrome khi model chạy qua trình duyệt</label>
+      <p class="hint">Dùng chung cho mọi màn hình (Tạo video, Tạo ảnh, Studio, Studio Muse AI, Trợ lý quảng cáo…). Tắt: Chrome chạy ngầm ngoài màn hình, không hiện icon trên thanh taskbar. Cửa sổ đăng nhập luôn hiện.</p>
       <div class="sec">API &amp; KẾT NỐI</div>
       <p class="hint">Mọi khoá API và kết nối chỉ nhập tại đây — các màn hình khác chỉ hiện trạng thái.</p>
       <label class="field"><span>Anthropic API key — Claude (Chiến dịch, Tạo content, Workflow)</span><input id="setAnthropicKey" type="password" value="${esc(s.anthropic_api_key || '')}" placeholder="sk-ant-…" autocomplete="off"></label>
@@ -2193,7 +2366,7 @@ function openSettings() {
       <div class="sec">VIDEO &amp; ÂM THANH</div>
       <div class="grid2">
         <label class="field"><span>FPS</span><select id="setFps">${opt([[24, '24 fps'], [30, '30 fps'], [60, '60 fps']], s.fps)}</select></label>
-        <label class="field"><span>Số video tạo song song</span><select id="setParVideo">${opt([1, 2, 3, 4, 5, 6].map(n => [n, `${n} luồng`]), s.max_parallel_video || 2)}</select></label>
+        <label class="field"><span>Số video tạo song song</span><select id="setParVideo">${opt([1, 2, 3, 4, 5, 6, 8, 10].map(n => [n, `${n} luồng (${n} Chrome)`]), s.max_parallel_video || 2)}</select></label>
         <label class="field"><span>Số tác vụ ảnh song song</span><select id="setParImage">${opt([1, 2, 3, 4, 5, 6].map(n => [n, `${n} luồng`]), s.max_parallel_image || 2)}</select></label>
         <label class="field"><span>Âm lượng nhạc nền (0–1)</span><input id="setBgmVol" type="number" min="0" max="1" step="0.01" value="${s.bgm_volume}"></label>
         <label class="field" style="grid-column:1/-1"><span>Khi model trình duyệt (Muse, ChatGPT…) đề xuất phương án khác thay vì tạo ảnh / video</span>
@@ -2228,6 +2401,9 @@ function openSettings() {
 async function saveSettings(close) {
   const values = {
     cleanup_temp: $('#setCleanup').checked,
+    show_browser: $('#setShowBrowser').checked,
+    browser_engine: $('#setBrowserEngine').value,
+    browser_keepalive: $('#setKeepAlive').checked,
     browser_channel: $('#setChannel').value,
     gemini_model: $('#setModel').value.trim(),
     veo_model: $('#setVeoModel').value.trim() || 'veo-3.1-generate-preview',
@@ -2310,6 +2486,25 @@ function bindEvents() {
   $('#wbBody').addEventListener('click', onWbClick);
   $('#wbBody').addEventListener('change', onWbChange);
   $('#wbBody').addEventListener('input', e => { if (e.target.matches('textarea, input:not([type=checkbox])')) onWbChange(e); });
+  $('#aiPrompt').addEventListener('input', e => {  // sửa tay prompt → lưu riêng cho template đang chọn
+    const t = currentAiTemplate();
+    if (!t) return;
+    const v = e.target.value;
+    aiValues(t).prompt_text = v.trim() && v !== state.aiAutoPrompt ? v : '';
+    clearTimeout(state.aiPromptTimer);
+    state.aiPromptTimer = setTimeout(() => { onFormChange(); renderAiPrompt(); }, 400);
+  });
+  $('#aiPrompt').addEventListener('blur', () => renderAiPrompt());
+  $('#resetPromptBtn').onclick = () => {
+    const t = currentAiTemplate();
+    if (!t) return;
+    aiValues(t).prompt_text = '';
+    $('#aiPrompt').value = '';
+    $('#aiPrompt').blur();
+    onFormChange();
+    renderAiPrompt();
+    toast('Đã điền lại prompt từ template', 'ok');
+  };
   $('#copyPromptBtn').onclick = () => {
     $('#aiPrompt').select();
     document.execCommand('copy');
@@ -2328,6 +2523,7 @@ function bindEvents() {
   };
   $('#licenseChip').onclick = () => (state.boot.license.active ? openSettings() : licenseLogin());
   $('#userChip').onclick = () => (state.boot.license.dev || state.boot.license.active ? openSettings() : licenseLogin());
+  initWindowFrame();
 
   $$('.tab[data-tab]').forEach(t => {
     t.onclick = () => {
@@ -2341,7 +2537,11 @@ function bindEvents() {
   };
 
   $('#videoList').addEventListener('click', onVideoListClick);
-  $('#openFolderBtn').onclick = () => api('open_output_dir');
+  // đang chọn 1 video → mở đúng thư mục chứa video đó (chọn sẵn final.mp4); chưa chọn → thư mục video chung
+  $('#openFolderBtn').onclick = async () => {
+    const r = await api(state.selected ? 'open_video_folder' : 'open_output_dir', ...(state.selected ? [state.selected] : []));
+    if (r && !r.ok) toast(r.error, 'error');
+  };
   $('#reloadBtn').onclick = refreshVideos;
 
   $('#backBtn').onclick = () => switchTab('results');

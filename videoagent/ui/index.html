@@ -11,54 +11,78 @@
 <link rel="stylesheet" href="workflow.css">
 <link rel="stylesheet" href="content.css">
 <link rel="stylesheet" href="studio.css">
+<link rel="stylesheet" href="adbot.css">
+<link rel="stylesheet" href="musehub.css">
 <link rel="stylesheet" href="posts.css">
 <link rel="stylesheet" href="cast.css">
 </head>
 <body>
+<div class="win-grips hidden" id="winGrips"><i data-grip="n"></i><i data-grip="s"></i><i data-grip="e"></i><i data-grip="w"></i><i data-grip="ne"></i><i data-grip="nw"></i><i data-grip="se"></i><i data-grip="sw"></i></div>
 <header class="topbar">
-  <div class="brand">
-    <svg class="logo" viewBox="0 0 48 48" aria-hidden="true">
+  <div class="top-brand pywebview-drag-region" title="VideoAgent — AI video generation tool"><svg class="logo" viewBox="0 0 48 48" aria-hidden="true">
       <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e8ff8a"/><stop offset="1" stop-color="#7fd34e"/></linearGradient></defs>
       <path d="M24 3 42 13.5v21L24 45 6 34.5v-21Z" fill="none" stroke="url(#lg)" stroke-width="3.2" stroke-linejoin="round"/>
       <path d="M19 16.5v15l13-7.5Z" fill="url(#lg)"/>
       <path d="M2 22h8M1 27h6" stroke="url(#lg)" stroke-width="2.6" stroke-linecap="round"/>
-    </svg>
-    <div>
-      <div class="brand-name">Video<span>Agent</span></div>
-      <div class="brand-sub">AI video generation tool</div>
-    </div>
-  </div>
+    </svg><span>Video<b>Agent</b></span></div>
+  <nav class="topnav" id="topnav" aria-label="Chức năng chính">
+    <button class="sb-item top-item active" data-view="create" title="Tạo video">
+      <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="13" height="14" rx="2.5"/><path d="M16 10l5-3v10l-5-3z"/></svg></span>
+      <span class="sb-label">Tạo video</span><i class="sb-dot hidden" id="sbRunning" title="Đang xử lý"></i>
+    </button>
+    <button class="sb-item top-item" data-view="library" title="Thư viện video">
+      <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg></span>
+      <span class="sb-label">Thư viện video</span><span class="sb-badge" id="sbVideoCount">0</span>
+    </button>
+    <button class="sb-item top-item" data-view="images" title="Tạo hình ảnh">
+      <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 9"/></svg></span>
+      <span class="sb-label">Tạo hình ảnh</span><span class="sb-badge" id="sbImageCount">0</span><i class="sb-dot hidden" id="sbImgRunning" title="Đang tạo ảnh"></i>
+    </button>
+    <span class="top-sep"></span>
+    <button class="sb-item top-item top-sys" data-view="profiles" title="Profile trình duyệt">
+      <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.2A4.5 4.5 0 0 1 21 18.5"/></svg></span>
+      <span class="sb-label">Profile trình duyệt</span><span class="sb-badge" id="sbProfileCount">1</span>
+    </button>
+    <button class="sb-item top-item top-sys" data-view="settings" title="Cài đặt">
+      <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg></span>
+      <span class="sb-label">Cài đặt</span>
+    </button>
+    <button class="sb-item top-item top-sys" data-view="folder" title="Mở thư mục video">
+      <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+      <span class="sb-label">Mở thư mục video</span>
+    </button>
+    <button class="sb-item top-item top-sys" data-view="help" title="Hướng dẫn">
+      <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.3a2.6 2.6 0 0 1 5 .9c0 1.8-2.5 2.2-2.5 3.8M12 17.2v.1"/></svg></span>
+      <span class="sb-label">Hướng dẫn</span>
+    </button>
+  </nav>
+  <div class="top-drag pywebview-drag-region"></div>
   <div class="top-right">
     <button class="chip mono path" id="outDirChip" title="Đổi thư mục lưu video">Video lưu tại: …</button>
     <button class="chip license" id="licenseChip">…</button>
     <button class="chip user" id="userChip"><span class="avatar" id="userAvatar"></span><span id="userName">…</span></button>
-    <button class="icon-btn" id="settingsBtn" title="Cài đặt">
+    <button class="icon-btn hidden" id="settingsBtn" title="Cài đặt">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
     </button>
+  </div>
+  <!-- nút cửa sổ (cửa sổ không viền: thanh tiêu đề Windows gộp vào header) -->
+  <div class="win-ctrl hidden" id="winCtrl">
+    <button class="win-btn" id="winMin" title="Thu nhỏ" type="button"><svg viewBox="0 0 12 12"><path d="M1.5 6h9"/></svg></button>
+    <button class="win-btn" id="winMax" title="Phóng to" type="button"><svg viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="1"/></svg></button>
+    <button class="win-btn close" id="winClose" title="Đóng" type="button"><svg viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8"/></svg></button>
   </div>
 </header>
 
 <div class="shell">
 <nav class="sidebar" id="sidebar">
-  <button class="sb-toggle" id="sbToggle" title="Thu gọn / mở rộng menu">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg>
-  </button>
   <div class="sb-group">CHỨC NĂNG</div>
-  <button class="sb-item active" data-view="create" title="Tạo video">
-    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="13" height="14" rx="2.5"/><path d="M16 10l5-3v10l-5-3z"/></svg></span>
-    <span class="sb-label">Tạo video</span><i class="sb-dot hidden" id="sbRunning" title="Đang xử lý"></i>
-  </button>
-  <button class="sb-item" data-view="library" title="Thư viện video">
-    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg></span>
-    <span class="sb-label">Thư viện video</span><span class="sb-badge" id="sbVideoCount">0</span>
-  </button>
-  <button class="sb-item" data-view="images" title="Tạo hình ảnh">
-    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 9"/></svg></span>
-    <span class="sb-label">Tạo hình ảnh</span><span class="sb-badge" id="sbImageCount">0</span><i class="sb-dot hidden" id="sbImgRunning" title="Đang tạo ảnh"></i>
-  </button>
   <button class="sb-item" data-view="studio" title="Studio — storyboard → video dài">
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M8 5v4M13 5v4M18 5v4M10 12.5v4l3.5-2z"/></svg></span>
     <span class="sb-label">Studio</span>
+  </button>
+  <button class="sb-item" data-view="mstudio" title="Studio Muse AI — mọi bước (storyboard, ảnh, clip, hậu kỳ) chỉ dùng Muse">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M10 12.5v4l3.5-2z"/><path d="M18 2.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg></span>
+    <span class="sb-label">Studio Muse AI</span>
   </button>
   <button class="sb-item" data-view="cast" title="Nhân vật & Layout cố định — dùng cho Studio">
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8.5" cy="8" r="3.2"/><path d="M3 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><rect x="14.5" y="4" width="6.5" height="9" rx="1.5"/><path d="M14.5 10.5l2-2 2 2 2.5-2.5"/></svg></span>
@@ -66,13 +90,13 @@
   </button>
   <button class="sb-item" data-view="content" title="Tạo content bài viết">
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4h10l4 4v12H5z"/><path d="M14 4v5h5M8 13h8M8 17h5"/></svg></span>
-    <span class="sb-label">Tạo content bài viết</span>
+    <span class="sb-label">Viết content</span>
   </button>
-  <button class="sb-item" data-view="seedance" title="Seedance Studio Pro">
+  <button class="sb-item hidden" data-view="seedance" title="Seedance Studio Pro"><!-- tạm ẩn Seedance Pro: bỏ class hidden để hiện lại -->
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"/><path d="m19 2 1 3 3 1"/></svg></span>
-    <span class="sb-label">Seedance Studio Pro</span><i class="sb-dot hidden" id="sbSeedanceRunning" title="Studio đang chạy"></i>
+    <span class="sb-label">Seedance Pro</span><i class="sb-dot hidden" id="sbSeedanceRunning" title="Studio đang chạy"></i>
   </button>
-  <button class="sb-item" data-view="templates" title="Template">
+  <button class="sb-item hidden" data-view="templates" title="Template"><!-- tạm ẩn mục Template: bỏ class hidden để hiện lại -->
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z"/></svg></span>
     <span class="sb-label">Template</span><span class="sb-badge" id="sbTplCount">0</span>
   </button>
@@ -84,6 +108,10 @@
   <button class="sb-item" data-view="ads" title="Quảng cáo Facebook">
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 10v4a1 1 0 0 0 1 1h2l5 4V5L6 9H4a1 1 0 0 0-1 1z"/><path d="M15 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg></span>
     <span class="sb-label">Quảng cáo Facebook</span><span class="sb-badge" id="sbAdsCount">0</span>
+  </button>
+  <button class="sb-item" data-view="adbot" title="Trợ lý quảng cáo Meta — chat để AI điền form, duyệt rồi chạy">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9.5 15.5h5"/></svg></span>
+    <span class="sb-label">Trợ lý quảng cáo</span>
   </button>
   <button class="sb-item" data-view="posts" title="Quản lý bài đăng — lưu, sửa, đăng lại">
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 8h8M8 12h8M8 16h4"/><path d="M15.5 15.5l1.5 1.5 3-3"/></svg></span>
@@ -115,22 +143,8 @@
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
     <span class="sb-label">Lịch sử &amp; chi phí</span>
   </button>
-  <div class="sb-group">HỆ THỐNG</div>
-  <button class="sb-item" data-view="profiles" title="Profile trình duyệt">
-    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.2A4.5 4.5 0 0 1 21 18.5"/></svg></span>
-    <span class="sb-label">Profile trình duyệt</span><span class="sb-badge" id="sbProfileCount">1</span>
-  </button>
-  <button class="sb-item" data-view="settings" title="Cài đặt">
-    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg></span>
-    <span class="sb-label">Cài đặt</span>
-  </button>
-  <button class="sb-item" data-view="folder" title="Mở thư mục video">
-    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
-    <span class="sb-label">Mở thư mục video</span>
-  </button>
-  <button class="sb-item" data-view="help" title="Hướng dẫn">
-    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.3a2.6 2.6 0 0 1 5 .9c0 1.8-2.5 2.2-2.5 3.8M12 17.2v.1"/></svg></span>
-    <span class="sb-label">Hướng dẫn</span>
+  <button class="sb-toggle" id="sbToggle" title="Thu gọn / mở rộng menu">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg>
   </button>
   <div class="sb-foot"><span class="sb-label" id="sbVersion"></span></div>
 </nav>
@@ -181,10 +195,11 @@
           <label class="field"><span>Độ phân giải</span>
             <select id="aiResolution"></select></label>
         </div>
-        <div class="field asset-field"><span>Prompt gửi AI (đã điền biến)</span>
-          <textarea class="mono" id="aiPrompt" rows="7" readonly></textarea></div>
+        <div class="field asset-field"><span>Prompt gửi AI (đã điền biến) <small class="ai-prompt-state" id="aiPromptState"></small></span>
+          <textarea class="mono" id="aiPrompt" rows="7" spellcheck="false" title="Sửa trực tiếp — app gửi đúng nội dung bạn sửa"></textarea></div>
         <div class="row ai-actions">
           <button class="btn ghost" id="copyPromptBtn" type="button">Sao chép prompt</button>
+          <button class="btn ghost hidden" id="resetPromptBtn" type="button" title="Bỏ phần sửa tay, điền lại prompt từ template + biến">↺ Dùng prompt gốc</button>
           <small class="muted">Engine tạo video theo Provider AI: Grok Browser → Grok Imagine · Gemini Browser / Gemini API → Veo. Ô Nội dung không dùng cho template này.</small>
         </div>
       </div>
@@ -249,7 +264,7 @@
           <div class="field" id="browserBox"><span id="browserLabel">Gemini Browser</span>
             <div class="inline">
               <select class="profile-select" id="browserProfile" title="Profile trình duyệt (tài khoản) dùng cho tác vụ"></select>
-              <label class="check"><input type="checkbox" id="showBrowser"> Hiện Chrome</label>
+              <label class="check hidden"><input type="checkbox" id="showBrowser"> Hiện Chrome</label>
               <button class="btn ghost" id="geminiLoginBtn" type="button">Đăng nhập</button>
             </div>
           </div>
@@ -315,7 +330,7 @@
       <div class="results-head">
         <span class="muted" id="resultsCount">0 video</span>
         <div class="row">
-          <button class="btn ghost" id="openFolderBtn">Mở thư mục video</button>
+          <button class="btn ghost" id="openFolderBtn" title="Mở thư mục chứa video đang chọn (chọn sẵn file); chưa chọn video thì mở thư mục video chung">📂 Mở thư mục video</button>
           <button class="btn ghost" id="reloadBtn">Tải lại</button>
         </div>
       </div>
@@ -376,7 +391,7 @@
         <div class="engine-line img-engine-line" id="imgEngineNote"></div>
         <div class="inline hidden" id="imgBrowserBox">
           <select class="profile-select" id="imgBrowserProfile" title="Profile trình duyệt (tài khoản) dùng cho tác vụ"></select>
-          <label class="check"><input type="checkbox" id="imgShowBrowser"> Hiện trình duyệt</label>
+          <label class="check hidden"><input type="checkbox" id="imgShowBrowser"> Hiện trình duyệt</label>
           <button class="btn ghost" id="imgLoginBtn" type="button">Đăng nhập</button>
         </div>
       </div>
@@ -503,6 +518,18 @@
   <div id="postsBody"></div>
 </section>
 
+<section class="panel page hidden" id="page-adbot">
+  <div class="page-head">
+    <div>
+      <small class="eyebrow">TRỢ LÝ QUẢNG CÁO META</small>
+      <h2>🤖 Trợ lý quảng cáo</h2>
+      <p class="muted">Chat với AI để phân tích yêu cầu và tự điền thông số quảng cáo → gửi duyệt → tạo tạm dừng, lên lịch hoặc chạy ngay.
+        Quảng cáo chỉ chạy (tiêu tiền) khi bạn xác nhận.</p>
+    </div>
+  </div>
+  <div id="adbotBody"></div>
+</section>
+
 <section class="panel page hidden" id="page-ads">
   <div class="page-head ads-head">
     <div>
@@ -613,6 +640,21 @@
       thêm phụ đề, nhạc nền và ghép thành video 30–90 giây. Ảnh / clip chạy trong hàng đợi Tạo hình ảnh / Tạo video.</p>
   </div>
   <div id="studioBody"></div>
+</section>
+
+<section class="panel page hidden mh-page" id="page-mstudio">
+  <div id="mhTop"></div>
+  <div id="mhTabs"></div>
+  <div class="mh-panel" data-panel="studio" id="mhStudio"></div>
+  <div class="mh-panel hidden" data-panel="assets" id="mhAssets"></div>
+  <div class="mh-panel hidden" data-panel="script" id="mhScript"></div>
+  <div class="mh-panel hidden" data-panel="ladi" id="mhLadi"></div>
+  <div class="mh-panel hidden" data-panel="story">
+    <p class="muted mh-script-hint">Storyboard dài: ý tưởng → storyboard nhiều cảnh (sửa được) → ảnh khung đầu + clip từng cảnh → lồng tiếng, phụ đề, ghép video — mọi bước dùng Muse.</p>
+    <div id="mstudioBody"></div>
+  </div>
+  <div class="mh-panel hidden" data-panel="library" id="mhLibrary"></div>
+  <div class="mh-panel hidden" data-panel="accounts" id="mhAccounts"></div>
 </section>
 
 <!-- ============================== TẠO CONTENT BÀI VIẾT ============================== -->
@@ -806,6 +848,8 @@
 <script src="workflow.js"></script>
 <script src="content.js"></script>
 <script src="studio.js"></script>
+<script src="adbot.js"></script>
+<script src="musehub.js"></script>
 <script src="posts.js"></script>
 <script src="cast.js"></script>
 </body>

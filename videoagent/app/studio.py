@@ -36,6 +36,10 @@ from .pipeline.tts import RATES, ROLES, VOICES, role_voice, synthesize, synthesi
 from .util import read_json, slugify, unique_dir, write_json
 
 STUDIO_DIR = "_studio"
+# Studio Muse AI: dự án riêng (thư mục _studio_muse, sự kiện mstudio_*), mọi bước chỉ dùng Muse (muse.ai)
+MUSE_DIR = "_studio_muse"
+MUSE_LOCK = {"model": "muse_browser", "image_engine": "muse_browser", "video_engine": "muse_browser",
+             "post_model": "muse_browser"}
 SCENE_TEMPLATE = "studio-canh"
 WIDTH, HEIGHT, FPS = 1080, 1920, 30  # mặc định: video dọc 9:16 (Reels / TikTok)
 # tỉ lệ khung hình → (nhãn, kích thước video ghép, mô tả tiếng Anh cho prompt ảnh, mô tả tiếng Việt cho storyboard)
@@ -123,10 +127,41 @@ def voice_map(characters: list[dict], options: dict) -> dict:
     return out
 
 
-def character_sheet(chars: list[dict], title: str = "Characters in this scene — the SAME people in every scene "
-                                                    "(same face, age, hairstyle and outfit)") -> str:
-    return "\n".join([title + ":"] + [f"- {c['name']}: {c['look'].rstrip('. ')}." + (f" Outfit (never changes): {c['outfit']}"
+def character_sheet(chars: list[dict], title: str = "", lock_outfit: bool = True) -> str:
+    title = title or ("Characters in this scene — the SAME people in every scene (same face, age, hairstyle"
+                      + (" and outfit)" if lock_outfit else "; clothes may change per scene)"))
+    label = "Outfit (never changes)" if lock_outfit else "Usual outfit (use it unless the scene action says other clothes)"
+    return "\n".join([title + ":"] + [f"- {c['name']}: {c['look'].rstrip('. ')}." + (f" {label}: {c['outfit']}"
                                                                         if c.get("outfit") else "") for c in chars])
+
+
+FACE_LOCK = ("IDENTITY LOCK (highest priority): every person is EXACTLY the same person as in the first frame and the "
+             "character reference image — identical face (face shape, eyes, nose, mouth, eyebrows, jawline), skin tone, "
+             "apparent age, hairstyle and body type from the first to the last frame. Do NOT regenerate, redraw, "
+             "beautify, age or swap any face; no face morphing when talking, smiling or turning the head; keep the "
+             "first frame as the exact starting image.")
+
+
+def identity_lock(scene: dict, options: dict, bible: dict | None = None) -> str:
+    """Câu khoá nhân vật đặt ĐẦU prompt clip (model video, nhất là Muse, hay vẽ lại mặt): khuôn mặt luôn giữ nguyên;
+    trang phục giữ như bảng nhân vật (lock_outfit) hoặc giữ đúng như khung đầu của cảnh này."""
+    bible = bible or {}
+    roster = bible.get("characters") or []
+    names = scene.get("cast") if isinstance(scene.get("cast"), list) else [c["name"] for c in roster]
+    people = [c for c in roster if c["name"] in names]
+    fixed = options.get("cast_characters") or options.get("cast_combo")
+    if not (people or fixed):
+        return ""
+    lock_outfit = options.get("lock_outfit", True)
+    who = "; ".join(f"{c['name']}: {_clip_text(' '.join((c.get('look') or '').split()), 260)}" for c in people)
+    if not who and bible.get("nhan_vat"):
+        who = _clip_text(" ".join(bible["nhan_vat"].split()), 600)
+    wear = "; ".join(f"{c['name']} wears {_clip_text(' '.join(c['outfit'].split()), 160)}" for c in people if c.get("outfit"))
+    outfit = ("OUTFIT LOCK: same clothes, colours and accessories as the character sheet for the whole clip"
+              + (f" ({wear})." if wear else ".")) if lock_outfit else (
+        "Clothes: keep exactly the clothes shown in the first frame for the whole clip (they may differ from the "
+        "reference image) — only the clothes may differ, never the face.")
+    return " ".join(x for x in (FACE_LOCK, f"Characters: {who}." if who else "", outfit) if x)[:1500]
 
 
 POLISH_PROMPT = """Bạn là đạo diễn hình ảnh. Viết lại "prompt_anh" và "prompt_chuyen_dong" của từng cảnh dưới đây cho CHI TIẾT,
@@ -148,7 +183,15 @@ Các cảnh (JSON):
 
 Chỉ trả về MỘT object JSON: {{"canh":[{{"canh":1,"prompt_anh":"…","prompt_chuyen_dong":"…"}}]}} — đủ {count} cảnh."""
 MIN_SCENES, MAX_SCENES = 5, 10
-LENGTHS = (30, 45, 60, 75, 90)
+LENGTHS = (10, 15, 20, 30, 45, 60, 75, 90)
+SHORT_SCENES = {10: 1, 15: 1, 20: 2}  # video ngắn: 1 cảnh (một cú máy liền, hợp Grok 10–15s) / 2 cảnh
+
+
+def scene_count(length: int) -> int:
+    """Số cảnh storyboard theo độ dài video: ngắn (≤20s) 1–2 cảnh, còn lại ~8 giây / cảnh (5–10 cảnh)."""
+    if length in SHORT_SCENES:
+        return SHORT_SCENES[length]
+    return max(MIN_SCENES, min(MAX_SCENES, round(length / 8)))
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 SCENE_FIELDS = ("title", "narration", "speaker", "image_prompt", "motion_prompt", "seconds")
 # Ghép: giữ trọn chuyển động của clip — tua nhanh/chậm nhẹ để khớp lời đọc thay vì cắt cụt hoặc đứng hình lâu
@@ -194,13 +237,14 @@ def now() -> str:
 
 # ---------------------------------------------------------------- lưu trữ
 class Store:
-    def __init__(self, settings) -> None:
+    def __init__(self, settings, folder: str = STUDIO_DIR) -> None:
         self.settings = settings
+        self.folder = folder
         self._lock = threading.Lock()
 
     @property
     def root(self) -> Path:
-        path = Path(self.settings.output_dir) / STUDIO_DIR
+        path = Path(self.settings.output_dir) / self.folder
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -255,6 +299,34 @@ def fit_seconds(engine: str, seconds) -> int:
     return min(allowed, key=lambda d: abs(d - want))
 
 
+SPEAK_RATE = 2.6  # từ (âm tiết) tiếng Việt / giây — tốc độ nói tự nhiên của TTS và model video
+LINE_GAP, SPEECH_PAD = 0.35, 1.0  # nghỉ giữa các câu · khoảng đầu + cuối cảnh
+
+
+def speech_seconds(scene: dict) -> float:
+    """Ước lượng số giây cần để nói hết lời thoại / lời dẫn của cảnh (0 = cảnh không lời)."""
+    texts = [ln["text"] for ln in scene.get("lines") or [] if ln.get("text")] or (
+        [scene["narration"]] if (scene.get("narration") or "").strip() else [])
+    words = sum(len(t.split()) for t in texts)
+    return round(words / SPEAK_RATE + LINE_GAP * max(0, len(texts) - 1) + SPEECH_PAD, 1) if words else 0.0
+
+
+def seconds_for_speech(engine: str, seconds, scene: dict) -> int:
+    """Số giây clip: không ngắn hơn thời gian nói hết lời của cảnh (lấy mức model hỗ trợ ≥ cần; vượt mức dài nhất
+    thì dùng mức dài nhất — cảnh đó cần rút gọn lời / tách cảnh)."""
+    allowed = video_engine_durations(engine)
+    current = fit_seconds(engine, seconds)
+    need = speech_seconds(scene)
+    if need <= current:
+        return current
+    return next((d for d in sorted(allowed) if d >= need), max(allowed))
+
+
+def speech_overflow(engine: str, scene: dict) -> float:
+    """Số giây lời thoại dư so với clip dài nhất model hỗ trợ (>0 → sẽ bị ngắt câu)."""
+    return round(max(0.0, speech_seconds(scene) - max(video_engine_durations(engine))), 1)
+
+
 def clean_options(raw: dict, settings) -> dict:
     image_engine = raw.get("image_engine") or (settings.get("last_image_form") or {}).get("engine") or "openai_api"
     if image_engine not in IMAGE_ENGINES:
@@ -282,6 +354,8 @@ def clean_options(raw: dict, settings) -> dict:
             "quality": raw.get("quality") if raw.get("quality") in QUALITIES else "720p",
             # lồng tiếng AI (TTS); tắt → nhân vật nói lời dẫn ngay trong clip, ghép dùng tiếng gốc của clip
             "dub": bool(raw.get("dub", True)),
+            # nhân vật: khuôn mặt LUÔN khoá; trang phục khoá (giống nhau mọi cảnh) hoặc đổi theo mô tả từng cảnh
+            "lock_outfit": bool(raw.get("lock_outfit", True)),
             # ràng buộc prompt: cấm chữ / phụ đề / logo / watermark + câu cấm thêm; câu mô tả ảnh tham chiếu
             "bans": [k for k in BANS if k in (raw["bans"] if isinstance(raw.get("bans"), list) else BANS)],
             "negative_extra": " ".join(str(raw.get("negative_extra") or "").split())[:300],
@@ -330,7 +404,8 @@ def meta(settings) -> dict:
             "ref_video_modes": [{"value": k, "label": v} for k, v in rvm.MODES.items()],
             "qualities": [{"value": k, "label": v} for k, v in QUALITIES.items()],
             "voices": VOICES, "rates": RATES, "speakers": [{"value": k, "label": v[0]} for k, v in ROLES.items()],
-            "scenes": [MIN_SCENES, MAX_SCENES], **transitions.options(),
+            "scenes": [MIN_SCENES, MAX_SCENES], "length_scenes": {str(n): scene_count(n) for n in LENGTHS},
+            **transitions.options(),
             "default_image_engine": (settings.get("last_image_form") or {}).get("engine") or "openai_api"}
 
 
@@ -412,10 +487,13 @@ def clip_variables(scene: dict, options: dict, bible: dict | None = None) -> dic
     giọng gốc: model video phải nói to rõ đúng nguyên văn câu đó, không nhạc nền. Cảnh không lời → bỏ dòng thoại."""
     motion = " ".join((scene.get("motion_prompt") or scene.get("image_prompt") or "").split())[:700]
     roster = {c["name"]: c for c in (bible or {}).get("characters") or []}
-    if options.get("cast_characters") or options.get("cast_layout") or options.get("cast_combo") or roster:
-        motion = ("Keep every character exactly as in the first frame — same face, age, skin tone, body type, style, "
-                  "outfit and hairstyle (no face change, no ageing, no beautify) — and the same location. " + motion)[:700]
-    narration = " ".join((scene.get("narration") or "").split()).replace('"', "'")[:450]
+    if options.get("cast_layout") or options.get("cast_combo"):
+        motion = ("Same location as in the first frame. " + motion)[:700]
+    lock = {"KhoaNhanVat": identity_lock(scene, options, bible)}
+    narration = _clip_text(" ".join((scene.get("narration") or "").split()).replace('"', "'"), 900)
+    secs = int(float(scene.get("seconds") or 0))
+    timing = (f" Pace the speech so EVERY line is spoken completely within {max(2, secs - 1)} seconds — "
+              f"never cut off mid-sentence, finish the last word, then a brief silent beat." if secs else "")
     dub, ban = options.get("dub", True), negative_line(options)
     lines = [ln for ln in scene.get("lines") or [] if ln.get("text")]
     if lines:  # lời thoại nhiều nhân vật: ai nói, cảm xúc, chất giọng
@@ -425,7 +503,7 @@ def clip_variables(scene: dict, options: dict, bible: dict | None = None) -> dic
             desc = ROLES.get((roster.get(ln["who"]) or {}).get("voice") or "", ROLES[""])[4]
             extra = ", ".join(x for x in (ln.get("tone"), desc) if x)
             return ln["who"] + (f" ({extra})" if extra else "")
-        said = "; ".join(f'{label(ln)}: "{ln["text"]}"' for ln in lines)
+        said = "; ".join(f'{label(ln)}: "{_clip_text(ln["text"], 300)}"' for ln in lines)
         if dub:
             line = ("each speaking character lip-syncs their own line with matching facial expression, emotion and "
                     "gestures (voice-over lines are not spoken on screen): " + said)
@@ -433,9 +511,9 @@ def clip_variables(scene: dict, options: dict, bible: dict | None = None) -> dic
             line = ("each character speaks their own line out loud in Vietnamese, word for word, each with a distinct voice "
                     "matching the description, clearly audible and lip-synced, no background music; voice-over narrator "
                     "lines are heard off-screen: " + said)
-        return {"MoTa": motion, "LoiThoai": line[:700], "CamKy": ban}
+        return {"MoTa": motion, "LoiThoai": _clip_text(line, 1400 - len(timing)) + timing, "CamKy": ban, **lock}
     if not narration:
-        return {"MoTa": motion, "LoiThoai": "", "CamKy": ban}
+        return {"MoTa": motion, "LoiThoai": "", "CamKy": ban, **lock}
     role = ROLES.get(scene.get("speaker") or "", ROLES[""])[4]
     who = f" with {role}" if role else ""
     if dub:
@@ -444,7 +522,16 @@ def clip_variables(scene: dict, options: dict, bible: dict | None = None) -> dic
     else:
         line = (f"the on-screen character speaks exactly this line out loud{who}, word for word in the original "
                 f"language (Vietnamese pronunciation), clearly audible and lip-synced, no background music: \"{narration}\"")
-    return {"MoTa": motion, "LoiThoai": line, "CamKy": ban}
+    return {"MoTa": motion, "LoiThoai": line + timing, "CamKy": ban, **lock}
+
+
+def _clip_text(text: str, limit: int) -> str:
+    """Rút gọn tới ranh giới câu / từ (không cắt giữa chữ — model video sẽ đọc câu cụt)."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "), cut.rfind("; "))
+    return cut[:end + 1] if end > limit * 0.6 else cut[:cut.rfind(" ")].rstrip(",;: ") + "…"
 
 
 def ask_model(settings, options: dict, prompt: str, *, complete=None, what: str = "viết storyboard", log=None,
@@ -503,24 +590,31 @@ def fit_clip(clip_dur: float, voice_dur: float) -> tuple[float, float]:
 class StudioRunner:
     """Chạy việc của Studio trong hàng đợi riêng (sự kiện studio_*); ảnh/video giao cho hàng đợi Tạo ảnh / Tạo video."""
 
-    def __init__(self, settings, license_mgr, emit, images, videos) -> None:
+    def __init__(self, settings, license_mgr, emit, images, videos, variant: str = "studio") -> None:
         self.settings = settings
         self.license = license_mgr
         self.images, self.videos = images, videos
         self.cast = None  # CastRunner (màn Nhân vật & Layout) — api.py gắn vào
         self._emit = emit
-        self.store = Store(settings)
-        self.pool = TaskPool("studio_", emit, lambda: settings.get("max_parallel_studio") or 2)
+        self.muse = variant == "muse"  # Studio Muse AI: khoá mọi model về Muse
+        self.prefix = "mstudio_" if self.muse else "studio_"
+        self.store = Store(settings, MUSE_DIR if self.muse else STUDIO_DIR)
+        self.pool = TaskPool(self.prefix, emit, lambda: settings.get("max_parallel_studio") or 2)
         self._active: dict[str, str] = {}
+
+    def _clean(self, raw: dict) -> dict:
+        """Chuẩn hoá tuỳ chọn dự án; Studio Muse AI: viết storyboard, ảnh, clip, hậu kỳ luôn dùng Muse."""
+        options = clean_options(raw, self.settings)
+        return {**options, **MUSE_LOCK} if self.muse else options
 
     # ------------------------------------------------------------ công khai
     def public(self, project: dict) -> dict:
         base = Path(self.settings.output_dir)
-        pdir = base / STUDIO_DIR / project["id"]
+        pdir = base / self.store.folder / project["id"]
 
         def url(rel: str) -> str:
             path = pdir / rel if rel else None
-            return f"/media/{STUDIO_DIR}/{project['id']}/{rel}?v={int(path.stat().st_mtime)}" if path and path.is_file() else ""
+            return f"/media/{self.store.folder}/{project['id']}/{rel}?v={int(path.stat().st_mtime)}" if path and path.is_file() else ""
 
         final = project.get("final") or {}
         final_path = base / final["job_id"] / "final.mp4" if final.get("job_id") else None
@@ -543,13 +637,13 @@ class StudioRunner:
         return [pid for pid, task in self._active.items() if task in live]
 
     def _push(self, project: dict) -> None:
-        self._emit("studio_update", self.public(project))
+        self._emit(f"{self.prefix}update", self.public(project))
 
     def create(self, form: dict) -> dict:
         idea = str(form.get("idea") or "").strip()
         if len(idea) < 10:
             raise StudioError("Hãy mô tả ý tưởng video (ít nhất 1 câu)")
-        options = clean_options(form.get("options") or {}, self.settings)
+        options = self._clean(form.get("options") or {})
         name = str(form.get("name") or "").strip()[:80] or idea[:60]
         pid = f"{slugify(name, 40)}-{uuid.uuid4().hex[:6]}"
         pdir = self.store.root / pid
@@ -612,7 +706,7 @@ class StudioRunner:
             if "idea" in data:
                 p["idea"] = str(data["idea"]).strip()[:4000] or p["idea"]
             if isinstance(data.get("options"), dict):
-                p["options"] = clean_options({**p["options"], **data["options"]}, self.settings)
+                p["options"] = self._clean({**p["options"], **data["options"]})
             if "ref_video" in data:  # phân tích video tham khảo mới / sửa tóm tắt / bỏ video
                 p["ref_video"] = rvm.copy_sheet(rvm.clean(data["ref_video"]), self.store.dir(pid))
             if isinstance(data.get("bible"), dict):
@@ -647,6 +741,8 @@ class StudioRunner:
                         sc.update(frame="", clip="", status="")
                     elif speech or sc["motion_prompt"] != prev.get("motion_prompt") or sc["seconds"] != prev.get("seconds"):
                         sc.update(clip="", status="frame" if sc.get("frame") else "")
+                    if not sc.get("clip"):  # chưa có clip → số giây đủ nói hết lời (tránh ngắt câu cuối cảnh)
+                        sc["seconds"] = seconds_for_speech(p["options"]["video_engine"], sc["seconds"], sc)
                     scenes.append(sc)
                 p["scenes"] = scenes[:MAX_SCENES + 5]
                 p["final"] = {}  # storyboard đổi → video cũ không còn khớp
@@ -690,7 +786,7 @@ class StudioRunner:
                     item["status"] = _settled(item)
                 scenes.append(item)
         project = {"id": nid, "name": new_name, "idea": src["idea"], "created_at": now(),
-                   "options": clean_options(src.get("options") or {}, self.settings), "refs": refs, "logo": logo,
+                   "options": self._clean(src.get("options") or {}), "refs": refs, "logo": logo,
                    "ref_video": rvm.copy_sheet(rvm.clean(src.get("ref_video")), ndir),
                    "bible": dict(src.get("bible") or {}) if mode != "idea" else {}, "scenes": scenes,
                    "status": "ready" if scenes else "draft", "error": "", "final": {}, "cloned_from": pid}
@@ -796,7 +892,10 @@ class StudioRunner:
         o = p["options"]
         self.pool.progress(3, "Đang viết storyboard", "script")
         allowed = video_engine_durations(o["video_engine"])
-        count = max(MIN_SCENES, min(MAX_SCENES, round(o["length"] / 8)))
+        count = scene_count(o["length"])
+        if count == 1 and max(allowed) < o["length"]:
+            self._log(f"{VIDEO_ENGINES[o['video_engine']]['name']} tạo clip tối đa {max(allowed)}s — video 1 cảnh sẽ dài "
+                      f"~{max(allowed)}s (muốn {o['length']}s: chọn Grok, clip 15s)", "warn")
         refs = len(p.get("refs") or [])
         cast = self._cast(o, 0)  # chỉ cần mô tả (ảnh gửi ở bước tạo ảnh khung đầu)
         cast_text = "\n".join(x for x in (
@@ -832,7 +931,9 @@ class StudioRunner:
 {'PHONG CÁCH: video vẽ tay bảng trắng (whiteboard) — "prompt_anh" mô tả hình minh hoạ đơn giản, rõ ý (đồ vật, người, biểu tượng, sơ đồ), không chữ; mỗi câu lời dẫn là 1 ý vẽ được; "prompt_chuyen_dong" để trống.' if o.get('scene_style') == 'whiteboard' else ''}
 
 YÊU CẦU:
-- Đúng {count} cảnh, mạch truyện rõ: mở đầu gây chú ý (3 giây đầu), diễn biến, cao trào, kết + lời kêu gọi (nếu là quảng cáo).
+{f'''- Đúng 1 cảnh — MỘT cú máy liền mạch dài ~{min(o["length"], max(allowed))} giây ("giay" = {max(d for d in allowed if d <= max(o["length"], min(allowed)))}): hook ngay giây đầu,
+  hành động chính rõ ràng, kết bằng thông điệp / lời kêu gọi (nếu là quảng cáo); lời thoại ngắn, nói hết trong cảnh.''' if count == 1 else
+f'''- Đúng {count} cảnh, mạch truyện rõ: mở đầu gây chú ý (3 giây đầu), diễn biến, cao trào, kết + lời kêu gọi (nếu là quảng cáo).'''}
 - "nhan_vat_ds": HỒ SƠ NHÂN VẬT (tối đa {MAX_CHARACTERS}) — mỗi người: "ten" (tên ngắn, dùng nhất quán cả bài);
   "ngoai_hinh" (tiếng Anh: giới tính, tuổi cụ thể, dân tộc, khuôn mặt, kiểu + màu tóc, vóc dáng — CỐ ĐỊNH mọi cảnh);
   "trang_phuc" (tiếng Anh: MỘT bộ trang phục cố định — loại áo / quần / váy, màu, chất liệu, giày, phụ kiện);
@@ -842,7 +943,8 @@ YÊU CẦU:
 - Mỗi cảnh: "tieu_de" (tiếng Việt, ngắn); "nhan_vat_canh": tên các nhân vật XUẤT HIỆN trong khung hình ([] nếu không có ai);
   "thoai": lời thoại / lời dẫn của cảnh theo thứ tự — mỗi câu {{"ai": tên nhân vật đang nói, hoặc "dan_chuyen" nếu là lời bình
   bên ngoài; "cau": câu tiếng Việt tự nhiên; "cam_xuc": cảm xúc / giọng điệu ngắn (vd. hào hứng, thì thầm, nghiêm túc)}};
-  tổng khoảng 2,5 từ/giây theo số giây của cảnh; cảnh chỉ có hình thì "thoai": [];
+  tổng số từ của cảnh KHÔNG vượt quá 2,2 × (giay − 1) (vd. cảnh 10 giây ≤ 20 từ) để nhân vật nói HẾT câu trước khi hết cảnh —
+  lời dài thì chia sang cảnh sau; cảnh chỉ có hình thì "thoai": [];
   "giong": mã giọng của người dẫn chuyện (narrator_f / narrator_m / mc_f…);
   "prompt_anh" (tiếng Anh) theo công thức: cỡ cảnh + góc máy → nhân vật (gọi bằng TÊN) đang làm gì, tư thế, biểu cảm →
   bố cục, tiền cảnh / hậu cảnh, đạo cụ → ánh sáng, thời điểm → ống kính, độ sâu trường ảnh → không khí, tông màu.
@@ -877,7 +979,7 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
             characters = merge_cast(characters, cast["characters"])
         names = [c["name"] for c in characters]
         scenes = []
-        for i, raw in enumerate(data["canh"][:MAX_SCENES], 1):
+        for i, raw in enumerate(data["canh"][:count if count < MIN_SCENES else MAX_SCENES], 1):  # video ngắn: đúng số cảnh
             lines = clean_lines(raw.get("thoai"), names)
             on_screen = raw.get("nhan_vat_canh")
             scenes.append({"index": i, "title": str(raw.get("tieu_de") or f"Cảnh {i}")[:120],
@@ -888,7 +990,9 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
                            "speaker": raw.get("giong") if raw.get("giong") in ROLES else "",
                            "image_prompt": str(raw.get("prompt_anh") or "").strip()[:1500],
                            "motion_prompt": str(raw.get("prompt_chuyen_dong") or "").strip()[:600],
-                           "seconds": fit_seconds(o["video_engine"], raw.get("giay")), "frame": "", "clip": "",
+                           "seconds": seconds_for_speech(o["video_engine"], raw.get("giay"),
+                                                         {"lines": lines, "narration": str(raw.get("loi_doc") or "")}),
+                           "frame": "", "clip": "",
                            "status": "", "error": ""})
         bible = {"nhan_vat": str(data.get("nhan_vat") or "")[:1500], "phong_cach": str(data.get("phong_cach") or "")[:600]}
         if cast["characters"]:  # nhân vật cố định: dùng nguyên mô tả đã duyệt, không để model diễn đạt lại
@@ -897,10 +1001,19 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
         if characters:
             bible["characters"] = characters
         self._set(pid, scenes=scenes, bible=bible, final={})
+        self._warn_long_speech(scenes, o["video_engine"])
         self._log(f"Storyboard xong: {len(scenes)} cảnh · ~{sum(s['seconds'] for s in scenes)} giây hình"
                   + (f" · {len(characters)} nhân vật: " + ", ".join(
                       f"{c['name']} ({ROLES.get(c['voice'] or '', ROLES[''])[0]})" for c in characters) if characters else ""),
                   "ok")
+
+    def _warn_long_speech(self, scenes: list, engine: str) -> None:
+        longest = max(video_engine_durations(engine))
+        for sc in scenes:
+            over = speech_overflow(engine, sc)
+            if over > 0:
+                self._log(f"Cảnh {sc['index']}: lời thoại cần ~{speech_seconds(sc):.0f}s nhưng clip tối đa {longest}s — "
+                          f"rút gọn lời hoặc tách thành 2 cảnh để không bị ngắt câu", "warn")
 
     def _polish(self, pid: str, strict: bool) -> None:
         """✨ Chuốt prompt: model viết lại prompt ảnh / chuyển động từng cảnh chi tiết hơn (giữ nhân vật, câu chuyện).
@@ -960,6 +1073,28 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
                 if sc["index"] == index:
                     sc.update(fields)
         self._push(self.store.update(pid, apply))
+
+    def _parallel_hint(self, o: dict, count: int) -> None:
+        """Nhật ký: chạy được bao nhiêu Chrome song song cho model video và vì sao chỉ chạy lần lượt (nếu vậy)."""
+        engine = o["video_engine"]
+        slots = int(self.settings.get("max_parallel_video") or 2)
+        if not engine.endswith("_browser") or count < 2:
+            return
+        from .browser_profiles import SITE_NAMES, list_profiles
+
+        site = engine.removesuffix("_browser")
+        name = SITE_NAMES.get(site, site)
+        mine = [p for p in list_profiles() if site in p.get("sites", [])]
+        if o.get("video_profile"):
+            self._log(f"Clip chạy LẦN LƯỢT vì đã chọn 1 profile cố định — chọn “Tự chọn profile rảnh” ở ⚙ dự án để "
+                      f"mở nhiều Chrome cùng lúc", "warn")
+            return
+        n = min(slots, len(mine), count)
+        self._log(f"Tạo song song {n} clip ({n} cửa sổ Chrome) · giới hạn {slots} ở Cài đặt → Số video tạo song song · "
+                  f"{len(mine)} profile đã gán {name}")
+        if len(mine) < min(slots, count):
+            self._log(f"Muốn nhanh hơn: tạo thêm profile ở “Profile trình duyệt”, đăng nhập {name} (có thể dùng nhiều tài "
+                      f"khoản) và gán cho {name} — mỗi profile chạy 1 Chrome", "warn")
 
     def _wait(self, runner, task_id: str, what: str) -> dict:
         summary = runner.pool.wait(task_id, self.pool.check_cancel)
@@ -1027,6 +1162,7 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
         fixed_names = {c["name"].lower() for c in cast.get("characters") or []}
         extra = [c for c in in_scene if c["name"].lower() not in fixed_names]  # vai phụ (không có ảnh tham chiếu)
         fixed_people = bool(chars or cast.get("combo") or in_scene)
+        lock_outfit = options.get("lock_outfit", True)
         locked = fixed_people or bool(layout)
         return "\n".join(x for x in (
             f"{ASPECTS.get(options.get('aspect') or '9:16', ASPECTS['9:16'])[2]} cinematic frame, scene {sc['index']} "
@@ -1034,11 +1170,12 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
             f"Visual style: {bible.get('phong_cach')}" if bible.get("phong_cach") else "",
             # có nhân vật / bối cảnh cố định: mô tả riêng của cảnh đặt TRƯỚC, ràng buộc cố định đặt SAU để thắng
             # các chi tiết trái ngược (quần áo, nơi chốn) do storyboard viết
-            f"Scene action: {strip_outfit(sc['image_prompt']) if fixed_people else sc['image_prompt']}" if locked else "",
+            f"Scene action: {strip_outfit(sc['image_prompt']) if fixed_people and lock_outfit else sc['image_prompt']}"
+            if locked else "",
             (f"Fixed characters (keep exactly as their reference images, identical in every scene): {chars}" if chars else
-             character_sheet(in_scene) if in_scene else "" if roster else
+             character_sheet(in_scene, lock_outfit=lock_outfit) if in_scene else "" if roster else
              f"Characters (keep exactly the same in every scene): {bible.get('nhan_vat')}" if bible.get("nhan_vat") else ""),
-            character_sheet(extra, "Other characters in this scene (same face, age and outfit in every scene)")
+            character_sheet(extra, "Other characters in this scene (same face and age in every scene)", lock_outfit)
             if chars and extra else "",
             f"Product / key props: {bible.get('nhan_vat')}" if roster and bible.get("nhan_vat") and not chars else "",
             (f"Fixed setting — match the layout reference image (same location, props, composition and lighting; camera "
@@ -1055,7 +1192,9 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
             if fixed_people else "",
             ("OUTFIT LOCK: every character wears EXACTLY the same clothes, accessories and hairstyle as in their "
              "reference image / outfit description — same garment types, colours and patterns. Do not change, add or remove any clothing, even "
-             "if the scene action mentions other clothes.") if fixed_people else "",
+             "if the scene action mentions other clothes.") if fixed_people and lock_outfit else
+            ("OUTFIT: clothes follow the scene action (may differ from the reference image) — but the FACE, hair and "
+             "identity stay exactly as the reference.") if fixed_people else "",
             ("SETTING LOCK: the scene happens in EXACTLY the location of the setting / scene reference image — same "
              "background, furniture, props, colours and lighting; only the camera angle and distance may change. Ignore "
              "any other location mentioned in the scene action.") if layout else "",
@@ -1154,9 +1293,9 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
         refs = [r for r in p.get("refs") or [] if Path(r).is_file()][
             :max(0, spec["max_images"] - (1 if logo else 0) - len(cast["refs"]))]
         if cast["characters"] or cast["layout"]:
-            self._log("Dùng " + " · ".join(
-                [f"nhân vật {', '.join(c['name'] for c in cast['characters'])}"] * bool(cast["characters"])
-                + [f"layout {cast['layout']['name']}"] * bool(cast["layout"])) + f" ({len(cast['refs'])} ảnh tham chiếu)")
+            used = ([f"nhân vật {', '.join(c['name'] for c in cast['characters'])}"] if cast["characters"] else []) + (
+                [f"layout {cast['layout']['name']}"] if cast["layout"] else [])  # chỉ đọc layout khi có (tránh None)
+            self._log("Dùng " + " · ".join(used) + f" ({len(cast['refs'])} ảnh tham chiếu)")
         frame_tasks, clip_tasks, errors = {}, {}, []
         try:
             for sc in targets:  # 1) ảnh khung đầu (song song)
@@ -1203,17 +1342,36 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
                 self._scene_update(pid, idx, status="clip_running", error="")
             if clip_tasks:
                 self._log(f"Đã giao {len(clip_tasks)} clip cho Tạo video ({VIDEO_ENGINES[o['video_engine']]['name']})")
-            for k, (idx, task_id) in enumerate(clip_tasks.items(), 1):  # 3) chờ clip
-                self.pool.progress(10 + 60 * (k - 1) / len(clip_tasks), f"Đang chờ clip cảnh {idx} ({k}/{len(clip_tasks)})", "clip")
-                try:
-                    result = self._wait(self.videos, task_id, f"Clip cảnh {idx}")
-                    dest = pdir / "scenes" / scene_dir_name(idx) / "clip.mp4"
-                    shutil.copy2(Path(self.settings.output_dir) / result["id"] / "final.mp4", dest)
-                    self._scene_update(pid, idx, clip=dest.relative_to(pdir).as_posix(), status="done")
-                    self._log(f"Xong cảnh {idx} ({k}/{len(clip_tasks)})", "ok")
-                except (StudioError, OSError) as exc:
-                    errors.append(f"cảnh {idx}: {exc}")
-                    self._scene_update(pid, idx, status="error", error=str(exc))
+                self._parallel_hint(o, len(clip_tasks))
+            # 3) chờ clip — clip nào xong trước nhận trước; tiến trình = trung bình % của mọi clip đang tạo song song
+            pending, finished = dict(clip_tasks), 0
+            while pending:
+                self.pool.check_cancel()
+                live = {t["id"]: t for t in self.videos.pool.list()}
+                for idx, task_id in list(pending.items()):
+                    t = live.get(task_id)
+                    if t is not None and t["status"] in ("queued", "running"):
+                        continue
+                    del pending[idx]
+                    finished += 1
+                    try:
+                        result = self._wait(self.videos, task_id, f"Clip cảnh {idx}")
+                        dest = pdir / "scenes" / scene_dir_name(idx) / "clip.mp4"
+                        shutil.copy2(Path(self.settings.output_dir) / result["id"] / "final.mp4", dest)
+                        self._scene_update(pid, idx, clip=dest.relative_to(pdir).as_posix(), status="done")
+                        self._log(f"Xong cảnh {idx} ({finished}/{len(clip_tasks)})", "ok")
+                    except (StudioError, OSError, RuntimeError) as exc:
+                        errors.append(f"cảnh {idx}: {exc}")
+                        self._scene_update(pid, idx, status="error", error=str(exc))
+                running = [(i, live[t]) for i, t in pending.items() if live.get(t, {}).get("status") == "running"]
+                share = (finished + sum(t["pct"] for _, t in running) / 100) / len(clip_tasks)
+                detail = ", ".join(f"cảnh {i} {t['pct']:.0f}%" for i, t in running[:4])
+                self.pool.progress(10 + 60 * share, f"Clip: {finished}/{len(clip_tasks)} xong"
+                                   + (f" · đang tạo {len(running)} ({detail})" if running else "")
+                                   + (f" · {len(pending) - len(running)} chờ Chrome rảnh" if len(pending) > len(running) else ""),
+                                   "clip")
+                if pending:
+                    time.sleep(1)
         except Cancelled:
             for task_id in frame_tasks.values():
                 self.images.cancel(task_id)
@@ -1322,7 +1480,7 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
         """post: "" = theo tuỳ chọn dự án (lỗi hậu kỳ → ghép thường) | "strict" = bấm chạy hậu kỳ (lỗi → báo lỗi)."""
         p = self.store.load(pid)
         # dự án cũ (tạo trước khi có chuyển cảnh / ràng buộc prompt…) thiếu khoá → điền mặc định, tránh KeyError khi ghép
-        o, pdir = clean_options(p["options"], self.settings), self.store.dir(pid)
+        o, pdir = self._clean(p["options"]), self.store.dir(pid)
         missing = [s["index"] for s in p["scenes"] if not s.get("clip") or not (pdir / s["clip"]).is_file()]
         if missing:
             raise StudioError(f"Cảnh {', '.join(map(str, missing))} chưa có clip — làm cảnh trước khi ghép")
@@ -1336,7 +1494,7 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
             self._log("Không lồng tiếng AI — dùng giọng nói / âm thanh gốc của từng clip")
         for k, sc in enumerate(p["scenes"], 1):
             self.pool.check_cancel()
-            self.pool.progress(5 + 70 * (k - 1) / total, f"Đang chuẩn bị cảnh {k}/{total}", "post")
+            self.pool.progress(72 + 8 * (k - 1) / total, f"Ghép: đang chuẩn bị cảnh {k}/{total}", "post")
             sdir = job_dir / "scenes" / scene_dir_name(k)
             sdir.mkdir(parents=True)
             voice = sdir / "voice.mp3"

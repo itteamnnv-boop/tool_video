@@ -1,0 +1,84 @@
+/* 🤖 Trợ lý quảng cáo Meta (ui/adbot.js) — màn danh sách dùng chung kiểu thẻ st-* của Studio */
+
+/* ---- màn 1: quản lý chiến lược */
+.ab-lhead-title{display:flex;flex-direction:column;gap:6px}
+.ab-spend{color:var(--lime);border-color:#3f5428}
+.ab-stat-err{color:var(--red);border-color:var(--red)}
+.ab-card.pending{border-color:var(--orange)}
+.ab-card.running{border-color:var(--lime)}
+.ab-card.error{border-color:#7a3333}
+.ab-badge.draft{background:#000b}
+.ab-badge.pending{background:var(--orange);color:#111}
+.ab-badge.scheduled{background:var(--teal);color:#111}
+.ab-badge.running{background:var(--lime);color:#111}
+.ab-badge.paused{background:#5d665a}
+.ab-badge.error{background:#a33}
+.ab-clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:10.5px}
+
+/* ---- màn 2: bàn làm việc */
+.ab-crumbs{flex-wrap:wrap}
+.ab-crumbs #abName{flex:1 1 220px;max-width:460px;font-weight:700;padding:6px 8px}
+.ab-crumb-act{display:flex;gap:5px;margin-left:auto}
+.ab-work{display:grid;grid-template-columns:minmax(340px,1fr) minmax(380px,1.15fr);gap:11px;align-items:start}
+@media (max-width:1100px){.ab-work{grid-template-columns:1fr}.ab-chat{position:static;height:560px}}
+
+.ab-chat{position:sticky;top:0;display:flex;flex-direction:column;gap:8px;height:calc(100vh - 170px);min-height:460px;padding:11px}
+.ab-chat-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.ab-chat-head b{margin-right:auto}
+.ab-chat-head select{max-width:210px;padding:5px 6px}
+.ab-msgs{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:3px 2px}
+.ab-msg{display:flex;flex-direction:column;max-width:88%}
+.ab-msg.user{align-self:flex-end;align-items:flex-end}
+.ab-bubble{padding:7px 10px;border-radius:12px;white-space:pre-wrap;line-height:1.45;font-size:12.5px;background:var(--panel);border:1px solid var(--line)}
+.ab-msg.user .ab-bubble{background:#2a3a1a;border-color:#3f5428}
+.ab-typing{color:var(--muted);font-style:italic}
+.ab-changed{color:var(--lime);font-size:10.5px;margin-top:2px}
+.ab-hello{color:var(--muted);font-size:12px;line-height:1.6;padding:11px;border:1px dashed var(--line2);border-radius:10px}
+.ab-hello b{color:var(--text)}
+.ab-quick{display:flex;gap:5px;overflow-x:auto;padding-bottom:2px}
+.ab-q{padding:4px 8px;border-radius:99px;border:1px solid var(--line2);background:#161c17;color:#c9d2c6;font-size:11px;white-space:nowrap;flex:none}
+.ab-q:hover:not(:disabled){border-color:#566a3c}
+.ab-input{display:flex;gap:6px;align-items:stretch}
+.ab-input textarea{flex:1;resize:vertical;min-height:52px}
+.ab-locked{color:var(--muted);font-size:12px;padding:8px;border-radius:8px;background:var(--panel)}
+
+.ab-form{display:flex;flex-direction:column;gap:10px;min-width:0}
+.ab-sec{display:flex;flex-direction:column;gap:8px;padding:11px}
+.ab-sec-title{display:flex;align-items:center;gap:6px;font-weight:700;font-size:13px}
+.ab-sec-title i{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font:700 11px var(--mono);font-style:normal;background:#1f2a14;color:var(--lime);border:1px solid #3f5428}
+.ab-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.ab-grid3{grid-template-columns:1fr 1.2fr 1fr}
+.ab-wide{grid-column:1/-1}
+.ab-age{display:flex;align-items:center;gap:5px}.ab-age input{width:100%;min-width:0}.ab-age i{color:var(--muted);font-style:normal}
+.ab-post{display:flex;gap:8px;padding:6px;border-radius:8px;background:var(--panel);border:1px solid var(--line)}
+.ab-post img{width:72px;height:72px;object-fit:cover;border-radius:7px;flex:none}
+.ab-post p{margin:0;font-size:11.5px;color:#c9d2c6;line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical}
+.ab-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:3px}
+.ab-chip{display:inline-flex;align-items:center;gap:3px;padding:3px 8px;border-radius:99px;border:1px dashed var(--line2);background:transparent;color:#c9d2c6;font-size:11px}
+.ab-chip.on{border-style:solid;border-color:var(--lime);background:#1f2a14;color:var(--text)}
+.ab-chip button{background:none;border:0;color:var(--muted);padding:0 0 0 2px;cursor:pointer}
+.ab-chip button:hover{color:var(--red)}
+.ab-int-search{display:flex;gap:5px;margin-top:5px}.ab-int-search input{flex:1}
+.ab-muted{color:var(--muted)}
+.ab-strategy{border-left:3px solid var(--teal)}
+.ab-strategy p{margin:0;font-size:12px;line-height:1.55}
+
+/* thanh duyệt dính đáy: tổng chi tiêu + nút hành động */
+.ab-dock{position:sticky;bottom:0;z-index:2;display:flex;flex-direction:column;gap:8px;padding:10px 11px;border-color:#3f5428;background:#141b12;box-shadow:0 -8px 24px #0008}
+.ab-summary{font-size:12.5px;line-height:1.5}
+.ab-summary small{color:var(--muted);margin-left:6px;white-space:nowrap}
+.ab-approve,.ab-done{display:flex;flex-direction:column;gap:6px}
+.ab-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.ab-mono{font:10.5px var(--mono);color:var(--muted)}
+.ab-err{color:var(--red)}
+.ab-status{font:600 10px var(--mono);padding:3px 6px;border-radius:99px;background:var(--panel);border:1px solid var(--line2);white-space:nowrap}
+.ab-status.pending{color:var(--orange);border-color:var(--orange)}.ab-status.running{color:var(--lime);border-color:var(--lime)}
+.ab-status.scheduled{color:var(--teal);border-color:var(--teal)}.ab-status.error{color:var(--red);border-color:var(--red)}
+.ab-banner{padding:6px 10px;border-radius:8px;font-size:12px;background:#2a2412;border:1px solid var(--orange)}
+.ab-banner.bad{background:#2a1515;border-color:var(--red)}
+
+/* hộp xác nhận duyệt */
+.ab-confirm{display:flex;flex-direction:column;gap:8px;font-size:13px}
+.ab-confirm ul{margin:0;padding-left:14px;line-height:1.7}
+.ab-agree{white-space:normal;align-items:flex-start;padding:8px;border-radius:8px;border:1px solid var(--orange)}
+.ab-confirm-foot{justify-content:flex-end;margin-top:5px}

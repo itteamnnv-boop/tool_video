@@ -17,9 +17,12 @@ def main() -> None:
     )
     url = start_server()
     api = Api()
+    # cửa sổ không viền: thanh tiêu đề Windows gộp vào header của app (nút thu nhỏ / phóng to / đóng vẽ trong UI).
+    # VIDEOAGENT_NATIVE_FRAME=1 → dùng lại khung cửa sổ Windows như cũ.
+    frameless = os.environ.get("VIDEOAGENT_NATIVE_FRAME") != "1"
     window = webview.create_window(
         "Video Agent Tool", url=url, js_api=api, width=1600, height=980,
-        min_size=(1200, 760), background_color="#0b0f0c",
+        min_size=(1200, 760), background_color="#0b0f0c", frameless=frameless, easy_drag=False,
     )
     api.attach(window)
     webview.start(debug=os.environ.get("VIDEOAGENT_DEBUG") == "1")

@@ -4,6 +4,8 @@ Mỗi model dùng các profile trình duyệt được gán trong "Profile trìn
 một bộ tài khoản riêng; đăng nhập từng model trong từng profile một lần. Selector của các trang có thể đổi theo thời gian — chỉnh trong SITES bên dưới.
 """
 import logging
+import os
+import threading
 import re
 import time
 from dataclasses import dataclass
@@ -175,11 +177,158 @@ PAGE_JUNK = (r"ChatGPT can make mistakes", r"ChatGPT có thể mắc lỗi", r"A
 ANSWER_PREFIX = re.compile(r"^\s*(ChatGPT said:|ChatGPT đã nói:|Gemini said:|Grok said:|Claude said:|Claude đã nói:)\s*", re.I)
 
 
-def _launch(pw, channel: str, *, visible: bool, offscreen: bool = False, profile: dict | None = None):
-    """Mở Chrome với thư mục profile đang giữ (profile_session). Profile có thể đặt trình duyệt riêng (Chrome/Edge)."""
+def _hide_offscreen_from_taskbar() -> None:
+    """Windows: cửa sổ Chrome chạy ngoài màn hình (OFFSCREEN_ARG) vẫn hiện icon trên thanh taskbar → đổi thành
+    cửa sổ công cụ (WS_EX_TOOLWINDOW) để ẩn icon. Chỉ đụng cửa sổ Chrome nằm ngoài màn hình, không đụng Chrome của người dùng."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = -20, 0x80, 0x40000
+    proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+    set_style = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+    get_style.restype = ctypes.c_ssize_t
+    get_style.argtypes = [wintypes.HWND, ctypes.c_int]
+    set_style.restype = ctypes.c_ssize_t
+    set_style.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+
+    def visit(hwnd, _):
+        cls = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(hwnd, cls, 64)
+        if cls.value != "Chrome_WidgetWin_1" or not user32.IsWindowVisible(hwnd):
+            return True
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        if rect.left > -20000:  # cửa sổ trên màn hình (Chrome của người dùng / Chrome đang "Hiện") → giữ nguyên
+            return True
+        style = get_style(hwnd, GWL_EXSTYLE)
+        if not style & WS_EX_TOOLWINDOW:
+            user32.ShowWindow(hwnd, 0)  # đổi kiểu cửa sổ khi đang ẩn thì taskbar mới cập nhật
+            set_style(hwnd, GWL_EXSTYLE, (style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
+            user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE: hiện lại (vẫn ngoài màn hình), không cướp focus
+        return True
+
+    user32.EnumWindows(proc(visit), 0)
+
+
+_offscreen = {"open": 0, "running": False}
+_taskbar_lock = threading.Lock()
+
+
+def _pool_hidden() -> bool:
+    """Còn Chrome mở sẵn (kiểu HaoHao) đang chạy ẩn ngoài màn hình → tiếp tục ẩn icon taskbar."""
+    from . import chrome_pool
+
+    return keepalive_mode() and not show_browser_setting() and chrome_pool.any_alive()
+
+
+def _ensure_taskbar_watch() -> None:
+    if os.name != "nt":
+        return
+    with _taskbar_lock:
+        if not _offscreen["running"]:
+            _offscreen["running"] = True
+            threading.Thread(target=_taskbar_watch, daemon=True, name="hide-chrome-taskbar").start()
+
+
+def _taskbar_watch() -> None:
+    while True:
+        with _taskbar_lock:
+            if _offscreen["open"] <= 0 and not _pool_hidden():
+                _offscreen.update(open=0, running=False)
+                return
+        try:
+            _hide_offscreen_from_taskbar()
+        except Exception:  # API Windows lỗi → bỏ qua, chỉ là icon taskbar
+            pass
+        time.sleep(0.4)
+
+
+def _track_offscreen(ctx) -> None:
+    """Đếm cửa sổ Chrome đang chạy ngoài màn hình; còn cửa sổ nào thì luồng nền còn ẩn icon taskbar."""
+    if os.name != "nt":
+        return
+    with _taskbar_lock:
+        _offscreen["open"] += 1
+        if not _offscreen["running"]:
+            _offscreen["running"] = True
+            threading.Thread(target=_taskbar_watch, daemon=True, name="hide-chrome-taskbar").start()
+
+    def closed(*_):
+        with _taskbar_lock:
+            _offscreen["open"] -= 1
+
+    ctx.on("close", closed)
+
+
+def keepalive_mode() -> bool:
+    """Cài đặt "Giữ Chrome mở sẵn cho mỗi tài khoản" (kiểu HaoHao) — chỉ có hiệu lực ở chế độ Chrome thật (CDP)."""
+    from ..config import settings
+
+    return bool(settings.get("browser_keepalive"))
+
+
+def cdp_mode() -> bool:
+    """Cài đặt chung "Cách điều khiển Chrome": cdp = Chrome thật, chỉ cờ tối thiểu (mặc định); playwright = cách cũ."""
+    from ..config import settings
+
+    return (settings.get("browser_engine") or "cdp") == "cdp"
+
+
+# Chrome thật (CDP): chỉ các cờ cần cho tự động hoá ổn định — không cờ thử nghiệm / tắt tiện ích / keychain giả của
+# Playwright, không headless, cửa sổ kích thước thật (không giả lập viewport). CDP vẫn qua đường ống nội bộ (pipe),
+# không mở cổng mạng.
+REAL_CHROME_ARGS = ("--no-first-run", "--no-default-browser-check", "--disable-background-timer-throttling",
+                    "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
+                    "--disable-blink-features=AutomationControlled", "--window-size=1280,1043")
+
+
+def _launch_real_chrome(pw, channel: str, folder: Path, offscreen: bool):
+    args = [f"--user-data-dir={folder}", "--remote-debugging-pipe", *REAL_CHROME_ARGS]
+    if offscreen:
+        args.append(OFFSCREEN_ARG)
+    args.append("about:blank")
+    kwargs = dict(user_data_dir=str(folder), headless=False, no_viewport=True, ignore_default_args=True, args=args)
+    if channel and channel != "chromium":
+        kwargs["channel"] = channel
+    return pw.chromium.launch_persistent_context(**kwargs)
+
+
+def show_browser_setting() -> bool:
+    """Cài đặt chung "Hiện cửa sổ Chrome" (màn Cài đặt) — áp cho MỌI model chạy qua trình duyệt."""
+    from ..config import settings
+
+    return bool(settings.get("show_browser"))
+
+
+def _launch(pw, channel: str, *, visible: bool, offscreen: bool = False, profile: dict | None = None,
+            always_visible: bool = False):
+    """Mở Chrome với thư mục profile đang giữ (profile_session). Profile có thể đặt trình duyệt riêng (Chrome/Edge).
+    Hiện hay ẩn theo cài đặt chung (màn Cài đặt), không theo từng màn: bật → cửa sổ hiện trên màn hình; tắt → cửa sổ
+    thật nhưng nằm ngoài màn hình + ẩn icon taskbar (nơi cần cửa sổ) hoặc headless. always_visible: cửa sổ đăng nhập."""
+    real = cdp_mode()
+    show = always_visible or show_browser_setting()
+    if show:
+        visible, offscreen = True, False
+    else:  # Chrome thật (CDP) không bao giờ chạy headless: ẩn = cửa sổ ngoài màn hình + ẩn icon taskbar
+        offscreen, visible = offscreen or visible or real, False
     folder = profile["dir"] if profile else profile_dir(DEFAULT_ID)
     folder.mkdir(parents=True, exist_ok=True)
     channel = (profile or {}).get("channel") or channel
+    from . import chrome_pool
+
+    if real and keepalive_mode() and not always_visible:  # kiểu HaoHao: dùng lại Chrome mở sẵn của profile
+        ctx = chrome_pool.connect(pw, folder, channel or "chrome", REAL_CHROME_ARGS, show=show)
+        if not show:
+            _ensure_taskbar_watch()
+        return ctx
+    chrome_pool.stop(folder)  # cửa sổ đăng nhập / chế độ khác: không để 2 Chrome giữ cùng 1 profile
+    if real:
+        ctx = _launch_real_chrome(pw, channel, folder, offscreen)
+        if offscreen:
+            _track_offscreen(ctx)
+        return ctx
     args = ["--disable-blink-features=AutomationControlled"]
     if offscreen:
         args.append(OFFSCREEN_ARG)
@@ -192,7 +341,10 @@ def _launch(pw, channel: str, *, visible: bool, offscreen: bool = False, profile
     )
     if channel and channel != "chromium":
         kwargs["channel"] = channel
-    return pw.chromium.launch_persistent_context(**kwargs)
+    ctx = pw.chromium.launch_persistent_context(**kwargs)
+    if offscreen:
+        _track_offscreen(ctx)
+    return ctx
 
 
 class BrowserChatProvider(LLMProvider):
@@ -385,7 +537,7 @@ def open_login_window(site: str, channel: str = "chrome", timeout_s: int = 900, 
     if target is None:
         raise LLMError(f"Không hỗ trợ trang chat '{site}'")
     with profile_session(site, "Đăng nhập") as prof, sync_playwright() as pw:
-        ctx = _launch(pw, channel, visible=True, profile=prof)
+        ctx = _launch(pw, channel, visible=True, profile=prof, always_visible=True)  # đăng nhập: luôn hiện
         try:
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             page.goto(url or target.url, wait_until="domcontentloaded")

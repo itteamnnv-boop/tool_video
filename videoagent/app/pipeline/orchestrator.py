@@ -163,8 +163,11 @@ class JobRunner:
             # template nhiều bước: mỗi bước (key bước / "video") chọn profile trình duyệt riêng; "" = tự chọn profile rảnh
             step_profiles = ({str(k): str(v or "") for k, v in (form.get("step_profiles") or {}).items()}
                              if template.image_steps else None)
+            # prompt người dùng sửa tay ở ô "Prompt gửi AI": {"video": …, "<key bước ảnh>": …} — gửi nguyên văn
+            overrides = {str(k): str(v).strip()[:8000] for k, v in (form.get("prompt_overrides") or {}).items()
+                         if str(v or "").strip()}
             return spawn(self._run_ai_video, template, variables, attachments, options, engine,
-                         bool(form.get("show_browser")), fallback, step_profiles)
+                         bool(form.get("show_browser")), fallback, step_profiles, overrides)
         return spawn(self._run_new, JobRequest.from_form(form))
 
     def rerender(self, job_id: str, index: int) -> str:
@@ -215,7 +218,7 @@ class JobRunner:
         if product_mode:
             layout, products = validate_assets(req.layout_file, req.product_files, req.product_style)
         elif req.template != "ai":
-            template = registry.pick(req.template) or registry.guess(req.topic)
+            template = registry.pick(req.template, req.genre) or registry.guess(req.topic, req.genre)
         width, height = ASPECTS[req.aspect]
         fps = int(s.get("fps") or 30)
 
@@ -228,7 +231,7 @@ class JobRunner:
                 self._log(f"Gửi kèm {len(images)} ảnh sản phẩm cho AI")
             else:
                 self._log("Provider trình duyệt không gửi được ảnh — AI viết theo nội dung bạn nhập", "warn")
-        ai_templates = registry.all() if template is None and llm is not None and not product_mode else None
+        ai_templates = registry.all(req.genre) if template is None and llm is not None and not product_mode else None
         extra = ""
         if product_mode and req.product_style in ("presenter", "reel"):
             extra += PRESENTER_GUIDE
@@ -261,7 +264,7 @@ class JobRunner:
                       + (f" · layout {layout.name}" if layout else " · layout showcase mặc định"))
         elif template is None:
             chosen = registry.get(script["template_id"])
-            template = chosen if chosen and not chosen.hidden else registry.guess(req.topic)
+            template = chosen if chosen and not chosen.hidden else registry.guess(req.topic, req.genre)
         self._log(f"Kịch bản: “{script['title']}” · {len(script['scenes'])} khung · template {template.name}")
         job = {
             "id": job_dir.name, "title": script["title"], "topic": req.topic, "genre": req.genre,
@@ -339,7 +342,7 @@ class JobRunner:
 
     def _run_ai_video(self, template, variables: dict, attachments: list, options: dict, engine: str,
                       show_browser: bool, fallback_form: dict | None = None,
-                      step_profiles: dict | None = None) -> dict:
+                      step_profiles: dict | None = None, prompt_overrides: dict | None = None) -> dict:
         """Template video AI: điền prompt (+ ảnh tham chiếu) → engine (Grok / Gemini Veo) tạo video → chuẩn hoá.
         Template có image_steps: chạy lần lượt các bước tạo ảnh trước, mỗi bước dùng profile trong step_profiles."""
         s = self.settings
@@ -367,18 +370,23 @@ class JobRunner:
         raw = job_dir / "tmp" / "grok_raw.mp4"
         video_start = 12
         steps = template.image_steps
+        overrides = prompt_overrides or {}
+        if overrides:
+            self._log("Dùng prompt đã sửa tay cho: " + ", ".join(
+                "tạo video" if k == "video" else next((s.get("label", k) for s in steps if s["key"] == k), k) for k in overrides))
         if steps:
             files = {spec["key"]: (spec, path) for spec, path in attachments}
             span = 46 / len(steps)
             for i, step in enumerate(steps):
                 with self._step_profile(step_profiles, step["key"]):
                     path = self._run_image_step(step, i, len(steps), files, variables, engine, job_dir,
-                                                show_browser, 12 + span * i)
+                                                show_browser, 12 + span * i, overrides.get(step["key"], ""))
                 files[step["key"]] = ({"key": step["key"], "label": step.get("label", step["key"])}, path)
             attachments = video_inputs(template, files)
             video_start = 60
         attachments = prepare_video_refs(attachments, spec, self._log)  # video tham chiếu → gửi nguyên video nếu model nhận
-        prompt = template_prompt(template, variables, attachments) + reference_sentence([a[0] for a in attachments])
+        prompt = overrides.get("video") or (template_prompt(template, variables, attachments)
+                                            + reference_sentence([a[0] for a in attachments]))
         self._log(f"Prompt: {prompt[:180]}…")
         images = import_attachments(job_dir, attachments)
 
@@ -510,14 +518,14 @@ class JobRunner:
         return task_context(step_profiles.get(key, ""), check_cancel=self._check_cancel, log=self._log)
 
     def _run_image_step(self, step: dict, index: int, total: int, files: dict, variables: dict, video_engine: str,
-                        job_dir, show_browser: bool, pct: float):
+                        job_dir, show_browser: bool, pct: float, override: str = ""):
         """Một bước image_steps: gửi ảnh đầu vào (video → 1 khung hình) + prompt cho engine ảnh, trả về ảnh kết quả.
         Engine ảnh: step.engine (vd. chatgpt_browser), mặc định cùng nhà cung cấp với engine video."""
         engine = step.get("engine") or video_engine
         spec = IMAGE_ENGINES[engine]
         label = f"Bước {index + 1}/{total + 1}: {step.get('label', step['key'])}"
         inputs = step_inputs(step, files)[:spec["max_images"]]
-        prompt = fill_prompt(step["prompt"], variables) + reference_sentence([a[0] for a in inputs])
+        prompt = override or fill_prompt(step["prompt"], variables) + reference_sentence([a[0] for a in inputs])
         refs = import_attachments(job_dir, inputs)
         want = step.get("aspect", "9:16")
         aspect = want if want in spec["aspects"] else spec["aspects"][0]

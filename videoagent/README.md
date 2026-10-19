@@ -68,7 +68,7 @@ Tạo nhân vật và bối cảnh dùng lại cho nhiều video Studio.
 
 ## Facebook (nhóm FACEBOOK trên menu)
 
-Gồm **Fanpage Facebook**, **Quảng cáo Facebook** và **Quản lý bài đăng**.
+Gồm **Fanpage Facebook**, **Quảng cáo Facebook**, **Trợ lý quảng cáo** và **Quản lý bài đăng**.
 
 ### Quản lý bài đăng
 - **Tự lưu:** mọi bài đăng thành công được lưu kèm *bản sao* ảnh / video, nên vẫn đăng lại được dù file gốc đã xoá. Nguồn gồm:
@@ -84,6 +84,42 @@ Gồm **Fanpage Facebook**, **Quảng cáo Facebook** và **Quản lý bài đă
 - **Lọc và tìm:** lọc theo trạng thái (Nháp / Đã đăng / Hẹn giờ / Lỗi) và nguồn, tìm theo nội dung hoặc tên Fanpage.
 - **Xoá:** 🗑 chỉ xoá bài khỏi danh sách (kèm bản sao file), không xoá bài trên Facebook.
 - **Dữ liệu:** lưu ở `posts/posts.json` và `posts/media/<id>/` trong thư mục dữ liệu của app.
+
+## Cách điều khiển Chrome (Cài đặt → Trình duyệt)
+
+Mọi model chạy qua trình duyệt (ChatGPT, Gemini, Grok, Dola, Muse, Claude; Studio, Studio Muse AI, Tạo ảnh / video, Trợ lý quảng cáo…) đều mở **Chrome thật của máy**. Mỗi tài khoản dùng một profile riêng, và app điều khiển qua **CDP bằng đường ống nội bộ** (`--remote-debugging-pipe`, không mở cổng mạng). Có 2 chế độ:
+
+- **Chrome thật (CDP)** — mặc định:
+  - chỉ dùng khoảng 11 cờ tối thiểu, không có các cờ thử nghiệm / tắt tiện ích / keychain giả của Playwright;
+  - **không bao giờ chạy headless**, cửa sổ có kích thước thật;
+  - vân tay giống Chrome thường nên trang web ít nghi là bot.
+- **Playwright** — cách cũ: khoảng 43 cờ tự động hoá, có nơi chạy headless. Chọn chế độ này nếu chế độ mới gặp lỗi.
+
+Việc dựng khung hình từ template HTML vẫn dùng Chromium headless đi kèm, vì không đăng nhập tài khoản nào.
+
+### Giữ Chrome mở sẵn cho mỗi tài khoản (kiểu HaoHao)
+
+Công tắc trong Cài đặt → Trình duyệt, mặc định **tắt**. Chỉ có tác dụng khi chọn chế độ Chrome thật (CDP).
+
+- **Bật:**
+  - mỗi profile giữ một Chrome chạy liên tục;
+  - các lượt sau nối lại vào Chrome đó (`app/llm/chrome_pool.py`), không phải mở Chrome và tải lại phiên → nhanh hơn, phiên đăng nhập luôn sẵn;
+  - task xong chỉ đóng các tab nó mở thêm rồi ngắt kết nối, Chrome vẫn chạy.
+- **Khi Chrome tự đóng:**
+  - rảnh 20 phút;
+  - thoát app;
+  - đổi lại cài đặt (Chrome đang chạy task sẽ đóng khi task xong);
+  - mở cửa sổ đăng nhập của profile đó.
+- **Cổng gỡ lỗi:** task nối vào Chrome qua cổng gỡ lỗi **chỉ trên máy này** (127.0.0.1, cổng ngẫu nhiên). Khác chế độ thường dùng đường ống nội bộ, vì Chrome phải sống lâu hơn từng task.
+- **Tắt:** quay về cách cũ (mỗi lượt mở rồi đóng Chrome), không ảnh hưởng chức năng nào khác.
+
+## Hiện / ẩn cửa sổ Chrome (Cài đặt → Trình duyệt)
+
+Một công tắc chung cho mọi màn hình chạy model qua trình duyệt:
+- **Bật:** cửa sổ Chrome hiện trên màn hình.
+- **Tắt:** Chrome chạy ngầm ngoài màn hình và **không hiện icon trên thanh taskbar**.
+
+Cửa sổ đăng nhập luôn hiện. Các công tắc "Hiện Chrome" riêng ở từng màn đã bỏ.
 
 ## Profile trình duyệt (sidebar → Profile trình duyệt)
 
@@ -279,9 +315,13 @@ Từ một ý tưởng, AI viết storyboard 5–10 cảnh. Mỗi cảnh gồm l
   - *Tắt (dùng giọng nói gốc):* khi tạo clip, prompt yêu cầu nhân vật nói lời dẫn tiếng Việt ngay trong clip. Lúc ghép, app dùng tiếng gốc của từng clip, giữ nguyên tốc độ (không tua để giọng không méo) và giảm nhạc nền còn 60%.
   - Cần model video có tiếng (Grok, Veo, Muse…). Clip tạo trước khi tắt không có lời nói, nên phải làm lại clip; bấm *Ghép lại* thì chỉ lấy âm thanh sẵn có của clip.
   - Phụ đề (nếu bật) chia đều lời dẫn theo thời lượng cảnh.
+- **Màn quản lý dự án** (mở Studio là thấy):
+  - lưới thẻ dự án gồm ảnh, trạng thái, tên, ý tưởng, số cảnh / clip, thời lượng, tỉ lệ, ngày tạo, nút **Mở** và 🗑;
+  - ô 🔍 tìm theo tên / ý tưởng; bộ lọc *Tất cả / Đang chạy / Chưa có video / Đã có video*; nút **▶ Chạy tiếp N dự án** và **+ Dự án mới**;
+  - mở dự án hoặc tạo mới thì toàn màn hình dành cho dự án, nút **← Tất cả dự án** để quay lại (có thay đổi chưa lưu thì hỏi trước).
 - **Màn hình dự án:**
-  - Danh sách dự án có ảnh thu nhỏ, chấm trạng thái (nhấp nháy khi đang chạy) và số cảnh đã có clip.
-  - Đầu dự án có các nút ⧉ Nhân bản, ⚙ Cài đặt, 🗑 Xoá; dòng thông số (số cảnh, thời lượng, clip, model ảnh / video, kiểu giọng); hàng nút chính bên trái và các công tắc (Hậu kỳ AI, Hiện Chrome) bên phải.
+  - đầu dự án có các nút ⧉ Nhân bản, ⚙ Cài đặt, 🗑 Xoá; dòng thông số; hàng nút chính và các công tắc (Hậu kỳ AI, Hiện Chrome);
+  - **storyboard mỗi cảnh một hàng ngang**: ảnh / clip theo đúng tỉ lệ dự án │ tiêu đề, số giây, nhân vật trong khung, lời thoại (người nói | câu nói | cảm xúc | 🔊 | ✕), giọng dẫn chuyện │ prompt ảnh, prompt chuyển động, các nút ↻ Ảnh / ↻ Clip / ↑ ↓ / 🗑. Màn hình hẹp thì cột prompt xuống dưới.
 - **Tiến trình** giống trang Tạo video: các bước Storyboard → Ảnh khung đầu → Clip cảnh → (Hậu kỳ AI) → Ghép video → Hoàn tất, thanh %, trạng thái hiện tại và toàn bộ nhật ký (tự cuộn). Mở lại một dự án đang chạy vẫn thấy đủ tiến trình.
 - **Sửa ý tưởng để chạy lại:** bấm **✎ Sửa ý tưởng** ở đầu dự án, rồi **💾 Lưu ý tưởng** hoặc **↻ Lưu & viết lại storyboard** (thay các cảnh hiện tại).
 - **⧉ Nhân bản dự án** (chép kèm cài đặt, ảnh tham chiếu, logo; không chép video hoàn chỉnh):
@@ -325,7 +365,14 @@ Từ một ý tưởng, AI viết storyboard 5–10 cảnh. Mỗi cảnh gồm l
   - *Lồng tiếng AI:* nhân vật mấp máy môi và làm cử chỉ theo đúng câu đó; lúc ghép, tiếng của clip được thay bằng giọng đọc.
   - *Giọng gốc:* nhân vật nói to, rõ, đúng nguyên văn câu đó.
   - Cảnh không có lời đọc thì không có dòng thoại.
-  - Nên để lời đọc vừa với số giây của cảnh (khoảng 2,5 từ/giây) để model nói kịp.
+  - **Khoá nhân vật trong clip** (mọi model video, nhất là Muse): đầu prompt clip luôn có đoạn IDENTITY LOCK (giữ nguyên khuôn mặt, màu da, tuổi, kiểu tóc từ khung đầu, không vẽ lại / đổi mặt) kèm mô tả từng nhân vật. Muse được dặn tạo video trực tiếp từ đúng ảnh khung đầu và chép nguyên văn đoạn khoá.
+  - **Giữ nguyên trang phục** (⚙ dự án, mặc định bật): bật → trang phục giống nhau mọi cảnh; tắt → trang phục đổi theo mô tả từng cảnh, khuôn mặt vẫn khoá (làm lại ảnh khung đầu để áp dụng).
+  - **Chạy nhiều Chrome song song:** số clip tạo cùng lúc = Cài đặt → Số video tạo song song (tối đa 10), nhưng mỗi profile chỉ mở 1 Chrome. Muốn 3 Chrome cho Muse thì cần 3 profile đã đăng nhập Muse và gán cho Muse, và ⚙ dự án để “Tự chọn profile rảnh”. Nhật ký báo số Chrome thực chạy và lý do nếu chỉ chạy lần lượt.
+  - **Tiến trình:** thanh tiến trình theo % thật của mọi clip đang tạo song song (vd. “Clip: 3/10 xong · đang tạo 2 (cảnh 4 62%, cảnh 5 30%) · 5 chờ Chrome rảnh”); bước ghép nối tiếp từ 72% thay vì tụt về đầu.
+  - Nên để lời đọc vừa với số giây của cảnh (khoảng 2,5 từ/giây) để model nói kịp. App ước lượng thời gian nói hết lời của từng cảnh:
+    - storyboard / lưu cảnh chưa có clip: tự tăng số giây lên mức model video hỗ trợ đủ để nói hết câu;
+    - lời dài hơn clip dài nhất của model: cảnh hiện ⚠ và nhật ký nhắc rút gọn lời hoặc tách cảnh;
+    - prompt clip không còn cắt lời thoại giữa câu, và dặn model nói hết mọi câu trước khi clip kết thúc.
 - **Giọng người nói theo nhân vật** (mỗi cảnh, ô *Giọng người nói*): người dẫn chuyện nữ/nam, bé gái, bé trai, cô gái trẻ, chàng trai trẻ, phụ nữ / đàn ông trung niên, bà cụ, ông cụ.
   - Khi viết storyboard, model tự chọn vai cho từng cảnh; bạn đổi tay được, và bấm 🔊 để nghe thử lời đọc.
   - *Lồng tiếng AI:* edge-tts tiếng Việt chỉ có 1 giọng nữ và 1 giọng nam, nên app chỉnh cao độ và tốc độ theo vai. Ví dụ: trẻ em cao giọng và nhanh hơn; người già trầm và chậm hơn. Đổi vai không phải làm lại clip.
@@ -339,6 +386,47 @@ Từ một ý tưởng, AI viết storyboard 5–10 cảnh. Mỗi cảnh gồm l
   - Block **Ghép video** trong Workflow có cùng các tuỳ chọn này (mặc định cắt thẳng, không âm, như trước).
 
 Dự án lưu ở `<thư mục video>/_studio/<id>/` (`project.json`, `refs/`, `scenes/NN/frame.png`, `clip.mp4`).
+
+## Studio Muse AI (menu trái → Studio Muse AI)
+
+Dây chuyền chỉ dùng Muse (muse.ai), theo mô hình nhiều tài khoản chạy song song. Thanh trên có:
+- chọn dự án + nút **Dự án** (thêm, đổi tên, tạm dừng, xoá);
+- trạng thái tài khoản;
+- **Chạy tiếp / Dừng tất cả / Thư mục**.
+
+Có 5 tab:
+
+- **Studio** — soạn lệnh và quản lý hàng đợi:
+  - Tạo ảnh / Tạo video, tỉ lệ khung hình, chèn mẫu prompt, lưu làm mẫu.
+  - Mỗi khối prompt cách nhau 1 dòng trống là 1 task.
+  - Ảnh tham chiếu dùng chung cho mọi prompt, hoặc ghép cặp (ảnh i ↔ prompt i).
+  - Công tắc Người mẫu cố định / Ảnh luân phiên. Gõ tên nhân vật trong prompt thì app tự gắn ảnh nhân vật. Muse nhận tối đa 3 ảnh mỗi lệnh.
+  - Hàng đợi có tìm kiếm, lọc theo trạng thái, Chọn tất cả / Chọn lỗi / Chọn chưa chạy, Chạy lại / Huỷ / Xoá. Bấm vào task để xem prompt, ảnh gắn kèm, lỗi, nhật ký và file kết quả.
+- **Tư liệu** — nhân vật (≤ 3 ảnh), mẫu prompt, người mẫu cố định (gắn vào mọi task, ≤ 3 ảnh), ảnh luân phiên (mỗi task lấy 1 ảnh kế tiếp, ≤ 20 ảnh). Ảnh được chép vào kho riêng, nên đổi hay xoá file gốc không ảnh hưởng.
+- **Kịch bản** — mỗi dòng là 1 cảnh, cách 1 dòng trống để sang video tiếp theo. Chế độ "Từ ảnh": mỗi ảnh sản phẩm thành 1 video, với các gợi ý chuyển động zoom / xoay 360° / trượt ngang / khói sương.
+  - **Cách làm:** làm video thẳng; Storyboard → tự làm video (Muse vẽ ảnh storyboard rồi dựng video theo đúng thứ tự khung); Storyboard → chờ duyệt (bấm "✓ Duyệt storyboard" rồi mới làm video).
+  - **Thời lượng:** 10–60 giây gộp 1 lệnh, hoặc từng cảnh 10 giây gửi lần lượt rồi app tự ghép.
+  - **Tuỳ chọn khác:** tiền tố câu lệnh; giọng đọc (không lồng tiếng / nhân vật tự nói khớp môi / giọng nam, nữ); người dẫn nam / nữ; nhân vật dẫn lấy từ Tư liệu; số bản cho mỗi video; ảnh sản phẩm (mỗi ảnh ra 1 bộ video riêng).
+  - **Nhạc nền:** video xong thì app lấy ngẫu nhiên 1 bài trong thư mục nhạc nền, lót nhỏ dưới giọng đọc, và giữ cả bản không nhạc.
+  - **Danh sách video:** từng bước của mỗi video (SB / C1 / C2…), file kết quả, nút Duyệt, nút Xoá. Bấm "Xem lệnh" để xem trước nội dung sẽ gửi Muse.
+- **LadiPage:**
+  - Dán link landing page: app đọc tên sản phẩm, ảnh, giá và chữ trên trang. Nội dung trang chỉ được dùng làm dữ liệu.
+  - Muse viết 3 kịch bản phân cảnh, mỗi cảnh có lời thoại và mô tả hình. Có tuỳ chọn "Không đọc giá".
+  - Bạn chọn 1–3 ảnh sản phẩm (gửi kèm mọi video), sửa từng cảnh, xem trước lệnh, rồi đưa các kịch bản đã tích vào hàng đợi. Cách làm, tỉ lệ, thời lượng và giọng đọc lấy theo tab Kịch bản.
+- **Storyboard dài** — Studio storyboard nhiều cảnh (lồng tiếng, phụ đề, ghép), mọi bước khoá dùng Muse.
+- **Thư viện** — file kết quả của dự án đang mở. Tick các video rồi bấm **Ghép video**: sắp thứ tự ↑↓, đặt tên file, có thanh tiến độ %. Ghép xong, app mở Explorer chọn sẵn file.
+- **Tài khoản:**
+  - Tài khoản chính là các **profile trình duyệt đã gán Muse** ở màn Profile trình duyệt (dùng lại phiên đã đăng nhập). Bấm "＋ Thêm tài khoản" sẽ mở màn đó.
+  - Thiết lập: số TK chạy đồng thời, tổng luồng, số luồng / tài khoản (1–5), cách chia việc **Luân phiên** (ít việc nhất → dùng ít hạn mức nhất) hoặc **Lần lượt**, giới hạn phút cho ảnh / video, số lần tự thử lại.
+  - **Hạn mức tuần:** % đã dùng, ngày đặt lại và token bổ sung còn lại. App đọc từ trang muse.ai đã đăng nhập, chỉ đọc nên không tốn lượt.
+  - Tài khoản hết hạn mức tự nghỉ tới ngày đặt lại, trừ khi bật "Dùng token bổ sung" hoặc "vẫn tạo tiếp".
+
+Cách chạy:
+- Task lỗi tự thử lại (mặc định 1 lần).
+- Lỗi do hết hạn mức hoặc tài khoản đăng xuất thì task được xếp hàng lại (không tính lượt) và chuyển sang tài khoản khác.
+- Tắt app khi đang chạy: task dở được xếp hàng lại.
+- File lưu ở `<thư mục video>/_muse_hub/<dự án>/`.
+- Dữ liệu (cài đặt, task, tư liệu) lưu trong thư mục dữ liệu app, mục `muse_hub/`.
 
 ## Chiến dịch — phòng marketing AI (sidebar → nhóm CHIẾN DỊCH)
 
@@ -596,6 +684,33 @@ Dùng chung User Access Token với mục Fanpage. Khi tạo token trong Graph A
   - app tạo đủ Chiến dịch → Nhóm → Creative → Quảng cáo, tất cả ở trạng thái **TẠM DỪNG**, nên không tiêu tiền cho tới khi bạn tự bật;
   - nếu một bước lỗi, chiến dịch tạo dở sẽ bị xoá.
 - Ngân sách nhập theo tiền tệ của tài khoản quảng cáo. Với VND, app gửi đúng số tiền; với USD/EUR, app tự đổi sang cent.
+
+## Trợ lý quảng cáo Meta (sidebar → Trợ lý quảng cáo)
+
+Chat với AI để lên quảng cáo cho một bài viết có sẵn của Fanpage. Dùng chung token và quyền (`ads_read`, `ads_management`) với **Quảng cáo Facebook**.
+
+- **Hai màn (giống Studio):**
+  - **Quản lý chiến lược:** thống kê (chờ duyệt / đã lên lịch / đang chạy / tạm dừng / lỗi, ngân sách/ngày đang chạy), tìm kiếm, lọc theo trạng thái, lưới thẻ chiến lược (ảnh bài viết, mục tiêu, ngân sách × ngày, tổng tối đa, đối tượng, người duyệt). Mỗi thẻ: Mở / Duyệt, ↗ Ads Manager, ⧉ Nhân bản, 🗑 Xoá (quảng cáo đã tạo trên Meta không xoá ở đây).
+  - **Bàn làm việc:** “← Tất cả chiến lược” + tên chiến lược; chat bên trái, form bên phải chia mục 1 Bài quảng cáo · 2 Mục tiêu & ngân sách · 3 Đối tượng · 4 Chiến lược của trợ lý; thanh duyệt dính đáy hiện tổng chi tiêu và các nút duyệt.
+- **Chat:** chọn model (ChatGPT / Claude / Gemini / Muse trình duyệt hoặc API key), profile và tuỳ chọn hiện Chrome. Mô tả sản phẩm, khách hàng, khu vực, ngân sách, mục tiêu; có sẵn vài câu gợi ý nhanh.
+  - Model đọc các bài gần đây của Fanpage, trả lời, giải thích lý do và **tự điền form**. Mỗi câu trả lời ghi rõ các trường đã điền.
+  - Sở thích model gợi ý được tra thành sở thích thật của Meta và chọn sẵn kết quả đầu tiên. Bạn bỏ / thêm sở thích, hoặc tự tìm.
+  - Kèm chiến lược và kết quả dự kiến (chỉ là ước lượng của AI).
+- **Form:**
+  - tài khoản quảng cáo, Fanpage, bài viết (có xem trước), mục tiêu, tên chiến dịch;
+  - ngân sách/ngày, số ngày, giờ bắt đầu, quốc gia, độ tuổi, giới tính, sở thích;
+  - dòng tổng hiện chi tiêu tối đa = ngân sách × số ngày. Mọi thay đổi được lưu ngay.
+- **Duyệt:** bấm **📨 Gửi duyệt** (app kiểm tra đủ tài khoản, page, bài, ngân sách), rồi chọn một trong ba cách:
+  - **⏸ Tạo (tạm dừng):** tạo chiến dịch nhưng không tiêu tiền. Bạn tự bật trong Ads Manager hoặc màn Quảng cáo Facebook;
+  - **🗓 Lên lịch chạy:** Meta tự chạy đúng giờ bắt đầu (giờ phải ở tương lai, tối đa 180 ngày);
+  - **▶ Chạy ngay:** chạy sau vài phút, khi Meta duyệt xong nội dung.
+- **An toàn tiền:**
+  - AI chỉ đề xuất, không bao giờ tự chạy quảng cáo;
+  - lên lịch và chạy ngay đều phải tick xác nhận chi phí trong hộp thoại, và backend từ chối nếu thiếu xác nhận;
+  - app ghi lại người duyệt và thời điểm;
+  - sửa form sau khi đã gửi duyệt sẽ đưa bản nháp về trạng thái nháp.
+- Sau khi tạo: bản nháp bị khoá, hiện mã chiến dịch / nhóm / quảng cáo, kèm nút **Mở Ads Manager** và **Xem ở Quảng cáo Facebook**.
+- Bản nháp lưu trong thư mục dữ liệu app (`%APPDATA%/<app>/ad_assistant/` hoặc `~/.videoagent/ad_assistant/`).
 
 ## Thể loại "Theo layout & sản phẩm mẫu"
 

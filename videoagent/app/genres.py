@@ -43,6 +43,20 @@ GENRES = [
     },
 ]
 
+# Nhóm template (templates_registry.CATEGORIES) hợp với từng thể loại — bộ chọn template chỉ hiện các nhóm này.
+# Template có thể tự khai báo "genres": [...] trong meta.json để thuộc thể loại khác thay cho cách tính theo nhóm.
+GENRE_CATEGORIES = {
+    "trailer": ["tech", "news", "finance", "story", "general"],
+    "story": ["story", "agri", "food", "education", "general"],
+    "listicle": ["education", "tech", "finance", "food", "general"],
+    "explainer": ["education", "tech", "finance", "agri", "general"],
+    "news": ["news", "finance", "tech", "general"],
+    "promo": ["sales", "agri", "food", "general"],
+    "product_layout": ["sales", "agri", "food", "general"],
+}
+for _g in GENRES:
+    _g["categories"] = GENRE_CATEGORIES.get(_g["id"], [])
+
 _BY_ID = {g["id"]: g for g in GENRES}
 
 

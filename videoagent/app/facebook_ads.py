@@ -228,8 +228,25 @@ class AdsManager:
         paging = data.get("paging") or {}
         return {"posts": posts, "after": ((paging.get("cursors") or {}).get("after") or "") if paging.get("next") else ""}
 
+    def search_interests(self, query: str, limit: int = 6) -> list:
+        """Sở thích (detailed targeting) của Meta theo từ khoá → [{id, name, size, path}] để nhắm quảng cáo."""
+        query = " ".join(str(query or "").split())[:80]
+        if not query:
+            return []
+        data = self._get("search", type="adinterest", q=query, limit=max(1, min(25, int(limit))), locale="vi_VN")
+        return [{"id": str(r["id"]), "name": r.get("name", ""), "path": " › ".join(r.get("path") or []),
+                 "size": r.get("audience_size_upper_bound") or r.get("audience_size") or 0}
+                for r in data.get("data", []) if r.get("id")]
+
     def create_boost(self, form: dict) -> dict:
-        """Tạo chiến dịch → nhóm quảng cáo → quảng cáo từ 1 bài viết có sẵn. Tất cả ở trạng thái PAUSED."""
+        """Tạo chiến dịch → nhóm quảng cáo → quảng cáo từ 1 bài viết có sẵn.
+        Mặc định PAUSED. status=ACTIVE (chạy ngay / chạy theo lịch start_at) tiêu tiền thật → BẮT BUỘC có confirmed_by
+        (người dùng đã bấm duyệt trong app); thiếu thì từ chối."""
+        status = str(form.get("status") or "PAUSED").upper()
+        if status not in STATUSES:
+            raise FacebookError("Trạng thái chỉ được ACTIVE hoặc PAUSED")
+        if status == "ACTIVE" and not str(form.get("confirmed_by") or "").strip():
+            raise FacebookError("Chạy quảng cáo cần người dùng xác nhận duyệt — chưa có xác nhận nên không tạo")
         act = self._act(form.get("account_id"))
         page_id = self._check_id(form.get("page_id"))
         post_id = self._check_id(form.get("post_id"))
@@ -257,13 +274,29 @@ class AdsManager:
         genders = {"male": [1], "female": [2]}.get(form.get("gender"))
         if genders:
             targeting["genders"] = genders
+        interests = [{"id": str(i["id"]), "name": str(i.get("name") or "")} for i in form.get("interests") or []
+                     if isinstance(i, dict) and str(i.get("id") or "").isdigit()][:25]
+        if interests:  # sở thích chi tiết (OR giữa các mục)
+            targeting["flexible_spec"] = [{"interests": interests}]
 
-        campaign = self._post(f"{act}/campaigns", name=name, objective=goal["objective"], status="PAUSED",
+        now = datetime.now().astimezone()
+        start = now + timedelta(minutes=3 if status == "ACTIVE" else 10)
+        if form.get("start_at"):  # lịch chạy: giờ máy (datetime-local) → Meta tự bắt đầu đúng giờ
+            try:
+                wanted = datetime.fromisoformat(str(form["start_at"]))
+            except ValueError:
+                raise FacebookError("Giờ bắt đầu không hợp lệ") from None
+            wanted = wanted.astimezone() if wanted.tzinfo else wanted.replace(tzinfo=now.tzinfo)
+            if wanted > start:
+                start = wanted
+            if wanted > now + timedelta(days=180):
+                raise FacebookError("Giờ bắt đầu quá xa (tối đa 6 tháng tới)")
+
+        campaign = self._post(f"{act}/campaigns", name=name, objective=goal["objective"], status=status,
                               special_ad_categories=[], is_adset_budget_sharing_enabled="false")
         created = {"campaign_id": campaign["id"]}
         try:
-            start = datetime.now().astimezone() + timedelta(minutes=10)
-            adset = {"name": f"{name} — nhóm", "campaign_id": campaign["id"], "status": "PAUSED",
+            adset = {"name": f"{name} — nhóm", "campaign_id": campaign["id"], "status": status,
                      "daily_budget": int(round(budget * self._factor(cur))), "billing_event": "IMPRESSIONS",
                      "optimization_goal": goal["optimization_goal"], "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
                      "promoted_object": {"page_id": page_id}, "targeting": targeting,
@@ -274,11 +307,13 @@ class AdsManager:
             created["adset_id"] = self._post(f"{act}/adsets", **adset)["id"]
             creative = self._post(f"{act}/adcreatives", name=f"{name} — creative", object_story_id=story_id)
             created["ad_id"] = self._post(f"{act}/ads", name=f"{name} — quảng cáo", adset_id=created["adset_id"],
-                                          creative={"creative_id": creative["id"]}, status="PAUSED")["id"]
+                                          creative={"creative_id": creative["id"]}, status=status)["id"]
         except FacebookError as exc:  # dọn chiến dịch dở dang để không để rác trong Ads Manager
             try:
                 self._post(campaign["id"], status="DELETED")
             except FacebookError:
                 pass
             raise FacebookError(f"{exc} (đã huỷ chiến dịch tạo dở)") from exc
-        return {**created, "name": name, "status": "PAUSED"}
+        return {**created, "name": name, "status": status, "start_time": start.isoformat(timespec="minutes"),
+                "end_time": (start + timedelta(days=days)).isoformat(timespec="minutes"), "currency": cur,
+                "daily_budget": budget, "max_spend": budget * days}

@@ -1,7 +1,10 @@
 /* Studio — ý tưởng → storyboard (sửa được) → làm từng cảnh (ảnh khung đầu → video AI) → ghép video dài
-   (dùng chung helper của app.js: $, $$, api, esc, toast, state, profileOptions, siteOf). */
-(() => {
+   (dùng chung helper của app.js: $, $$, api, esc, toast, state, profileOptions, siteOf).
+   createStudioPage(CFG) tạo 1 màn: Studio (chọn model tự do) và Studio Muse AI (mọi bước dùng Muse — backend khoá model). */
+function createStudioPage(CFG) {
   'use strict';
+  const MUSE = !!CFG.muse;
+  const museField = label => `<div class="field"><span>${label}</span><div class="st-muse-lock" title="Studio Muse AI dùng Muse cho mọi bước">🔒 Meta · Muse AI</div></div>`;
 
   const S = { meta: null, projects: [], cur: null, draft: null, dirty: false, tasks: {}, logs: [], progress: null, refs: [],
     batch: false, pendingRender: false };
@@ -14,7 +17,7 @@
   async function show() {
     S.cast = null;  // tải lại danh sách nhân vật / layout (có thể vừa sửa ở màn Nhân vật & Layout)
     if (!S.meta) {
-      const res = await api('studio_meta');
+      const res = await api(CFG.api + 'meta');
       if (!res.ok) return toast(res.error, 'error');
       S.meta = res.meta;
     }
@@ -23,7 +26,7 @@
   }
 
   async function loadList() {
-    const res = await api('studio_list');
+    const res = await api(CFG.api + 'list');
     S.projects = res.ok ? res.projects : [];
     if (S.cur) S.cur = S.projects.find(p => p.id === S.cur.id) || null;
     if (S.cur && !S.dirty) S.draft = clone(S.cur);
@@ -32,24 +35,60 @@
   // ------------------------------------------------------------ khung trang
   function render() {
     S.pendingRender = false;
-    const unfinished = S.projects.filter(p => !p.running && !p.final_url).length;
-    const live = S.projects.filter(p => p.running).length;
-    $('#studioBody').innerHTML = `<div class="st-layout">
-      <aside class="st-list card"><div class="card-title">DỰ ÁN <button class="btn primary sm" data-new type="button">+ Mới</button></div>
-        ${live || unfinished ? `<div class="st-batchbar"><small>${live ? `<span class="st-live">●</span> ${live} đang chạy` : ''}${live && unfinished ? ' · ' : ''}${unfinished ? `${unfinished} chưa có video` : ''}</small>
-          ${unfinished ? '<button class="btn ghost sm" data-resume-all type="button" title="Viết storyboard / làm cảnh còn thiếu / ghép cho mọi dự án chưa có video">▶ Chạy tiếp tất cả</button>' : ''}</div>` : ''}
-        ${S.projects.length ? S.projects.map(p => {
-          const thumb = ((p.scenes || []).find(s => s.frame_url) || {}).frame_url;
-          const clips = (p.scenes || []).filter(s => s.clip_url).length;
-          return `<button class="st-item ${S.cur && S.cur.id === p.id ? 'on' : ''}" data-open="${esc(p.id)}" type="button">
-            <span class="st-item-thumb">${thumb ? `<img src="${esc(thumb)}" alt="" loading="lazy">` : '🎬'}</span>
-            <span class="st-item-text"><b>${esc(p.name)}</b>
-              <small><i class="st-dot ${esc(p.running ? 'running' : p.status)}"></i>${esc(p.running ? 'Đang chạy' : STATUS[p.status] || p.status)} · ${clips}/${(p.scenes || []).length} cảnh${p.final_url ? ' · 🎞' : ''}</small></span></button>`;
-        }).join('')
-          : '<div class="empty">Chưa có dự án.</div>'}</aside>
-      <section class="st-main">${S.cur ? projectHtml() : newHtml()}</section></div>`;
+    const inside = S.cur || S.view === 'new';
+    $(CFG.body).innerHTML = `<div class="st-page">
+      ${inside ? `<div class="st-crumbs"><button class="btn ghost sm" data-back type="button">← Tất cả dự án</button>
+        <span class="muted">/</span><b>${esc(S.cur ? S.cur.name : 'Dự án mới')}</b></div>` : ''}
+      <section class="st-main">${S.cur ? projectHtml() : S.view === 'new' ? newHtml() : listHtml()}</section></div>`;
     bind();
     refreshOpts();
+  }
+
+  // ------------------------------------------------------------ màn quản lý dự án
+  const LIST_FILTERS = [['all', 'Tất cả'], ['running', 'Đang chạy'], ['todo', 'Chưa có video'], ['done', 'Đã có video']];
+  function listedProjects() {
+    const q = (S.q || '').trim().toLowerCase();
+    const f = S.filter || 'all';
+    return S.projects.filter(p => (!q || `${p.name} ${p.idea}`.toLowerCase().includes(q))
+      && (f === 'all' || (f === 'running' && p.running) || (f === 'todo' && !p.running && !p.final_url) || (f === 'done' && p.final_url)));
+  }
+  function gridHtml() {
+    const list = listedProjects();
+    if (!list.length) return `<div class="empty">${S.projects.length ? 'Không có dự án khớp bộ lọc.' : 'Chưa có dự án — bấm “+ Dự án mới”.'}</div>`;
+    return list.map(p => {
+      const scenes = p.scenes || [];
+      const thumb = (scenes.find(s => s.frame_url) || {}).frame_url;
+      const clips = scenes.filter(s => s.clip_url).length;
+      const secs = p.final_url ? Math.round((p.final || {}).duration || 0) : scenes.reduce((a, s) => a + (+s.seconds || 0), 0);
+      const status = p.running ? 'running' : p.status;
+      const date = String(p.created_at || '').slice(0, 10).split('-').reverse().join('/');
+      return `<div class="st-pcard ${p.running ? 'running' : ''}">
+        <button class="st-pthumb" data-open="${esc(p.id)}" type="button" title="Mở dự án">
+          ${thumb ? `<img src="${esc(thumb)}" alt="" loading="lazy">` : '<span>🎬</span>'}
+          <i class="st-pbadge ${esc(status)}">${esc(p.running ? 'Đang chạy' : STATUS[p.status] || p.status)}</i>
+          ${p.final_url ? '<i class="st-pfinal">🎞 Có video</i>' : ''}</button>
+        <div class="st-pbody">
+          <button class="st-pname" data-open="${esc(p.id)}" type="button" title="${esc(p.name)}">${esc(p.name)}</button>
+          <p class="st-pidea">${esc(p.idea || '')}</p>
+          <div class="st-pmeta"><span>🎬 ${clips}/${scenes.length} cảnh</span>${secs ? `<span>⏱ ~${secs}s</span>` : ''}
+            <span>▭ ${esc((p.options || {}).aspect || '9:16')}</span>${date ? `<span>📅 ${esc(date)}</span>` : ''}</div>
+          <div class="st-pact"><button class="btn ghost sm" data-open="${esc(p.id)}" type="button">Mở</button>
+            ${p.running ? '' : `<button class="btn ghost sm st-pdel" data-del-id="${esc(p.id)}" type="button" title="Xoá dự án">🗑</button>`}</div>
+        </div></div>`;
+    }).join('');
+  }
+  function listHtml() {
+    const unfinished = S.projects.filter(p => !p.running && !p.final_url).length;
+    const live = S.projects.filter(p => p.running).length;
+    return `<div class="card st-lhead">
+        <div class="st-lhead-top"><div><b class="st-ltitle">Dự án ${CFG.label}</b>${MUSE ? ' <span class="st-muse-badge">🔒 chỉ dùng Muse AI</span>' : ''} <span class="muted">${S.projects.length} dự án${live ? ` · <span class="st-live">●</span> ${live} đang chạy` : ''}</span></div>
+          <div class="row st-lhead-act">
+            ${unfinished ? `<button class="btn ghost" data-resume-all type="button" title="Viết storyboard / làm cảnh còn thiếu / ghép cho mọi dự án chưa có video">▶ Chạy tiếp ${unfinished} dự án</button>` : ''}
+            <button class="btn primary" data-new type="button">+ Dự án mới</button></div></div>
+        <div class="row st-lfilter"><input id="stSearch" type="search" placeholder="🔍 Tìm theo tên / ý tưởng…" value="${esc(S.q || '')}">
+          <div class="st-chips">${LIST_FILTERS.map(([k, label]) => `<button class="chip-f ${(S.filter || 'all') === k ? 'active' : ''}" data-filter="${k}" type="button">${label}</button>`).join('')}</div></div>
+      </div>
+      <div class="st-grid" id="stGrid">${gridHtml()}</div>`;
   }
 
   // ------------------------------------------------------------ dialog Cài đặt dự án (nút ⚙ cạnh tên dự án)
@@ -119,24 +158,123 @@
       window.CastPage.items().then(items => { S.cast = items; refreshOpts(); if (!document.getElementById('stOptsDlg')) render(); });
       return '<div class="st-wide st-cast"><b>🧑 Nhân vật &amp; layout cố định</b><small class="muted">Đang tải…</small></div>';
     }
-    const chars = o.cast_characters || [], layout = o.cast_layout || '';
-    const thumb = x => { const u = (x.starred[0] || x.images.find(i => i.exists) || {}).url; return u ? `<img src="${esc(u)}" alt="">` : `<i>${x.kind === 'character' ? '🧑' : '🏞'}</i>`; };
-    const empty = kind => `<small class="muted">Chưa có ${kind} nào — tạo ở màn <button class="link" data-goto-cast type="button">Nhân vật &amp; Layout</button>.</small>`;
-    const combos = S.cast.combo || [];
-    return `<div class="st-wide st-cast"><b>🧑 Nhân vật &amp; layout cố định <small class="muted">(tuỳ chọn — không chọn thì AI tự nghĩ như cũ)</small></b>
-      ${combos.length ? `<span class="muted">Bộ kết hợp (nhân vật + layout + ảnh dàn cảnh) — chọn là điền sẵn nhân vật và layout bên dưới:</span>
-      <div class="st-cast-row"><button class="st-cast-chip ${o.cast_combo ? '' : 'on'}" data-cast-combo="" type="button" ${dis}><i>∅</i>Không dùng</button>
-        ${combos.map(x => `<button class="st-cast-chip ${o.cast_combo === x.id ? 'on' : ''}" data-cast-combo="${esc(x.id)}" type="button" ${dis} title="${esc(x.summary || x.description || x.idea || '')}">${thumb(x)}${esc(x.name)}${o.cast_combo === x.id ? ' ✓' : ''}</button>`).join('')}</div>` : ''}
-      <span class="muted">Nhân vật (tối đa ${MAX_CAST}): mô tả được chép nguyên vào storyboard, ảnh ⭐ gửi kèm khi tạo ảnh khung đầu.</span>
-      <div class="st-cast-row">${S.cast.character.length ? S.cast.character.map(x => {
-        const on = chars.includes(x.id);
-        return `<button class="st-cast-chip ${on ? 'on' : ''}" data-cast-char="${esc(x.id)}" type="button" ${dis || (!on && chars.length >= MAX_CAST ? 'disabled' : '')} title="${esc(x.summary || x.description || '')}">${thumb(x)}${esc(x.name)}${on ? ' ✓' : ''}</button>`;
-      }).join('') : empty('nhân vật')}</div>
-      <span class="muted">Layout / bối cảnh: mọi cảnh diễn ra trong bối cảnh này.</span>
-      <div class="st-cast-row"><button class="st-cast-chip ${layout ? '' : 'on'}" data-cast-layout="" type="button" ${dis}><i>∅</i>Không dùng</button>
-        ${S.cast.layout.map(x => `<button class="st-cast-chip ${layout === x.id ? 'on' : ''}" data-cast-layout="${esc(x.id)}" type="button" ${dis} title="${esc(x.summary || x.description || '')}">${thumb(x)}${esc(x.name)}${layout === x.id ? ' ✓' : ''}</button>`).join('')}
-        ${S.cast.layout.length ? '' : empty('layout')}</div>
+    const chars = (o.cast_characters || []).map(id => S.cast.character.find(x => x.id === id)).filter(Boolean);
+    const layout = S.cast.layout.find(x => x.id === o.cast_layout);
+    const combo = (S.cast.combo || []).find(x => x.id === o.cast_combo);
+    const slot = (tab, label, items, none) => `<button class="st-slot ${items.length ? 'on' : ''}" data-cast-pick="${tab}" type="button" ${dis}>
+        <span class="st-slot-k">${label}</span>
+        <span class="st-slot-v"><span class="st-slot-imgs">${items.length ? items.map(castThumb).join('') : '<i>∅</i>'}</span>
+          <span class="st-slot-n">${items.length ? items.map(x => esc(x.name)).join(', ') : none}</span></span></button>`;
+    return `<div class="st-wide st-cast">
+      <div class="st-cast-head"><b>🧑 Nhân vật &amp; layout cố định</b><small class="muted">tuỳ chọn — không chọn thì AI tự nghĩ</small>
+        <button class="btn ghost sm" data-cast-pick="${(S.cast.combo || []).length ? 'combo' : 'character'}" type="button" ${dis}>✎ Chọn…</button></div>
+      <div class="st-slots">
+        ${(S.cast.combo || []).length ? slot('combo', 'Bộ kết hợp', combo ? [combo] : [], 'Không dùng') : ''}
+        ${slot('character', `Nhân vật · ${chars.length}/${MAX_CAST}`, chars, 'AI tự nghĩ')}
+        ${slot('layout', 'Layout / bối cảnh', layout ? [layout] : [], 'Không dùng')}
+      </div>
       <small class="muted">Sửa nhân vật / layout ở màn <button class="link" data-goto-cast type="button">Nhân vật &amp; Layout</button> — dự án dùng bản mới nhất khi tạo ảnh.</small></div>`;
+  }
+
+  const castThumb = x => {
+    const u = (x.starred[0] || x.images.find(i => i.exists) || {}).url;
+    return u ? `<img src="${esc(u)}" alt="" loading="lazy">` : `<i>${x.kind === 'character' ? '🧑' : x.kind === 'combo' ? '🎭' : '🏞'}</i>`;
+  };
+
+  // Chọn nhân vật / layout / bộ kết hợp: lớp phủ riêng (nằm trên cả hộp Cài đặt dự án)
+  const CAST_TABS = [['combo', '🎭 Bộ kết hợp', 'Nhân vật + layout + ảnh dàn cảnh — chọn là điền sẵn nhân vật và layout.'],
+    ['character', '🧑 Nhân vật', `Tối đa ${MAX_CAST}: mô tả chép nguyên vào storyboard, ảnh ⭐ gửi kèm khi tạo ảnh khung đầu.`],
+    ['layout', '🏞 Layout / bối cảnh', 'Mọi cảnh diễn ra trong bối cảnh này.']];
+
+  function pickCast(kind, id) {
+    const o = S.draft.options;
+    if (kind === 'combo') {  // bộ kết hợp: điền sẵn nhân vật + layout của bộ
+      const combo = (S.cast.combo || []).find(x => x.id === id);
+      S.draft.options = combo ? { ...o, cast_combo: combo.id, cast_characters: (combo.characters || []).slice(0, MAX_CAST), cast_layout: combo.layout || '' }
+        : { ...o, cast_combo: '' };
+    } else if (kind === 'character') {
+      const set = new Set(o.cast_characters || []);
+      if (set.has(id)) set.delete(id); else if (set.size < MAX_CAST) set.add(id);
+      S.draft.options = { ...o, cast_characters: [...set] };
+    } else S.draft.options = { ...o, cast_layout: id };
+    if (S.cur) markDirty();
+    render();
+    drawCastPicker();
+  }
+
+  function castPickerHtml() {
+    const o = S.draft.options;
+    const tabs = CAST_TABS.filter(([k]) => k !== 'combo' || (S.cast.combo || []).length);
+    if (!tabs.some(([k]) => k === S.castTab)) S.castTab = tabs[0][0];
+    const tab = S.castTab, q = (S.castQ || '').trim().toLowerCase();
+    const chars = o.cast_characters || [];
+    const current = tab === 'combo' ? o.cast_combo : o.cast_layout;
+    const selected = x => (tab === 'character' ? chars.includes(x.id) : current === x.id);
+    const all = S.cast[tab] || [];
+    const items = all.filter(x => !q || `${x.name} ${x.summary || ''} ${x.description || ''}`.toLowerCase().includes(q));
+    const card = x => {
+      const on = selected(x);
+      const full = tab === 'character' && !on && chars.length >= MAX_CAST;
+      return `<button class="cp-item ${on ? 'on' : ''}" data-cp="${esc(x.id)}" type="button" ${full ? 'disabled title="Đã đủ 3 nhân vật — bỏ bớt để chọn"' : ''}>
+        <span class="cp-img">${castThumb(x)}${on ? '<b class="cp-check">✓</b>' : ''}</span>
+        <b class="cp-name">${esc(x.name)}</b><small>${esc(x.summary || x.description || x.idea || '')}</small></button>`;
+    };
+    const none = tab === 'character' || q ? '' : `<button class="cp-item cp-none ${current ? '' : 'on'}" data-cp="" type="button">
+        <span class="cp-img"><i>∅</i>${current ? '' : '<b class="cp-check">✓</b>'}</span><b class="cp-name">Không dùng</b>
+        <small>${tab === 'combo' ? 'Tự chọn nhân vật và layout' : 'AI tự nghĩ bối cảnh'}</small></button>`;
+    const grid = !all.length ? `<div class="empty">Chưa có mục nào — tạo ở màn <button class="link" data-goto-cast type="button">Nhân vật &amp; Layout</button>.</div>`
+      : items.length ? items.map(card).join('') : '<div class="empty">Không có mục khớp tìm kiếm.</div>';
+    const nameOf = (kind, id) => ((S.cast[kind] || []).find(x => x.id === id) || {}).name || '';
+    const count = k => (k === 'character' ? `${chars.length}/${MAX_CAST}` : (k === 'combo' ? o.cast_combo : o.cast_layout) ? '1' : '');
+    return `<div class="cp-card" role="dialog" aria-label="Chọn nhân vật và layout">
+      <div class="cp-head"><b>Nhân vật &amp; layout cố định</b><button class="cp-x" data-cp-close type="button" aria-label="Đóng">✕</button></div>
+      <div class="cp-tabs">${tabs.map(([k, label]) => `<button class="cp-tab ${k === tab ? 'on' : ''}" data-cp-tab="${k}" type="button">${label}${count(k) ? ` <span>${count(k)}</span>` : ''}</button>`).join('')}
+        <input id="cpSearch" type="search" placeholder="🔍 Tìm…" value="${esc(S.castQ || '')}"></div>
+      <p class="cp-hint muted">${CAST_TABS.find(([k]) => k === tab)[2]}</p>
+      <div class="cp-grid">${none}${grid}</div>
+      <div class="cp-foot"><small class="muted">${[o.cast_combo && `Bộ: ${esc(nameOf('combo', o.cast_combo))}`,
+        chars.length && `Nhân vật: ${chars.map(id => esc(nameOf('character', id))).join(', ')}`,
+        o.cast_layout && `Layout: ${esc(nameOf('layout', o.cast_layout))}`].filter(Boolean).join(' · ') || 'Chưa chọn gì — AI tự nghĩ nhân vật và bối cảnh'}</small>
+        <button class="btn ghost sm" data-cp-clear type="button">Bỏ chọn tất cả</button>
+        <button class="btn primary" data-cp-close type="button">Xong</button></div></div>`;
+  }
+
+  function drawCastPicker() {
+    const el = document.getElementById('stCastPicker');
+    if (!el) return;
+    const focus = document.activeElement && document.activeElement.id === 'cpSearch';
+    el.innerHTML = castPickerHtml();
+    if (focus) { const s = el.querySelector('#cpSearch'); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+  }
+
+  function openCastPicker(tab) {
+    S.castTab = tab; S.castQ = '';
+    let el = document.getElementById('stCastPicker');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'stCastPicker';
+      el.className = 'cp-overlay';
+      document.body.appendChild(el);
+      const close = () => { el.remove(); document.removeEventListener('keydown', onKey, true); };
+      const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+      document.addEventListener('keydown', onKey, true);
+      el.addEventListener('click', e => {
+        if (e.target === el) return close();
+        const t = e.target.closest('button');
+        if (!t || t.disabled) return;
+        if (t.dataset.cpClose !== undefined) return close();
+        if (t.dataset.gotoCast !== undefined) { close(); closeModal(); return navigate('cast'); }
+        if (t.dataset.cpTab) { S.castTab = t.dataset.cpTab; S.castQ = ''; return drawCastPicker(); }
+        if (t.dataset.cpClear !== undefined) {
+          S.draft.options = { ...S.draft.options, cast_combo: '', cast_characters: [], cast_layout: '' };
+          if (S.cur) markDirty();
+          render(); return drawCastPicker();
+        }
+        if (t.dataset.cp !== undefined) return pickCast(S.castTab, t.dataset.cp);
+      });
+      el.addEventListener('input', e => { if (e.target.id === 'cpSearch') { S.castQ = e.target.value; drawCastPicker(); } });
+    }
+    drawCastPicker();
   }
 
   // HyperFrames (đồ hoạ động dựng trên máy): cần Node.js 22+ và ffprobe; lần đầu app tự cài gói npm
@@ -157,13 +295,13 @@
   function postHtml(o, dis) {
     const m = S.meta;
     const on = Boolean(o.post_ai);
-    const model = m.text_models.find(x => x.id === (o.post_model || 'claude_browser')) || m.text_models[0];
+    const model = m.text_models.find(x => x.id === (MUSE ? 'muse_browser' : o.post_model || 'claude_browser')) || m.text_models[0];
     return `<div class="st-wide st-post ${on ? 'on' : ''}">
       <label class="st-post-head"><input type="checkbox" class="st-switch" data-opt="post_ai" ${on ? 'checked' : ''} ${dis}>
         <b>✨ Hậu kỳ AI sau bước ghép</b><span class="st-post-state">${on ? 'ĐANG BẬT' : 'ĐANG TẮT'}</span></label>
       <small class="muted">Model chat (mặc định <b>Claude trình duyệt</b>) đọc lời dẫn rồi chọn từ khoá để tô nổi trên phụ đề, gắn hiệu ứng âm thanh vào đúng từ, viết câu hook đầu video và chọn mức nhạc nền. App tự áp dụng khi ghép; model lỗi thì vẫn ghép bình thường.</small>
       ${on ? `<div class="st-post-body">
-        <label class="field"><span>Model hậu kỳ</span><select data-opt="post_model" ${dis}>${m.text_models.map(x => `<option value="${esc(x.id)}" ${model && x.id === model.id ? 'selected' : ''}>${esc(x.name)}${x.ready ? '' : ' — chưa có khoá'}</option>`).join('')}</select></label>
+        ${MUSE ? museField('Model hậu kỳ') : `<label class="field"><span>Model hậu kỳ</span><select data-opt="post_model" ${dis}>${m.text_models.map(x => `<option value="${esc(x.id)}" ${model && x.id === model.id ? 'selected' : ''}>${esc(x.name)}${x.ready ? '' : ' — chưa có khoá'}</option>`).join('')}</select></label>`}
         ${profileSelect('post_profile', model && model.site, o.post_profile, 'Profile model hậu kỳ')}
         <label class="field st-wide"><span>Kiểu hậu kỳ</span><select data-opt="post_style" ${dis}>${selectOptions((m.post_styles || []).map(x => [x.value, x.label]), o.post_style || 'basic')}</select></label>
         ${o.post_style === 'hyperframes' ? `<small class="st-wide st-hf ${hfReady() ? 'ok' : ''}">${hfStatusText()}</small>` : ''}
@@ -181,7 +319,7 @@
   function refVideoHtml(o, dis) {
     const m = S.meta;
     const rv = rvGet();
-    const model = S.rvModel || 'gemini_browser';
+    const model = MUSE ? 'muse_browser' : S.rvModel || 'gemini_browser';
     const sheet = rv && (rv.sheet_url || (S.cur && S.cur.ref_video_url));
     return `<div class="st-wide st-refvid"><div class="row st-refvid-head"><b>🎬 Video tham khảo</b>
         <small class="muted">tuỳ chọn — dán link hoặc chọn file video để phân tích hook, cấu trúc, nhịp, phong cách làm ý tưởng</small></div>
@@ -191,7 +329,7 @@
         <button class="btn ghost sm" data-rv-pick type="button" ${dis}>📁 Chọn file</button>
         <button class="btn primary sm" data-rv-go type="button" ${dis}>🔍 Phân tích</button></div>
       <div class="grid2"><label class="field"><span>Model phân tích ${VISION(model) ? '<small class="muted">· xem cả hình</small>' : '<small class="warn-text">· chỉ đọc tiêu đề / mô tả / phụ đề</small>'}</span>
-          <select data-rv-model ${dis}>${m.text_models.map(x => `<option value="${esc(x.id)}" ${x.id === model ? 'selected' : ''}>${VISION(x.id) ? '👁 ' : ''}${esc(x.name)}</option>`).join('')}</select></label>
+          ${MUSE ? '<div class="st-muse-lock">🔒 Meta · Muse AI</div>' : `<select data-rv-model ${dis}>${m.text_models.map(x => `<option value="${esc(x.id)}" ${x.id === model ? 'selected' : ''}>${VISION(x.id) ? '👁 ' : ''}${esc(x.name)}</option>`).join('')}</select>`}</label>
         <label class="field"><span>Cách dùng</span><select data-opt="ref_video_mode" ${dis}>${selectOptions((m.ref_video_modes || []).map(x => [x.value, x.label]), o.ref_video_mode || 'inspire')}</select></label></div>
       ${rv ? `<div class="st-refvid-res">${sheet ? `<img src="${esc(sheet)}" alt="Khung hình chính của video tham khảo">` : ''}
         <div class="st-refvid-brief"><div class="row"><b>${esc(rv.title || 'Video tham khảo')}</b><small class="muted">${Math.round(rv.duration || 0)} giây${rv.vision ? ' · đã xem hình' : ' · chỉ đọc chữ'}</small>
@@ -210,30 +348,31 @@
     return `<div class="st-opts">
       ${refVideoHtml(o, dis)}
       ${castHtml(o, dis)}
-      <label class="field"><span>Độ dài video</span><select data-opt="length" ${dis}>${selectOptions(m.lengths.map(n => [n, `~${n} giây (${Math.max(m.scenes[0], Math.min(m.scenes[1], Math.round(n / 8)))} cảnh)`]), o.length)}</select></label>
+      <label class="field"><span>Độ dài video</span><select data-opt="length" ${dis}>${selectOptions(m.lengths.map(n => [n, `~${n} giây (${(m.length_scenes || {})[n] || Math.max(m.scenes[0], Math.min(m.scenes[1], Math.round(n / 8)))} cảnh)`]), o.length)}</select></label>
       <label class="field"><span>Phong cách hình ảnh (tuỳ chọn)</span><input data-opt="style" value="${esc(o.style || '')}" placeholder="VD: điện ảnh, ánh sáng ấm, phim Hàn" ${dis}></label>
       <label class="field"><span>Tỉ lệ khung hình</span><select data-opt="aspect" ${dis} title="Áp dụng cho storyboard, ảnh khung đầu, clip và video ghép">${selectOptions((m.aspects || []).map(x => [x.value, x.label]), o.aspect || '9:16')}</select></label>
       <label class="field"><span>Chất lượng clip</span><select data-opt="quality" ${dis} title="Độ phân giải yêu cầu model video tạo — model không hỗ trợ thì tự dùng mức gần nhất">${selectOptions((m.qualities || []).map(x => [x.value, x.label]), o.quality || '720p')}</select></label>
-      <label class="field"><span>Model viết storyboard</span><select data-opt="model" ${dis}>${m.text_models.map(x => `<option value="${esc(x.id)}" ${x.id === o.model ? 'selected' : ''}>${esc(x.name)}${x.ready ? '' : ' — chưa có khoá'}</option>`).join('')}</select></label>
+      ${MUSE ? museField('Model viết storyboard') : `<label class="field"><span>Model viết storyboard</span><select data-opt="model" ${dis}>${m.text_models.map(x => `<option value="${esc(x.id)}" ${x.id === o.model ? 'selected' : ''}>${esc(x.name)}${x.ready ? '' : ' — chưa có khoá'}</option>`).join('')}</select></label>`}
       ${profileSelect('text_profile', textModel && textModel.site, o.text_profile, 'Profile viết storyboard')}
       <label class="check st-wide"><input type="checkbox" data-opt="prompt_polish" ${o.prompt_polish ? 'checked' : ''} ${dis}> ✨ Chuốt prompt từng cảnh bằng AI sau khi viết storyboard
         <small>Model viết lại prompt ảnh / chuyển động chi tiết hơn (góc máy, ánh sáng, ống kính, hành động) — thêm 1 lượt hỏi model</small></label>
-      <label class="field"><span>Model ảnh khung đầu</span><select data-opt="image_engine" ${dis}>${selectOptions(Object.entries(m.image_engines).map(([k, v]) => [k, v.name]), o.image_engine)}</select></label>
+      ${MUSE ? museField('Model ảnh khung đầu') : `<label class="field"><span>Model ảnh khung đầu</span><select data-opt="image_engine" ${dis}>${selectOptions(Object.entries(m.image_engines).map(([k, v]) => [k, v.name]), o.image_engine)}</select></label>`}
       ${img.browser ? profileSelect('image_profile', siteOf(o.image_engine), o.image_profile, 'Profile tạo ảnh') : ''}
       <label class="field st-wide"><span>Kiểu dựng cảnh</span><select data-opt="scene_style" ${dis}>${selectOptions((m.scene_styles || []).map(x => [x.value, x.label]), o.scene_style || 'video')}</select></label>
       ${o.scene_style === 'whiteboard' ? `
       <label class="field"><span>Chất lượng whiteboard</span><select data-opt="wb_quality" ${dis}>${selectOptions([['fast', 'Nhanh — cạnh dài 1080px'], ['hd', 'Nét — cạnh dài 1920px (~3 lần lâu hơn)']], o.wb_quality || 'fast')}</select></label>
       <label class="check"><input type="checkbox" data-opt="wb_hand" ${o.wb_hand !== false ? 'checked' : ''} ${dis}> Hiện bàn tay cầm bút</label>
       <p class="hint st-wide">Whiteboard: model ảnh vẽ line-art nền giấy kem cho từng cảnh, máy bạn dựng tay vẽ lần lượt từng ý đúng lúc lời dẫn được đọc (bộ dựng mã nguồn mở srt-whiteboard-animation — lần đầu app tự tải + cài, cần Python 3). Dùng giọng đọc AI; không cần model video.</p>`
-      : `<label class="field"><span>Model video từng cảnh</span><select data-opt="video_engine" ${dis}>${selectOptions(Object.entries(m.video_engines).map(([k, v]) => [k, `${v.name} · ${v.durations.join('/')}`]), o.video_engine)}</select></label>
+      : `${MUSE ? museField('Model video từng cảnh · 5/10s') : `<label class="field"><span>Model video từng cảnh</span><select data-opt="video_engine" ${dis}>${selectOptions(Object.entries(m.video_engines).map(([k, v]) => [k, `${v.name} · ${v.durations.join('/')}`]), o.video_engine)}</select></label>`}
       ${o.video_engine.endsWith('_browser') ? profileSelect('video_profile', siteOf(o.video_engine), o.video_profile, 'Profile tạo video') : ''}`}
       ${o.scene_style === 'whiteboard' ? '' : `      <label class="check st-wide st-dub"><input type="checkbox" data-opt="dub" ${o.dub !== false ? 'checked' : ''} ${dis}> Lồng tiếng AI (giọng đọc máy)
         <small>${o.dub !== false ? 'Tắt để dùng giọng nói gốc của video được tạo' : 'Đang dùng giọng nói gốc: nhân vật nói lời dẫn ngay trong clip — cần model video có tiếng (Grok, Veo, Muse…). Clip tạo trước khi tắt không có lời nói → làm lại clip.'}</small></label>`}
+      <label class="check st-wide"><input type="checkbox" data-opt="lock_outfit" ${o.lock_outfit !== false ? 'checked' : ''} ${dis}> Giữ nguyên trang phục nhân vật ở mọi cảnh
+        <small>${o.lock_outfit !== false ? 'Khuôn mặt luôn được khoá. Tắt để trang phục đổi theo mô tả từng cảnh.' : 'Khuôn mặt vẫn khoá; trang phục đổi theo mô tả từng cảnh (làm lại ảnh khung đầu để áp dụng).'}</small></label>
       ${o.dub !== false || o.scene_style === 'whiteboard' ? `<label class="field"><span>Giọng đọc</span><select data-opt="voice" ${dis}>${selectOptions(m.voices.map(v => [v.id, v.name]), o.voice)}</select></label>
       <label class="field"><span>Tốc độ đọc</span><select data-opt="rate" ${dis}>${selectOptions(m.rates.map(r => [r, r]), o.rate)}</select></label>` : ''}
       <label class="check"><input type="checkbox" data-opt="subtitles" ${o.subtitles ? 'checked' : ''} ${dis}> Phụ đề</label>
       <label class="check"><input type="checkbox" data-opt="bgm" ${o.bgm ? 'checked' : ''} ${dis}> Nhạc nền</label>
-      <label class="check st-wide"><input type="checkbox" data-opt="show_browser" ${o.show_browser ? 'checked' : ''} ${dis}> <span>Hiện Chrome — xem trực tiếp model trình duyệt (ChatGPT, Grok, Gemini…) khi viết storyboard / tạo ảnh / tạo clip</span></label>
       <div class="st-wide st-rules"><b>Ràng buộc prompt <small>(ảnh khung đầu &amp; clip)</small></b>
         <div class="st-bans">${(m.bans || []).map(b => `<label class="check"><input type="checkbox" data-ban="${esc(b.value)}" ${bansOf(o).includes(b.value) ? 'checked' : ''} ${dis}> ${esc(b.label)}</label>`).join('')}</div>
         ${bansOf(o).includes('logos') ? '' : logoHtml(o, dis)}
@@ -255,7 +394,7 @@
 
   function newHtml() {
     const d = S.draft && !S.draft.id ? S.draft : (S.draft = { name: '', idea: '', options: {
-      length: 60, style: '', model: 'chatgpt_browser', text_profile: '', image_engine: S.meta.default_image_engine,
+      length: 60, style: '', model: MUSE ? 'muse_browser' : 'chatgpt_browser', text_profile: '', image_engine: MUSE ? 'muse_browser' : S.meta.default_image_engine,
       image_profile: '', video_engine: 'grok_browser', video_profile: '', voice: 'vi-VN-HoaiMyNeural', rate: '+0%',
       subtitles: true, bgm: true, auto: true, show_browser: false, dub: true } });
     const n = ideaLines(d.idea).length;
@@ -334,7 +473,6 @@
           </div>
           ${run ? '' : `<div class="st-actions-side">
             <label class="check st-postchip ${o.post_ai ? 'on' : ''}" title="Hậu kỳ AI sau bước ghép: model chat (mặc định Claude trình duyệt) làm phụ đề + âm thanh nổi bật — chỉnh chi tiết ở ⚙"><input type="checkbox" data-opt="post_ai" ${o.post_ai ? 'checked' : ''}> ✨ Hậu kỳ AI: <b>${o.post_ai ? 'Bật' : 'Tắt'}</b></label>
-            <label class="check st-postchip ${o.show_browser ? 'on' : ''}" title="Hiện cửa sổ Chrome khi model trình duyệt làm việc (lưu cùng dự án)"><input type="checkbox" data-opt="show_browser" ${o.show_browser ? 'checked' : ''}> Hiện Chrome</label>
           </div>`}
         </div>
         ${p.error ? `<div class="camp-banner bad">${esc(p.error)}</div>` : ''}
@@ -354,7 +492,7 @@
         ${charactersHtml(d, run)}</div>
       <div class="st-board-head"><b>STORYBOARD · ${d.scenes.length} cảnh · ~${total} giây hình</b>
         ${run ? '' : '<button class="btn ghost sm" data-act="add-scene" type="button">+ Thêm cảnh</button>'}</div>
-      <div class="st-board">${d.scenes.map((s, i) => sceneHtml(s, i, durations, run)).join('')
+      <div class="st-board asp-${{ '16:9': 'wide', '1:1': 'square' }[o.aspect] || 'tall'}">${d.scenes.map((s, i) => sceneHtml(s, i, durations, run)).join('')
         || `<div class="empty">${run ? 'Đang viết storyboard…' : 'Chưa có storyboard — bấm ✍ Viết storyboard (hoặc sửa ý tưởng rồi “Lưu &amp; viết lại storyboard”).'}</div>`}</div>`;
   }
 
@@ -404,30 +542,51 @@
     if (lg) lg.scrollTop = lg.scrollHeight;  // tự cuộn tới dòng mới nhất
   }
 
+  // giống app/studio.py speech_seconds: số giây cần để nói hết lời của cảnh
+  function speechSeconds(s) {
+    const texts = (s.lines || []).map(l => l.text || '').filter(t => t.trim());
+    if (!texts.length && (s.narration || '').trim()) texts.push(s.narration);
+    const words = texts.reduce((a, t) => a + t.trim().split(/\s+/).length, 0);
+    return words ? words / 2.6 + 0.35 * Math.max(0, texts.length - 1) + 1 : 0;
+  }
+
+  function speechWarn(s, durations) {
+    const need = speechSeconds(s);
+    if (need <= (+s.seconds || 0) + 0.05) return '';
+    const longest = Math.max(...durations);
+    return `<small class="warn-text st-speech-warn">⚠ Lời thoại cần ~${Math.ceil(need)}s nhưng cảnh ${s.seconds}s — ${need > longest
+      ? `rút gọn lời hoặc tách cảnh (clip tối đa ${longest}s)` : `chọn ≥ ${durations.filter(d => d >= need)[0]}s`} để không bị ngắt câu</small>`;
+  }
+
   function sceneHtml(s, i, durations, run) {
     const dis = run ? 'disabled' : '';
+    const lines = (s.lines || []).length;
     return `<div class="card st-scene ${esc(s.status || '')}" data-i="${i}">
       <div class="st-media">${s.clip_url ? `<video src="${esc(s.clip_url)}" controls muted playsinline poster="${esc(s.frame_url || '')}"></video>`
         : s.frame_url ? `<img src="${esc(s.frame_url)}" alt="">` : `<span>${s.status === 'frame_running' ? 'Đang tạo ảnh…' : 'Chưa có ảnh'}</span>`}
         <em>${i + 1}</em>${SCENE_STATUS[s.status] ? `<b class="st-badge ${esc(s.status)}">${esc(SCENE_STATUS[s.status])}</b>` : ''}</div>
-      <div class="st-fields">
-        <div class="row st-scene-head"><input data-sf="title" value="${esc(s.title || '')}" ${dis} aria-label="Tiêu đề cảnh" title="${esc(s.title || '')}">
+      <div class="st-fields st-col-story">
+        <div class="st-scene-head"><input data-sf="title" value="${esc(s.title || '')}" ${dis} aria-label="Tiêu đề cảnh" title="${esc(s.title || '')}">
           <select data-sf="seconds" ${dis} aria-label="Số giây">${durations.map(n => `<option value="${n}" ${n === +s.seconds ? 'selected' : ''}>${n}s</option>`).join('')}</select></div>
         ${s.error ? `<small class="warn-text">${esc(s.error)}</small>` : ''}
+        ${speechWarn(s, durations)}
         ${sceneCastHtml(s, dis)}
-        ${(s.lines || []).length ? linesHtml(s, dis) : `<label class="field"><span>Lời đọc (tiếng Việt)</span><textarea data-sf="narration" rows="2" ${dis}>${esc(s.narration || '')}</textarea></label>
-        ${dis ? '' : '<button class="btn ghost sm st-to-lines" data-line-add type="button" title="Chia lời đọc thành các câu thoại, mỗi câu một nhân vật / giọng">+ Chia thành thoại nhiều nhân vật</button>'}`}
-        <div class="row st-voice"><span>${(s.lines || []).length ? 'Giọng người dẫn chuyện' : 'Giọng người nói'}</span>
-          <select data-sf="speaker" ${dis} title="Ai nói lời dẫn cảnh này — lồng tiếng AI đổi cao độ/tốc độ theo vai; giọng gốc: dặn model video nói đúng kiểu giọng">${selectOptions((S.meta.speakers || []).map(x => [x.value, x.label]), s.speaker || '')}</select>
-          <button class="btn ghost sm" data-voice-preview type="button" title="Nghe thử lời đọc với giọng này (lồng tiếng AI)">🔊</button></div>
-        <label class="field"><span>Khung hình đầu (prompt ảnh)</span><textarea data-sf="image_prompt" rows="2" ${dis}>${esc(s.image_prompt || '')}</textarea></label>
+        ${lines ? linesHtml(s, dis) : `<label class="field"><span>Lời đọc (tiếng Việt)</span><textarea data-sf="narration" rows="2" ${dis}>${esc(s.narration || '')}</textarea></label>`}
+        <div class="st-voice"><span>${lines ? 'Giọng dẫn chuyện' : 'Giọng đọc'}</span>
+          <select data-sf="speaker" ${dis} title="Giọng lời dẫn của cảnh — lồng tiếng AI đổi cao độ/tốc độ theo vai; giọng gốc: dặn model video nói đúng kiểu giọng">${selectOptions((S.meta.speakers || []).map(x => [x.value, x.label]), s.speaker || '')}</select>
+          <button class="btn ghost sm" data-voice-preview type="button" title="Nghe thử lời đọc với giọng này (lồng tiếng AI)">🔊</button>
+          ${lines || dis ? '' : '<button class="btn ghost sm" data-line-add type="button" title="Chia lời đọc thành các câu thoại, mỗi câu một nhân vật / giọng">+ Thoại nhiều nhân vật</button>'}</div>
+      </div>
+      <div class="st-fields st-col-prompt">
+        <label class="field"><span>Khung hình đầu (prompt ảnh)</span><textarea data-sf="image_prompt" rows="3" ${dis}>${esc(s.image_prompt || '')}</textarea></label>
         <label class="field"><span>Chuyển động / máy quay</span><textarea data-sf="motion_prompt" rows="2" ${dis}>${esc(s.motion_prompt || '')}</textarea></label>
         ${run ? '' : `<div class="row st-scene-act">
-          <button class="btn ghost sm" data-scene="frame" type="button">↻ Ảnh</button>
-          <button class="btn ghost sm" data-scene="clip" type="button" ${s.frame_url ? '' : 'disabled'}>↻ Clip</button>
-          <button class="btn ghost sm" data-move="-1" type="button" ${i ? '' : 'disabled'}>↑</button>
-          <button class="btn ghost sm" data-move="1" type="button">↓</button>
-          <button class="btn ghost sm" data-del-scene type="button">Xoá cảnh</button></div>`}
+          <button class="btn ghost sm" data-scene="frame" type="button" title="Tạo lại ảnh khung đầu">↻ Ảnh</button>
+          <button class="btn ghost sm" data-scene="clip" type="button" ${s.frame_url ? '' : 'disabled'} title="Tạo lại clip">↻ Clip</button>
+          <span class="st-act-gap"></span>
+          <button class="btn ghost sm" data-move="-1" type="button" ${i ? '' : 'disabled'} title="Lên">↑</button>
+          <button class="btn ghost sm" data-move="1" type="button" title="Xuống">↓</button>
+          <button class="btn ghost sm st-pdel" data-del-scene type="button" title="Xoá cảnh">🗑</button></div>`}
       </div></div>`;
   }
 
@@ -460,9 +619,9 @@
   function linesHtml(s, dis) {
     const chars = (S.draft.bible || {}).characters || [];
     const who = [['', '🎙 Người dẫn chuyện'], ...chars.map(c => [c.name, c.name])];
-    return `<div class="st-lines"><div class="row st-lines-head"><span>Lời thoại <small class="muted">— mỗi câu đọc bằng giọng của người nói</small></span>
-        ${dis ? '' : '<button class="btn ghost sm" data-line-add type="button">+ Câu thoại</button>'}</div>
-      ${(s.lines || []).map((l, k) => `<div class="row st-line" data-li="${k}">
+    return `<div class="st-lines"><div class="st-lines-head"><span>Lời thoại <small class="muted">· mỗi câu một giọng</small></span>
+        ${dis ? '' : '<button class="link" data-line-add type="button">+ Câu thoại</button>'}</div>
+      ${(s.lines || []).map((l, k) => `<div class="st-line" data-li="${k}">
         <select data-line="who" ${dis}>${selectOptions(who, l.who || '')}</select>
         <input data-line="text" value="${esc(l.text || '')}" placeholder="Câu nói (tiếng Việt)" ${dis}>
         <input data-line="tone" value="${esc(l.tone || '')}" placeholder="Cảm xúc" ${dis}>
@@ -481,7 +640,7 @@
 
   async function previewVoice(btn, text, speaker) {
     btn.disabled = true;
-    const res = await api('studio_voice_preview', text, speaker || '', S.draft.options.voice, S.draft.options.rate);
+    const res = await api(CFG.api + 'voice_preview', text, speaker || '', S.draft.options.voice, S.draft.options.rate);
     btn.disabled = false;
     if (!res.ok) return toast(res.error, 'error');
     new Audio(res.data).play();
@@ -494,11 +653,12 @@
   }
 
   // Gắn sự kiện cho trang Studio, hoặc cho khung Cài đặt dự án trong dialog (#stOptsDlg — mất cùng dialog khi đóng)
-  function bind(root = $('#studioBody')) {
+  function bind(root = $(CFG.body)) {
     root.oninput = e => {
       const t = e.target;
       const d = S.draft;
       if (t.dataset.rvBrief !== undefined) { const rv = rvGet(); if (rv) { rv.brief = t.value; markDirty(); } return; }
+      if (t.id === 'stSearch') { S.q = t.value; const g = root.querySelector('#stGrid'); if (g) g.innerHTML = gridHtml(); return; }
       if (t.id === 'stRvSrc') { S.rvSource = t.value; return; }
       if (t.id === 'stIdea') {
         d.idea = t.value;
@@ -535,7 +695,7 @@
           t.closest('label').querySelector('output').textContent = `${Math.round(t.value * 100)}%`;
         }
         if (S.cur) markDirty();
-        if (['model', 'image_engine', 'video_engine', 'scene_style', 'dub', 'ref_note', 'negative_extra', 'post_ai', 'post_model',
+        if (['model', 'image_engine', 'video_engine', 'scene_style', 'dub', 'lock_outfit', 'ref_note', 'negative_extra', 'post_ai', 'post_model',
           'post_subs', 'subtitles', 'post_style'].includes(t.dataset.opt)) render();
       } else if (t.dataset.ban) {  // ràng buộc prompt: bật/tắt từng thứ bị cấm trong hình
         const all = (S.meta.bans || []).map(b => b.value);
@@ -565,7 +725,7 @@
         const label = t.textContent;
         t.disabled = true; t.textContent = '⏳ Đang phân tích… (1–3 phút)';
         const opts = (S.draft || {}).options || {};
-        const res = await api('studio_analyze_video', src, S.rvModel || 'gemini_browser', '', !!opts.show_browser);
+        const res = await api(CFG.api + 'analyze_video', src, MUSE ? 'muse_browser' : S.rvModel || 'gemini_browser', '', !!opts.show_browser);
         t.disabled = false; t.textContent = label;
         if (!res.ok) return toast(res.error, 'error');
         rvSet(res.result);
@@ -578,7 +738,20 @@
         if (S.draft) S.draft.options = { ...S.draft.options, ref_video_use: false };
         markDirty(); return render();
       }
-      if (t.dataset.new !== undefined) { S.cur = null; S.draft = null; S.dirty = false; S.refs = []; S.newLogo = ''; S.newRefVideo = null; S.logs = []; return render(); }
+      if (t.dataset.new !== undefined) { S.cur = null; S.draft = null; S.dirty = false; S.refs = []; S.newLogo = ''; S.newRefVideo = null; S.logs = []; S.view = 'new'; return render(); }
+      if (t.dataset.back !== undefined) {
+        if (S.dirty && !confirm('Có thay đổi chưa lưu — bỏ thay đổi và quay lại danh sách dự án?')) return;
+        S.cur = null; S.draft = null; S.dirty = false; S.logs = []; S.view = 'list'; S.editIdea = false;
+        await loadList(); return render();
+      }
+      if (t.dataset.filter) { S.filter = t.dataset.filter; return render(); }
+      if (t.dataset.delId) {
+        const p = S.projects.find(x => x.id === t.dataset.delId);
+        if (!p || !confirm(`Xoá dự án “${p.name}” và toàn bộ ảnh / clip của nó? Video đã ghép trong Thư viện video vẫn giữ.`)) return;
+        const res = await api(CFG.api + 'delete', p.id);
+        if (!res.ok) return toast(res.error, 'error');
+        await loadList(); toast('Đã xoá dự án', 'ok'); return render();
+      }
       if (t.dataset.mode) { S.batch = t.dataset.mode === 'batch'; return render(); }
       if (t.dataset.charAdd !== undefined) { charsOf(S.draft).push({ name: `Nhân vật ${charsOf(S.draft).length + 1}`, look: '', outfit: '', voice: '' }); markDirty(); return render(); }
       if (t.dataset.charDel !== undefined) {
@@ -623,7 +796,7 @@
       if (t.dataset.voicePreview !== undefined) {  // nghe thử lời đọc cảnh với vai giọng đang chọn
         const sc = S.draft.scenes[+t.closest('[data-i]').dataset.i];
         t.disabled = true;
-        const res = await api('studio_voice_preview', sc.narration || '', sc.speaker || '', S.draft.options.voice, S.draft.options.rate);
+        const res = await api(CFG.api + 'voice_preview', sc.narration || '', sc.speaker || '', S.draft.options.voice, S.draft.options.rate);
         t.disabled = false;
         if (!res.ok) return toast(res.error, 'error');
         return new Audio(res.data).play();
@@ -640,7 +813,7 @@
       if (t.dataset.resumeAll !== undefined) {
         if (S.dirty && !confirm('Có thay đổi chưa lưu ở dự án đang mở — vẫn chạy tiếp tất cả?')) return;
         t.disabled = true;
-        const res = await api('studio_resume_all');
+        const res = await api(CFG.api + 'resume_all');
         t.disabled = false;
         if (!res.ok) return toast(res.error, 'error');
         const r = res.result;
@@ -655,24 +828,7 @@
       }
       if (t.dataset.rmref !== undefined) { S.refs.splice(+t.dataset.rmref, 1); return render(); }
       if (t.dataset.gotoCast !== undefined) { closeModal(); return navigate('cast'); }
-      if (t.dataset.castCombo !== undefined) {  // bộ kết hợp: điền sẵn nhân vật + layout của bộ
-        const combo = (S.cast.combo || []).find(x => x.id === t.dataset.castCombo);
-        const o = S.draft.options;
-        S.draft.options = combo ? { ...o, cast_combo: combo.id, cast_characters: (combo.characters || []).slice(0, MAX_CAST), cast_layout: combo.layout || '' }
-          : { ...o, cast_combo: '' };
-        if (S.cur) markDirty();
-        return render();
-      }
-      if (t.dataset.castChar !== undefined || t.dataset.castLayout !== undefined) {  // chọn / bỏ nhân vật, layout cố định
-        const o = S.draft.options;
-        if (t.dataset.castChar !== undefined) {
-          const set = new Set(o.cast_characters || []);
-          if (set.has(t.dataset.castChar)) set.delete(t.dataset.castChar); else if (set.size < MAX_CAST) set.add(t.dataset.castChar);
-          S.draft.options = { ...o, cast_characters: [...set] };
-        } else S.draft.options = { ...o, cast_layout: t.dataset.castLayout };
-        if (S.cur) markDirty();
-        return render();
-      }
+      if (t.dataset.castPick) return openCastPicker(t.dataset.castPick);  // hộp chọn nhân vật / layout / bộ kết hợp
       if (t.dataset.logoPick !== undefined || t.dataset.logoRm !== undefined) {  // tải lên / bỏ logo thương hiệu
         let path = '';
         if (t.dataset.logoPick !== undefined) {
@@ -681,7 +837,7 @@
           path = files[0];
         }
         if (!S.cur) { S.newLogo = path; return render(); }
-        const res = await api('studio_set_logo', S.cur.id, path);
+        const res = await api(CFG.api + 'set_logo', S.cur.id, path);
         if (!res.ok) return toast(res.error, 'error');
         S.cur = res.project;
         if (S.dirty) S.draft.logo_url = S.cur.logo_url; else S.draft = clone(S.cur);
@@ -734,10 +890,10 @@
         return;
       }
       if (act === 'retry') return start('make', t.dataset.idx.split(',').map(Number), 'both');  // làm lại cảnh lỗi rồi ghép
-      if (act === 'cancel') { await api('studio_cancel', S.cur.id); return toast('Đang dừng…', 'warn'); }
+      if (act === 'cancel') { await api(CFG.api + 'cancel', S.cur.id); return toast('Đang dừng…', 'warn'); }
       if (act === 'delete') {
         if (!confirm('Xoá dự án Studio này (ảnh, clip của dự án)? Video đã ghép trong Thư viện video vẫn giữ.')) return;
-        const res = await api('studio_delete', S.cur.id);
+        const res = await api(CFG.api + 'delete', S.cur.id);
         if (!res.ok) return toast(res.error, 'error');
         S.cur = null; S.draft = null; await loadList(); return render();
       }
@@ -756,7 +912,7 @@
     S.dirty = false; S.logs = []; S.progress = null; S.editIdea = false; S.ideaDraft = null;
     render();
     if (!S.cur) return;
-    const res = await api('studio_logs', id);  // dự án đang chạy (hoặc vừa xong) → hiện lại tiến trình + nhật ký
+    const res = await api(CFG.api + 'logs', id);  // dự án đang chạy (hoặc vừa xong) → hiện lại tiến trình + nhật ký
     if (res.ok && res.task && S.cur && S.cur.id === id) {
       S.tasks[res.task.id] = id;
       S.logs = res.logs || [];
@@ -803,7 +959,7 @@
       if (t.dataset.cloneGo === undefined) return;
       const mode = ($('#stCloneDlg input[name=stCloneMode]:checked') || {}).value || 'storyboard';
       t.disabled = true;
-      const res = await api('studio_clone', p.id, mode, $('#stCloneName').value, refs.map(r => r.path));
+      const res = await api(CFG.api + 'clone', p.id, mode, $('#stCloneName').value, refs.map(r => r.path));
       t.disabled = false;
       if (!res.ok) return toast(res.error, 'error');
       closeModal();
@@ -820,7 +976,7 @@
     if (S.batch) return createBatch(btn);
     if ((d.idea || '').trim().length < 10) return toast('Hãy mô tả ý tưởng video', 'warn');
     btn.disabled = true;
-    const res = await api('studio_create', { idea: d.idea, name: d.name, refs: S.refs, logo: S.newLogo || '', options: d.options,
+    const res = await api(CFG.api + 'create', { idea: d.idea, name: d.name, refs: S.refs, logo: S.newLogo || '', options: d.options,
       ref_video: S.newRefVideo || null });
     btn.disabled = false;
     if (!res.ok) return toast(res.error, 'error');
@@ -839,7 +995,7 @@
     if (n > 20) return toast(`Tối đa 20 ý tưởng mỗi lần (đang có ${n})`, 'warn');
     if (!confirm(`Tạo ${n} video? Mỗi video sẽ tự viết storyboard, tạo ảnh + clip từng cảnh rồi ghép — dùng lượt của các model đã chọn.`)) return;
     btn.disabled = true;
-    const res = await api('studio_create_batch', { idea: d.idea, name: d.name, refs: S.refs, logo: S.newLogo || '', options: d.options,
+    const res = await api(CFG.api + 'create_batch', { idea: d.idea, name: d.name, refs: S.refs, logo: S.newLogo || '', options: d.options,
       ref_video: S.newRefVideo || null });
     btn.disabled = false;
     if (!res.ok) return toast(res.error, 'error');
@@ -852,7 +1008,7 @@
 
   async function save(notify) {
     const d = S.draft;
-    const res = await api('studio_save', S.cur.id, { name: d.name, idea: d.idea, options: d.options, bible: d.bible,
+    const res = await api(CFG.api + 'save', S.cur.id, { name: d.name, idea: d.idea, options: d.options, bible: d.bible,
       ref_video: d.ref_video || null,
       scenes: d.scenes.map(s => ({ index: s.index, title: s.title, narration: s.narration, speaker: s.speaker || '', image_prompt: s.image_prompt,
         motion_prompt: s.motion_prompt, seconds: s.seconds, lines: s.lines || [],
@@ -866,7 +1022,7 @@
 
   async function start(action, indexes = [], what = 'both') {
     if (S.dirty && !(await save(false))) return;
-    const res = await api('studio_start', S.cur.id, action, indexes, what);
+    const res = await api(CFG.api + 'start', S.cur.id, action, indexes, what);
     if (!res.ok) return toast(res.error, 'error');
     S.tasks[res.task] = S.cur.id;
     S.logs = []; S.progress = { pct: 0, status: 'Đang chờ tới lượt' };
@@ -878,7 +1034,7 @@
 
   // ------------------------------------------------------------ sự kiện backend (studio_*)
   function update(event, data) {
-    const visible = !$('#page-studio').classList.contains('hidden');
+    const visible = !$(CFG.page).classList.contains('hidden');
     if (event === 'studio_update') {
       const i = S.projects.findIndex(p => p.id === data.id);
       if (i >= 0) S.projects[i] = data; else S.projects.unshift(data);
@@ -893,22 +1049,25 @@
       if (visible) paintLive();  // chỉ vẽ lại khung tiến trình / nhật ký
       return;
     } else if (event === 'studio_done' || event === 'studio_error' || event === 'studio_cancelled') {
-      if (event === 'studio_error') toast(`Studio: ${data.message}`, 'error');
-      if (event === 'studio_done' && data.result && data.result.status === 'done') toast('Studio: video đã xong — có trong Thư viện video', 'ok');
+      if (event === 'studio_error') toast(`${CFG.label}: ${data.message}`, 'error');
+      if (event === 'studio_done' && data.result && data.result.status === 'done') toast(`${CFG.label}: video đã xong — có trong Thư viện video`, 'ok');
       loadList().then(() => { if (visible) render(); });
       return;
     } else return;
-    const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('#studioBody textarea, #studioBody input');
+    const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest(`${CFG.body} textarea, ${CFG.body} input`);
     // đang xem video (cảnh / video hoàn chỉnh) → chờ dừng xem rồi mới vẽ lại, không làm video tải lại giữa chừng
-    const playing = [...document.querySelectorAll('#studioBody video')].some(v => !v.paused && !v.ended);
+    const playing = [...document.querySelectorAll(`${CFG.body} video`)].some(v => !v.paused && !v.ended);
     if (visible && (typing || playing)) { S.pendingRender = true; return; }
     if (visible) render();
   }
 
   // video dừng / hết → vẽ lại phần đã hoãn
   document.addEventListener('pause', e => {
-    if (S.pendingRender && e.target.closest && e.target.closest('#studioBody') && !$('#page-studio').classList.contains('hidden')) render();
+    if (S.pendingRender && e.target.closest && e.target.closest(CFG.body) && !$(CFG.page).classList.contains('hidden')) render();
   }, true);
 
-  window.StudioPage = { show, update };
-})();
+  return { show, update };
+}
+
+window.StudioPage = createStudioPage({ body: '#studioBody', page: '#page-studio', api: 'studio_', label: 'Studio' });
+window.MuseStudioPage = createStudioPage({ body: '#mstudioBody', page: '#page-mstudio', api: 'mstudio_', label: 'Studio Muse AI', muse: true });
