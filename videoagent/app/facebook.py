@@ -148,7 +148,7 @@ class FacebookManager:
     def load_pages(self) -> dict:
         token = self._data.get("user_token")
         if not token:
-            raise FacebookError("Chưa có User Access Token — dán token từ Graph API Explorer trước")
+            raise FacebookError("Chưa có User Access Token — nhập ở Cài đặt → API & kết nối")
         connected = {p["id"] for p in self._data.get("pages", []) if p.get("connected")}
         pages, after = [], None
         while True:
@@ -182,8 +182,139 @@ class FacebookManager:
             raise FacebookError("Không tìm thấy page — hãy tải lại danh sách")
         return page
 
-    def post(self, page_id: str, message: str, file_path: str = "") -> dict:
-        """Đăng bài lên page đã kết nối: chữ, ảnh (/photos) hoặc video (/videos)."""
+    @staticmethod
+    def _schedule(scheduled_at: int | None) -> dict:
+        """Tham số hẹn giờ của Graph API: bài ở trạng thái chưa đăng, Facebook tự đăng lúc scheduled_publish_time."""
+        if not scheduled_at:
+            return {}
+        return {"published": "false", "scheduled_publish_time": str(int(scheduled_at))}
+
+    def _video_post(self, video_id: str, token: str) -> tuple[str, str]:
+        """ID bài viết + link của video vừa tải (cần post_id để chạy quảng cáo cho bài video)."""
+        for fields in ("post_id,permalink_url", "permalink_url"):
+            try:
+                info = requests.get(f"{self._graph}/{video_id}", params={"fields": fields, "access_token": token},
+                                    timeout=30).json()
+            except (requests.RequestException, ValueError):
+                return "", ""
+            if "error" not in info:
+                link = info.get("permalink_url") or ""
+                return info.get("post_id") or "", (f"https://www.facebook.com{link}" if link.startswith("/") else link)
+        return "", ""
+
+    def post_album(self, page_id: str, message: str, files: list, scheduled_at: int | None = None) -> dict:
+        """Đăng nhiều ảnh trong một bài: tải từng ảnh ở chế độ chưa đăng (published=false) rồi gắn vào /feed.
+        scheduled_at (Unix time) → hẹn giờ đăng."""
+        page = self._page(page_id)
+        if not page.get("connected"):
+            raise FacebookError("Page chưa được kết nối")
+        token = page.get("access_token")
+        if not token:
+            raise FacebookError("Thiếu page token — tạo lại User Access Token có quyền pages_manage_posts rồi dán lại")
+        paths = [Path(f) for f in files if Path(f).suffix.lower() in IMAGE_EXT and Path(f).is_file()]
+        if not paths:
+            raise FacebookError("Không có ảnh hợp lệ để đăng")
+        if len(paths) == 1:
+            return self.post(page_id, message, str(paths[0]), scheduled_at)
+        media = []
+        try:
+            for path in paths:
+                with open(path, "rb") as fh:
+                    resp = requests.post(f"{self._graph}/{page_id}/photos", data={"published": "false",
+                                         "access_token": token}, files={"source": (path.name, fh)}, timeout=300)
+                data = resp.json() if resp.content else {}
+                if resp.status_code != 200 or "error" in data:
+                    raise FacebookError(f"Facebook báo lỗi khi tải ảnh {path.name}: "
+                                        f"{data.get('error', {}).get('message', resp.text[:200])}")
+                media.append({"media_fbid": data["id"]})
+            resp = requests.post(f"{self._graph}/{page_id}/feed", data={
+                "message": (message or "").strip(), "attached_media": json.dumps(media), "access_token": token,
+                **self._schedule(scheduled_at)}, timeout=60)
+        except requests.RequestException as exc:
+            raise FacebookError(f"Không kết nối được Facebook: {exc}") from exc
+        data = resp.json() if resp.content else {}
+        if resp.status_code != 200 or "error" in data:
+            raise FacebookError(f"Facebook báo lỗi: {data.get('error', {}).get('message', resp.text[:200])}")
+        post_id = data.get("id", "")
+        return {"id": post_id, "page": page["name"], "scheduled": bool(scheduled_at),
+                "url": f"https://www.facebook.com/{post_id}" if post_id else ""}
+
+    # ------------------------------------------------------------------ Reels / Story (luồng tải lên rupload)
+    def _page_token(self, page_id: str) -> tuple[dict, str]:
+        page = self._page(page_id)
+        if not page.get("connected"):
+            raise FacebookError("Page chưa được kết nối")
+        token = page.get("access_token")
+        if not token:
+            raise FacebookError("Thiếu page token — tạo lại User Access Token có quyền pages_manage_posts rồi nhập ở Cài đặt")
+        return page, token
+
+    def _call(self, method: str, url: str, timeout: int = 60, **kwargs) -> dict:
+        try:
+            resp = requests.request(method, url, timeout=timeout, **kwargs)
+        except requests.RequestException as exc:
+            raise FacebookError(f"Không kết nối được Facebook: {exc}") from exc
+        try:
+            data = resp.json() if resp.content else {}
+        except ValueError:
+            data = {}
+        if resp.status_code != 200 or "error" in data:
+            err = data.get("error") or {}
+            raise FacebookError(f"Facebook báo lỗi: {err.get('error_user_msg') or err.get('message') or resp.text[:200]}")
+        return data
+
+    def _upload_video(self, page_id: str, token: str, edge: str, path: Path) -> str:
+        """Bước start + tải file lên rupload.facebook.com của Reels/Story video. Trả về video_id."""
+        start = self._call("POST", f"{self._graph}/{page_id}/{edge}", data={"upload_phase": "start", "access_token": token})
+        video_id, upload_url = start.get("video_id"), start.get("upload_url")
+        if not video_id or not upload_url:
+            raise FacebookError("Facebook không trả về video_id / upload_url khi bắt đầu tải video")
+        with open(path, "rb") as fh:
+            self._call("POST", upload_url, timeout=1800, data=fh, headers={
+                "Authorization": f"OAuth {token}", "offset": "0", "file_size": str(path.stat().st_size)})
+        return video_id
+
+    def post_reel(self, page_id: str, message: str, file_path: str, scheduled_at: int | None = None) -> dict:
+        """Đăng video dạng Reels (nên là video dọc 9:16, 3–90 giây). scheduled_at → hẹn giờ."""
+        page, token = self._page_token(page_id)
+        path = Path(file_path)
+        if path.suffix.lower() not in VIDEO_EXT or not path.is_file():
+            raise FacebookError("Reels cần 1 file video (mp4/mov/webm)")
+        video_id = self._upload_video(page_id, token, "video_reels", path)
+        finish = {"upload_phase": "finish", "video_id": video_id, "access_token": token,
+                  "description": (message or "").strip(), "video_state": "SCHEDULED" if scheduled_at else "PUBLISHED"}
+        if scheduled_at:
+            finish["scheduled_publish_time"] = str(int(scheduled_at))
+        self._call("POST", f"{self._graph}/{page_id}/video_reels", data=finish)
+        post_id, link = ("", "") if scheduled_at else self._video_post(video_id, token)
+        return {"id": post_id or video_id, "video_id": video_id, "page": page["name"], "scheduled": bool(scheduled_at),
+                "url": link or f"https://www.facebook.com/reel/{video_id}"}
+
+    def post_story(self, page_id: str, file_path: str) -> dict:
+        """Đăng Story (ảnh hoặc video, hiện 24 giờ). Facebook không cho hẹn giờ Story và Story không có caption."""
+        page, token = self._page_token(page_id)
+        path = Path(file_path)
+        if not path.is_file():
+            raise FacebookError("Story cần 1 file ảnh hoặc video")
+        if path.suffix.lower() in IMAGE_EXT:
+            with open(path, "rb") as fh:
+                photo = self._call("POST", f"{self._graph}/{page_id}/photos", timeout=300,
+                                   data={"published": "false", "access_token": token}, files={"source": (path.name, fh)})
+            data = self._call("POST", f"{self._graph}/{page_id}/photo_stories",
+                              data={"photo_id": photo["id"], "access_token": token})
+        elif path.suffix.lower() in VIDEO_EXT:
+            video_id = self._upload_video(page_id, token, "video_stories", path)
+            data = self._call("POST", f"{self._graph}/{page_id}/video_stories",
+                              data={"upload_phase": "finish", "video_id": video_id, "access_token": token})
+        else:
+            raise FacebookError("Story chỉ nhận ảnh (png/jpg/webp) hoặc video (mp4/mov/webm)")
+        post_id = data.get("post_id") or data.get("id") or ""
+        return {"id": post_id, "page": page["name"], "scheduled": False,
+                "url": f"https://www.facebook.com/stories/{page_id}" if post_id else ""}
+
+    def post(self, page_id: str, message: str, file_path: str = "", scheduled_at: int | None = None) -> dict:
+        """Đăng bài lên page đã kết nối: chữ, ảnh (/photos) hoặc video (/videos). scheduled_at → hẹn giờ đăng."""
+        schedule = self._schedule(scheduled_at)
         page = self._page(page_id)
         if not page.get("connected"):
             raise FacebookError("Page chưa được kết nối")
@@ -197,15 +328,16 @@ class FacebookManager:
                 if not message:
                     raise FacebookError("Hãy nhập nội dung bài đăng")
                 resp = requests.post(f"{self._graph}/{page_id}/feed", data={"message": message,
-                                                                           "access_token": token}, timeout=60)
+                                     "access_token": token, **schedule}, timeout=60)
             elif path.suffix.lower() in IMAGE_EXT:
                 with open(path, "rb") as fh:
                     resp = requests.post(f"{self._graph}/{page_id}/photos", data={"caption": message,
-                                         "access_token": token}, files={"source": (path.name, fh)}, timeout=300)
+                                         "access_token": token, **schedule}, files={"source": (path.name, fh)}, timeout=300)
             elif path.suffix.lower() in VIDEO_EXT:
                 with open(path, "rb") as fh:
                     resp = requests.post(f"https://graph-video.facebook.com/{self._data.get('graph_version') or DEFAULT_VERSION}"
-                                         f"/{page_id}/videos", data={"description": message, "access_token": token},
+                                         f"/{page_id}/videos", data={"description": message, "access_token": token,
+                                                                     **schedule},
                                          files={"source": (path.name, fh)}, timeout=1800)
             else:
                 raise FacebookError("Chỉ đăng được ảnh (png/jpg/webp) hoặc video (mp4/mov/webm)")
@@ -214,4 +346,10 @@ class FacebookManager:
         data = resp.json() if resp.content else {}
         if resp.status_code != 200 or "error" in data:
             raise FacebookError(f"Facebook báo lỗi: {data.get('error', {}).get('message', resp.text[:200])}")
-        return {"id": data.get("post_id") or data.get("id"), "page": page["name"]}
+        post_id, url = data.get("post_id") or "", ""
+        if path is not None and path.suffix.lower() in VIDEO_EXT and not post_id and not scheduled_at:
+            post_id, url = self._video_post(data.get("id", ""), token)  # /videos chỉ trả id video
+        post_id = post_id or data.get("id", "")
+        return {"id": post_id, "page": page["name"], "scheduled": bool(scheduled_at), "video_id": data.get("id", "")
+                if path is not None and path.suffix.lower() in VIDEO_EXT else "",
+                "url": url or (f"https://www.facebook.com/{post_id}" if post_id else "")}

@@ -5,6 +5,7 @@ Chạy trong thread nền, báo tiến trình cho UI qua callback emit(event, da
 import logging
 import shutil
 import threading
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -14,6 +15,9 @@ from ..llm import make_provider
 from ..llm.gemini_veo import VeoUnavailable
 from ..llm.video_engines import ENGINES, normalize_options
 from ..llm.video_engines import generate as generate_video
+from ..llm.image_engines import ENGINES as IMAGE_ENGINES
+from ..llm.image_engines import fit_aspect, save_images
+from ..llm.image_engines import generate as generate_image
 from ..templates_registry import registry
 from ..util import slugify, unique_dir
 from . import ASPECTS, SCENE_TAIL, VOICE_LEAD, Cancelled, scene_dir_name
@@ -21,8 +25,10 @@ from .assets import (PRESENTER_GUIDE, PRODUCT_GENRE, STYLE_TEMPLATES, assign_med
                      images_for_ai, import_assets)
 from .scene_context import is_video_name
 from .assets import validate as validate_assets
-from .ai_video import (as_regular_job_form, collect_attachments, collect_variables, fill_prompt, finalize,
-                       import_attachments, reference_sentence)
+from ..browser_profiles import task_context
+from .ai_video import (as_regular_job_form, collect_attachments, collect_variables, dedupe_attachments, fill_prompt, finalize,
+                       import_attachments, prepare_video_refs, reference_sentence, step_inputs, template_prompt,
+                       video_inputs)
 from .composer import compose
 from .renderer import SceneRenderer
 from .scene_designer import design_scene
@@ -128,23 +134,37 @@ class JobRunner:
         title = (str(form.get("topic") or "").strip() or (template.name if template else "Video"))[:80]
         meta = {"provider": str(form.get("provider") or ""), "kind": "video"}
         spawn = lambda target, *args: self.pool.submit(title, self._wrap, target, *args, meta=meta, profile=profile)  # noqa: E731
+        if template is not None and template.kind == "whiteboard":
+            wb = self._whiteboard_form(template, form)
+            meta["kind"] = "whiteboard"
+            title = f"{template.name}" + (f" · {form.get('topic')}" if form.get("topic") else "")
+            return self.pool.submit(title, self._wrap, self._run_whiteboard, template, wb, meta=meta,
+                                    profile=wb["profile"])
         if template is not None and template.kind == "ai_video" and form.get("genre") != PRODUCT_GENRE:
             meta["kind"] = "ai_video"
             title = f"{template.name}" + (f" · {form.get('topic')}" if form.get("topic") else "")
-            engine = str(form.get("provider") or "")
+            engine = template.video_engine or str(form.get("provider") or "")
             if engine not in ENGINES:
                 raise ValueError("Template video AI cần Provider AI: Grok Browser, Gemini Browser, Dola Browser hoặc Gemini API")
             variables = collect_variables(template, form.get("variables"))
             attachments = collect_attachments(template, form.get("attachments"))
+            if any(spec.get("keep_video") for spec, _ in attachments) and not ENGINES[engine].get("video_input"):
+                raise ValueError(f"Template “{template.name}” cần gửi video gốc — chọn Provider Grok Browser hoặc Dola Browser")
+            for step in template.image_steps:
+                if (step.get("engine") or engine) not in IMAGE_ENGINES:
+                    raise ValueError(f"Template “{template.name}”: engine ảnh của bước “{step.get('label', step['key'])}” không hợp lệ")
             regular_form = as_regular_job_form(template, variables, attachments, form)
             if engine == "gemini_browser" and form.get("gemini_mode") == "regular":
                 # Gemini Browser · Video thông thường: Gemini viết kịch bản, app tự dựng (không dùng Veo)
                 return spawn(self._run_new, JobRequest.from_form(regular_form))
             options = normalize_options(engine, {
-                **template.options, **{k: form[f"ai_{k}"] for k in ("duration", "resolution") if form.get(f"ai_{k}")}})
+                **template.options, **{k: form[f"ai_{k}"] for k in ("duration", "resolution", "aspect") if form.get(f"ai_{k}")}})
             fallback = regular_form if engine == "gemini_browser" else None
+            # template nhiều bước: mỗi bước (key bước / "video") chọn profile trình duyệt riêng; "" = tự chọn profile rảnh
+            step_profiles = ({str(k): str(v or "") for k, v in (form.get("step_profiles") or {}).items()}
+                             if template.image_steps else None)
             return spawn(self._run_ai_video, template, variables, attachments, options, engine,
-                         bool(form.get("show_browser")), fallback)
+                         bool(form.get("show_browser")), fallback, step_profiles)
         return spawn(self._run_new, JobRequest.from_form(form))
 
     def rerender(self, job_id: str, index: int) -> str:
@@ -318,25 +338,26 @@ class JobRunner:
         return self._finish(job_dir, job)
 
     def _run_ai_video(self, template, variables: dict, attachments: list, options: dict, engine: str,
-                      show_browser: bool, fallback_form: dict | None = None) -> dict:
-        """Template video AI: điền prompt (+ ảnh tham chiếu) → engine (Grok / Gemini Veo) tạo video → chuẩn hoá."""
+                      show_browser: bool, fallback_form: dict | None = None,
+                      step_profiles: dict | None = None) -> dict:
+        """Template video AI: điền prompt (+ ảnh tham chiếu) → engine (Grok / Gemini Veo) tạo video → chuẩn hoá.
+        Template có image_steps: chạy lần lượt các bước tạo ảnh trước, mỗi bước dùng profile trong step_profiles."""
         s = self.settings
         spec = ENGINES[engine]
         self._progress(2, "Đang chuẩn bị", "prepare")
         self._log("Đang chuẩn bị")
         self.license.require_active()
+        attachments = dedupe_attachments(attachments, self._log)  # cùng 1 ảnh ở 2 vai trò → gửi 1 lần
         if len(attachments) > spec["max_images"]:
             dropped = ", ".join(a[0]["label"] for a in attachments[spec["max_images"]:])
             self._log(f"{spec['name']} nhận tối đa {spec['max_images']} ảnh — bỏ qua: {dropped}", "warn")
             attachments = attachments[:spec["max_images"]]
-        prompt = fill_prompt(template.prompt, variables) + reference_sentence([a[0] for a in attachments])
         if attachments:
             self._log("Ảnh tham chiếu: " + ", ".join(f"{a[0]['label']} ({a[1].name})" for a in attachments))
         aspect = options.get("aspect", "9:16")
         self._progress(8, "Đang điền prompt template", "script")
         self._log(f"Template video AI: {template.name} · {spec['name']} · {aspect} · "
                   f"{options.get('duration', '')} · {options.get('resolution', '')}")
-        self._log(f"Prompt: {prompt[:180]}…")
 
         title = " · ".join([template.name, *[v for v in variables.values() if v][:1]])
         created = datetime.now()
@@ -344,16 +365,34 @@ class JobRunner:
         (job_dir / "tmp").mkdir()
         self._new_dir = job_dir
         raw = job_dir / "tmp" / "grok_raw.mp4"
+        video_start = 12
+        steps = template.image_steps
+        if steps:
+            files = {spec["key"]: (spec, path) for spec, path in attachments}
+            span = 46 / len(steps)
+            for i, step in enumerate(steps):
+                with self._step_profile(step_profiles, step["key"]):
+                    path = self._run_image_step(step, i, len(steps), files, variables, engine, job_dir,
+                                                show_browser, 12 + span * i)
+                files[step["key"]] = ({"key": step["key"], "label": step.get("label", step["key"])}, path)
+            attachments = video_inputs(template, files)
+            video_start = 60
+        attachments = prepare_video_refs(attachments, spec, self._log)  # video tham chiếu → gửi nguyên video nếu model nhận
+        prompt = template_prompt(template, variables, attachments) + reference_sentence([a[0] for a in attachments])
+        self._log(f"Prompt: {prompt[:180]}…")
         images = import_attachments(job_dir, attachments)
 
-        self._progress(12, f"Đang tạo video bằng {spec['name']}", "visual")
-        self._log(f"Đang mở {spec['name']}")
+        step_label = f"Bước {len(steps) + 1}/{len(steps) + 1}: " if steps else ""
+        self._progress(video_start, f"{step_label}Đang tạo video bằng {spec['name']}", "visual")
+        self._log(f"{step_label}Đang mở {spec['name']}")
         try:
-            generate_video(
-                engine, prompt, raw, options=options, images=images, settings=s, show_browser=show_browser,
-                log=self._log, check_cancel=self._check_cancel,
-                on_progress=lambda pct: self._progress(12 + 0.72 * pct, f"Đang tạo video {pct}%", "visual"),
-            )
+            with self._step_profile(step_profiles, "video"):
+                generate_video(
+                    engine, prompt, raw, options=options, images=images, settings=s, show_browser=show_browser,
+                    log=self._log, check_cancel=self._check_cancel,
+                    on_progress=lambda pct: self._progress(video_start + (84 - video_start) * pct / 100,
+                                                           f"{step_label}Đang tạo video {pct}%", "visual"),
+                )
         except VeoUnavailable as exc:
             if fallback_form is None:
                 raise
@@ -379,12 +418,128 @@ class JobRunner:
             shutil.rmtree(job_dir / "tmp", ignore_errors=True)
         return self._finish(job_dir, job)
 
+    @staticmethod
+    def _whiteboard_form(template, form: dict) -> dict:
+        """Kiểm tra form template whiteboard: nội dung SRT/kịch bản (gõ hoặc file .srt), audio, engine ảnh."""
+        from pathlib import Path
+        from . import whiteboard as wbm
+
+        raw = dict(form.get("wb") or {})
+        opts = template.options
+        text = str(raw.get("text") or "").strip()
+        srt_file = str(raw.get("srt") or "").strip()
+        if srt_file:
+            if not Path(srt_file).is_file():
+                raise ValueError(f"Không còn file SRT: {Path(srt_file).name}")
+            text = wbm.read_srt_file(srt_file)
+        if not text:
+            raise ValueError("Hãy dán nội dung SRT / kịch bản hoặc chọn file .srt")
+        if wbm.is_srt(text) and not wbm.parse_srt(text):
+            raise ValueError("Nội dung SRT không đọc được câu nào (kiểm tra mốc 00:00:01,000 --> 00:00:03,000)")
+        audio = str(raw.get("audio") or "").strip()
+        if audio and not Path(audio).is_file():
+            raise ValueError(f"Không còn file âm thanh: {Path(audio).name}")
+        engine = str(raw.get("image_engine") or opts.get("image_engine") or "")
+        if engine not in IMAGE_ENGINES:
+            raise ValueError("Chọn model tạo ảnh line-art cho whiteboard")
+        aspect = str(raw.get("aspect") or opts.get("aspect") or "16:9")
+        return {
+            "text": text, "srt_name": Path(srt_file).name if srt_file else "", "audio": audio,
+            "image_engine": engine, "profile": str(raw.get("profile") or "") if IMAGE_ENGINES[engine].get("browser") else "",
+            "aspect": aspect if aspect in wbm.SIZES else "16:9",
+            "quality": "hd" if raw.get("quality", opts.get("quality")) == "hd" else "fast",
+            "hand": bool(raw.get("hand", opts.get("hand", True))),
+            "subtitles": bool(raw.get("subtitles", opts.get("subtitles", True))),
+            "voice": str(form.get("voice") or "vi-VN-HoaiMyNeural"), "rate": str(form.get("rate") or "+0%"),
+            "hint": str(raw.get("hint") or "").strip()[:300],
+            "show_browser": bool(form.get("show_browser")),
+        }
+
+    def _run_whiteboard(self, template, wb: dict) -> dict:
+        """Template SRT Whiteboard: SRT/kịch bản → ảnh line-art từng cảnh → tay vẽ đúng mốc → ghép tiếng + phụ đề."""
+        from pathlib import Path
+        from . import whiteboard as wbm
+
+        s = self.settings
+        self._progress(2, "Đang chuẩn bị", "prepare")
+        self.license.require_active()
+        created = datetime.now()
+        first = " ".join(wb["text"].split())[:40] if not wbm.is_srt(wb["text"]) else (wb["srt_name"] or "SRT")
+        title = f"{template.name} · {first}"
+        job_dir = unique_dir(s.output_dir / f"{slugify(title)}_{created:%Y%m%d_%H%M%S}")
+        work = job_dir / "tmp"
+        work.mkdir(parents=True)
+        self._new_dir = job_dir
+        self._progress(5, "Đang kiểm tra bộ dựng whiteboard", "prepare")
+        wbm.ensure_installed(self._log)
+        self._progress(8, "Đang đọc phụ đề / kịch bản", "script")
+        audio = Path(wb["audio"]) if wb["audio"] else None
+        cues, audio = wbm.load_cues(wb["text"], work, voice=wb["voice"], rate=wb["rate"], audio=audio)
+        self._log(f"{len(cues)} câu phụ đề · {'file âm thanh đính kèm' if wb['audio'] else 'giọng AI ' + wb['voice']}")
+        spec = IMAGE_ENGINES[wb["image_engine"]]
+        self._log(f"Ảnh line-art: {spec['name']} · dựng {'nét (1920)' if wb['quality'] == 'hd' else 'nhanh (1080)'}"
+                  f" · {'có' if wb['hand'] else 'không'} bàn tay")
+        make_image = wbm.image_maker(wb["image_engine"], s, show_browser=wb["show_browser"], log=self._log,
+                                     check_cancel=self._check_cancel)
+        raw = wbm.build_video(
+            cues, work / "wb", make_image=make_image, aspect=wb["aspect"], audio=audio, voice=wb["voice"],
+            rate=wb["rate"], subtitles=wb["subtitles"], quality=wb["quality"], hand=wb["hand"], hint=wb["hint"],
+            log=self._log, check_cancel=self._check_cancel,
+            progress=lambda f, msg: self._progress(10 + 76 * f, msg, "visual"))
+        self._progress(88, "Đang chuẩn hoá video & cân âm lượng", "post")
+        info = finalize(raw, job_dir, wb["aspect"], log=self._log)
+        if (raw.parent / "final.srt").is_file():
+            shutil.copy2(raw.parent / "final.srt", job_dir / "final.srt")
+        job = {
+            "id": job_dir.name, "kind": "whiteboard", "engine": wb["image_engine"], "title": title,
+            "topic": " ".join(c["text"] for c in cues)[:500], "genre": "whiteboard", "template_id": template.id,
+            "template_name": template.name, "aspect": wb["aspect"], "width": info["width"], "height": info["height"],
+            "fps": 30, "voice": "" if wb["audio"] else wb["voice"], "subtitles": wb["subtitles"], "bgm": False,
+            "created_at": created.isoformat(timespec="seconds"), "duration": info["duration"],
+            "options": {k: wb[k] for k in ("quality", "hand", "subtitles", "aspect", "image_engine")},
+            "scenes": [{"index": 1, "kicker": "", "headline": title, "duration": info["duration"]}],
+        }
+        if s.get("cleanup_temp"):
+            shutil.rmtree(work, ignore_errors=True)
+        return self._finish(job_dir, job)
+
+    def _step_profile(self, step_profiles: dict | None, key: str):
+        """Template nhiều bước: dùng profile chọn cho bước `key` ("" = tự chọn profile rảnh gán cho model đó)."""
+        if step_profiles is None:
+            return nullcontext()
+        return task_context(step_profiles.get(key, ""), check_cancel=self._check_cancel, log=self._log)
+
+    def _run_image_step(self, step: dict, index: int, total: int, files: dict, variables: dict, video_engine: str,
+                        job_dir, show_browser: bool, pct: float):
+        """Một bước image_steps: gửi ảnh đầu vào (video → 1 khung hình) + prompt cho engine ảnh, trả về ảnh kết quả.
+        Engine ảnh: step.engine (vd. chatgpt_browser), mặc định cùng nhà cung cấp với engine video."""
+        engine = step.get("engine") or video_engine
+        spec = IMAGE_ENGINES[engine]
+        label = f"Bước {index + 1}/{total + 1}: {step.get('label', step['key'])}"
+        inputs = step_inputs(step, files)[:spec["max_images"]]
+        prompt = fill_prompt(step["prompt"], variables) + reference_sentence([a[0] for a in inputs])
+        refs = import_attachments(job_dir, inputs)
+        want = step.get("aspect", "9:16")
+        aspect = want if want in spec["aspects"] else spec["aspects"][0]
+        self._progress(pct, f"{label} ({spec['name']})", "visual")
+        self._log(f"{label} · {spec['name']} · {aspect}")
+        self._log(f"Prompt ảnh: {prompt[:180]}…")
+        datas = generate_image(engine, prompt, aspect=aspect, count=1, quality="high", images=refs,
+                               settings=self.settings, show_browser=show_browser, log=self._log,
+                               check_cancel=self._check_cancel)
+        out_dir = job_dir / "tmp" / step["key"]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = save_images(datas[:1], out_dir)[0]
+        fit_aspect(path, aspect)
+        self._log(f"Xong {label}", "ok")
+        return path
+
     def _run_rerender(self, job_id: str, index: int) -> dict:
         s = self.settings
         self.license.require_active()
         job_dir, job = load_job(s.output_dir, job_id)
-        if job.get("kind") == "ai_video":
-            raise ValueError("Video AI (Grok Imagine) không render lại từng cảnh được — hãy tạo video mới")
+        if job.get("kind") in ("ai_video", "whiteboard"):
+            raise ValueError("Video AI / whiteboard không render lại từng cảnh được — hãy tạo video mới")
         scene = next((sc for sc in job["scenes"] if sc["index"] == index), None)
         if scene is None:
             raise ValueError(f"Không có khung {index}")

@@ -5,3 +5,7 @@ google-genai>=1.0
 jinja2>=3.1
 imageio-ffmpeg>=0.5
 requests>=2.31
+pillow>=10.4
+anthropic>=1.15
+markdown>=3.6
+yt-dlp>=2026.8.19  # tải video tham khảo từ link (Studio → 🎬 Video tham khảo)

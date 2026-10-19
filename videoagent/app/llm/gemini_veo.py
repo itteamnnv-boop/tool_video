@@ -83,6 +83,7 @@ MORE_TOOLS = "button[aria-label='Công cụ khác'], button[aria-label*='More to
 MENU_ITEMS = "[role='menuitemcheckbox'], [role='menuitem']"
 VIDEO_TOOL = re.compile(r"(Tạo video|Create video|Video|Veo)", re.I)
 IMAGE_INPUT = "input[type='file'][accept*='image']"
+ANY_FILE_INPUT = "input[type='file']:not([capture])"
 NO_VEO = "Tài khoản Gemini này chưa có công cụ 'Tạo video' (Veo) — cần gói Google AI Pro/Ultra."
 
 
@@ -106,7 +107,7 @@ def generate_video_browser(prompt: str, out_path: Path, *, channel: str = "chrom
             box = _find_box(page, site)
             _enable_video_tool(page)  # kiểm tra Veo trước khi tải ảnh: không có thì báo sớm
             if images:
-                _upload_image(page, images[0], log)
+                _upload_images(page, images, log)
             before = {v["src"] for v in page.evaluate(VIDEOS_JS)}
             box.click()
             type_multiline(page, f"Tạo video tỉ lệ {aspect}: " + prompt)
@@ -170,17 +171,44 @@ def _enable_video_tool(page) -> None:
     _enable_tool(page, VIDEO_TOOL, VeoUnavailable(NO_VEO))
 
 
-def _upload_image(page, image: Path, log) -> None:
-    _open_tools(page)
-    file_input = page.locator(IMAGE_INPUT).first
-    if not file_input.count():
-        page.keyboard.press("Escape")
-        log("Không tìm thấy ô tải ảnh trên Gemini — bỏ qua ảnh tham chiếu", "warn")
-        return
+def _upload_images(page, images: list[Path], log) -> int:
+    """Tải các ảnh tham chiếu lên ô soạn của Gemini (menu 'Nội dung tải lên và công cụ').
+    Ô tải lên nhận nhiều file thì gửi một lần; không thì mở menu và tải lần lượt từng ảnh.
+    Trả về số ảnh Gemini đã hiện xem trước (để báo khi Gemini nhận thiếu)."""
+    files = [str(p) for p in images]
     before = page.locator(PREVIEW_IMG).count()
-    file_input.set_input_files(str(image))
-    page.keyboard.press("Escape")
-    deadline = time.time() + 45
-    while time.time() < deadline and page.locator(PREVIEW_IMG).count() <= before:
-        page.wait_for_timeout(700)
+    sent = 0
+    while sent < len(files):
+        _open_tools(page)
+        file_input = page.locator(IMAGE_INPUT).first
+        if not file_input.count():
+            file_input = page.locator(ANY_FILE_INPUT).first
+        if not file_input.count():
+            page.keyboard.press("Escape")
+            log("Không tìm thấy ô tải ảnh trên Gemini — bỏ qua các ảnh tham chiếu còn lại", "warn")
+            break
+        batch = files[sent:] if file_input.get_attribute("multiple") is not None else files[sent:sent + 1]
+        file_input.set_input_files(batch)
+        page.keyboard.press("Escape")
+        sent += len(batch)
+        deadline = time.time() + 45  # chờ ảnh hiện xem trước (tải lên xong) rồi mới gửi ảnh tiếp theo
+        while time.time() < deadline and page.locator(PREVIEW_IMG).count() < before + sent:
+            page.wait_for_timeout(700)
     page.wait_for_timeout(1500)
+    from .uploads import wait_uploads
+
+    wait_uploads(page, log)  # ảnh xem trước hiện ngay — chờ tải lên máy chủ xong (hết vòng xoay) rồi mới gửi
+    shown = page.locator(PREVIEW_IMG).count() - before
+    if shown <= 0 and files:  # không ảnh nào vào ô soạn → thử ô tải khác / nút ＋, vẫn không được thì dừng
+        from .uploads import attach_files
+
+        log("Chưa thấy ảnh nào trong ô soạn Gemini — thử đính kèm lại", "warn")
+        shown = attach_files(page, files, log)
+        if not shown:
+            raise LLMError("Không đính kèm được ảnh lên Gemini (ảnh không hiện trong ô soạn) — chưa gửi prompt. "
+                           "Bật “Hiện Chrome” để xem rồi thử lại.")
+    if shown < len(files):
+        log(f"Gemini chỉ hiện {max(shown, 0)}/{len(files)} ảnh đính kèm — có thể giới hạn số ảnh của công cụ đang dùng", "warn")
+    else:
+        log(f"Đã tải {len(files)} ảnh tham chiếu lên Gemini")
+    return shown

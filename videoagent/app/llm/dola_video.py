@@ -140,4 +140,12 @@ def _attach_images(page, images: list[Path], log) -> None:
     deadline = time.time() + 60
     while time.time() < deadline and page.locator(PREVIEW_IMG).count() < before + len(images):
         page.wait_for_timeout(700)
-    page.wait_for_timeout(1500)
+    page.wait_for_timeout(1000)
+    from .uploads import attach_files, wait_uploads
+
+    if page.locator(PREVIEW_IMG).count() <= before:  # không ảnh nào vào ô soạn → thử cách khác, không được thì dừng
+        log("Chưa thấy ảnh nào trong ô soạn Dola — thử đính kèm lại", "warn")
+        if not attach_files(page, images, log):
+            raise LLMError("Không đính kèm được ảnh lên Dola (ảnh không hiện trong ô soạn) — chưa gửi prompt. "
+                           "Bật “Hiện Chrome” để xem rồi thử lại.")
+    wait_uploads(page, log)  # chờ tải lên máy chủ xong rồi mới gửi

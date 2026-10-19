@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .config import settings
-from .paths import UI_DIR
+from .paths import UI_DIR, DATA_DIR
 from .pipeline import ASPECTS
 from .templates_registry import registry
 from .pipeline.scene_context import build_context
@@ -64,7 +64,30 @@ class Handler(BaseHTTPRequestHandler):
             if html is None:
                 return self.send_error(404)
             return self._send_bytes(html.encode("utf-8"), TYPES[".html"])
-        if path.startswith("/media/"):
+        if path.startswith("/campaign-lib/"):
+            # Thư viện chiến dịch: chỉ phục vụ ẢNH (không bao giờ trả keys.json hay file JSON khác)
+            if Path(path).suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+                return self.send_error(404)
+            from .campaign import store as campaign_store
+
+            base, rel = campaign_store.LIB, path[len("/campaign-lib/"):]
+        elif path.startswith("/cast/"):
+            # Nhân vật & Layout: chỉ phục vụ ẢNH (không bao giờ trả item.json)
+            if Path(path).suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+                return self.send_error(404)
+            from .cast import CAST_DIR
+
+            base, rel = CAST_DIR, path[len("/cast/"):]
+        elif path.startswith("/post-media/"):
+            # Quản lý bài đăng: chỉ phục vụ ảnh / video của bài (không bao giờ trả posts.json)
+            if Path(path).suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm", ".m4v"):
+                return self.send_error(404)
+            from .posts import MEDIA_DIR
+
+            base, rel = MEDIA_DIR, path[len("/post-media/"):]
+        elif path.startswith("/seedance-image/"):
+            base, rel = DATA_DIR / "seedance" / "images", path[len("/seedance-image/"):]
+        elif path.startswith("/media/"):
             base, rel = settings.output_dir, path[len("/media/"):]
         else:
             base, rel = UI_DIR, path.lstrip("/") or "index.html"

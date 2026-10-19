@@ -1,0 +1,40 @@
+{
+  "type": "ai_video",
+  "hidden": true,
+  "name": "Ảnh thành video",
+  "description": "Dùng nội bộ cho Chiến dịch: Grok Imagine làm ảnh quảng cáo chuyển động thành clip ngắn khung dọc",
+  "tags": [
+    "chiến dịch",
+    "grok",
+    "image to video"
+  ],
+  "video_engine": "grok_browser",
+  "options": {
+    "aspect": "9:16",
+    "duration": "10s",
+    "resolution": "720p"
+  },
+  "variables": [
+    {
+      "key": "MoTa",
+      "label": "Mô tả chuyển động / cảnh",
+      "required": true
+    }
+  ],
+  "attachments": [
+    {
+      "key": "image",
+      "label": "Ảnh quảng cáo",
+      "required": true,
+      "role": "first frame",
+      "prompt": "start the video from exactly this image — same person, product, outfit, background and on-image text"
+    }
+  ],
+  "prompt": [
+    "Animate the attached advertising image into a realistic vertical 9:16 social media video.",
+    "{MoTa}",
+    "Keep the person's face, body, outfit and the product (packaging, label, colors) exactly as in the image.",
+    "Natural, believable motion with a gentle camera push-in; bright commercial lighting; smooth and sharp.",
+    "Keep any text already printed on the image unchanged and readable; do not add new text, logos or watermarks."
+  ]
+}

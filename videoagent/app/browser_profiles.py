@@ -19,7 +19,9 @@ from .util import slugify
 
 PROFILES_FILE = DATA_DIR / "browser_profiles.json"
 PROFILES_ROOT = DATA_DIR / "browser-profiles"
-SITE_NAMES = {"gemini": "Gemini", "grok": "Grok", "chatgpt": "ChatGPT", "dola": "Dola"}
+SITE_NAMES = {"gemini": "Gemini", "grok": "Grok", "chatgpt": "ChatGPT", "dola": "Dola", "doubao": "Doubao",
+              "muse": "Muse (Meta)", "claude": "Claude"}
+LATER_SITES = ("claude",)  # model thêm sau khi đã có file profile (chưa có known_sites) — xem _load
 CHANNELS = ("", "chrome", "msedge", "chromium")  # "" = theo Cài đặt chung
 DEFAULT_ID = "default"
 MAX_PROFILES = 30
@@ -48,6 +50,10 @@ def _load() -> list[dict]:
     for p in profiles:
         p["sites"] = [s for s in p.get("sites", []) if s in SITE_NAMES]
         p.setdefault("channel", "")
+        if p["id"] == DEFAULT_ID:  # model mới thêm sau này → tự gán cho profile Mặc định một lần (bỏ gán thì giữ nguyên)
+            known = p.get("known_sites") or [s for s in SITE_NAMES if s not in LATER_SITES]
+            p["sites"] += [s for s in SITE_NAMES if s not in known and s not in p["sites"]]
+            p["known_sites"] = list(SITE_NAMES)
     return profiles
 
 

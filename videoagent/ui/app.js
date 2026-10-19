@@ -41,6 +41,7 @@ async function init() {
   initFacebook();
   initAds();
   initProfiles();
+  await window.SeedanceStudio.init();
   state.vt = makeTaskUI('video', 'v', { setProgress, setPill: setStatusPill, logEl: $('#log') });
   state.it = makeTaskUI('image', 'img', { setProgress: setImageProgress, setPill: setImagePill, logEl: $('#imgLog') });
   state.vt.update(state.boot.tasks || []);
@@ -83,7 +84,23 @@ function navigate(view) {
   if (view === 'facebook') refreshFacebook();
   $('#page-ads').classList.toggle('hidden', view !== 'ads');
   if (view === 'ads') refreshAds();
+  $('#page-cast').classList.toggle('hidden', view !== 'cast');
+  if (view === 'cast') window.CastPage.show();
+  $('#page-posts').classList.toggle('hidden', view !== 'posts');
+  if (view === 'posts') window.PostsPage.show();
   $('#page-profiles').classList.toggle('hidden', view !== 'profiles');
+  ['camp-list', 'camp-new', 'camp-lib', 'camp-history'].forEach(v => $(`#page-${v}`).classList.toggle('hidden', view !== v));
+  if (view.startsWith('camp-')) window.CampaignStudio.show(view);
+  $('#page-workflow').classList.toggle('hidden', view !== 'workflow');
+  $('#page-wf-list').classList.toggle('hidden', view !== 'wf-list');
+  if (view === 'wf-list') window.WorkflowStudio.showList();
+  if (view === 'workflow') window.WorkflowStudio.show();
+  $('#page-studio').classList.toggle('hidden', view !== 'studio');
+  if (view === 'studio') window.StudioPage.show();
+  $('#page-content').classList.toggle('hidden', view !== 'content');
+  if (view === 'content') window.ContentStudio.show();
+  $('#page-seedance').classList.toggle('hidden', view !== 'seedance');
+  if (view === 'seedance') window.SeedanceStudio.refresh();
   if (view === 'profiles') refreshProfiles();
   if (view === 'images') refreshImages();
   $('#page-help').classList.toggle('hidden', view !== 'help');
@@ -406,6 +423,14 @@ async function onImageGalleryClick(e) {
 
 /* ------------------------------------------------------------------ fanpage Facebook */
 function initFacebook() {
+  $('#fbOpenSettings').onclick = () => openSettings();
+  $('#fbLoadPages').onclick = () => fbAction($('#fbLoadPages'), 'Đang tải…', 'fb_load_pages', [], 'Đã tải danh sách Fanpage');
+  $('#fbPages').onclick = onFbPageClick;
+  refreshFacebook();
+}
+
+/** Kết nối Facebook (token, App Meta) — chỉ có ở màn hình Cài đặt → API & kết nối. */
+function bindFbSettings() {
   $('#fbSaveApp').onclick = () => fbAction($('#fbSaveApp'), 'Đang kiểm tra…', 'fb_save_app',
     [$('#fbAppId').value, $('#fbAppSecret').value, $('#fbVersion').value], 'Đã kết nối App Meta');
   $('#fbOpenExplorer').onclick = () => api('open_url', (state.fb && state.fb.explorer_url) || 'https://developers.facebook.com/tools/explorer/');
@@ -415,8 +440,6 @@ function initFacebook() {
     if (state.fb && state.fb.logged_in) $('#fbToken').value = '';  // token đã lưu ở backend, không giữ trên giao diện
   };
   $('#fbLogout').onclick = () => fbAction($('#fbLogout'), 'Đang ngắt…', 'fb_logout', [], 'Đã ngắt kết nối Facebook');
-  $('#fbLoadPages').onclick = () => fbAction($('#fbLoadPages'), 'Đang tải…', 'fb_load_pages', [], 'Đã tải danh sách Fanpage');
-  $('#fbPages').onclick = onFbPageClick;
   refreshFacebook();
 }
 
@@ -442,22 +465,26 @@ async function fbAction(btn, busyText, method, args, okText) {
 
 function renderFacebook(fb) {
   state.fb = fb;
-  $('#fbAppId').value = fb.app_id || '';
-  $('#fbVersion').value = fb.graph_version || 'v21.0';
-  $('#fbAppSecret').placeholder = fb.has_secret ? '•••••••• (đã lưu — để trống để giữ nguyên)' : 'App Secret';
-  $('#fbAppTag').textContent = fb.app_name ? `✓ ${fb.app_name}` : 'tuỳ chọn';
+  if ($('#fbAppId')) {  // các ô này chỉ có trong Cài đặt → API & kết nối
+    $('#fbAppId').value = fb.app_id || '';
+    $('#fbVersion').value = fb.graph_version || 'v21.0';
+    $('#fbAppSecret').placeholder = fb.has_secret ? '•••••••• (đã lưu — để trống để giữ nguyên)' : 'App Secret';
+    $('#fbLogout').classList.toggle('hidden', !fb.logged_in);
+  }
+  $('#fbAppTag').textContent = fb.app_name ? `App ${fb.app_name}` : (fb.logged_in ? 'token ngắn hạn' : 'chưa kết nối');
   const user = fb.user;
   const expiry = fb.token_expires_at ? `hết hạn ${fmtTime(fb.token_expires_at)}`
     : 'token ngắn hạn (~1–2 giờ) — nhập App Meta để đổi dài hạn';
-  $('#fbUser').innerHTML = user
+  const userHtml = user
     ? `${user.picture ? `<img src="${esc(user.picture)}" alt="">` : ''}<div><b>${esc(user.name)}</b><br>
        <small>${fb.long_lived ? '✓ Token dài hạn · ' : ''}${esc(expiry)}</small></div>`
-    : '<span>Chưa kết nối — dán User Access Token rồi bấm “Kết nối & tải Fanpage”.</span>';
-  $('#fbPerms').innerHTML = fb.logged_in
+    : '<span>Chưa kết nối — nhập User Access Token ở Cài đặt → API &amp; kết nối.</span>';
+  const permsHtml = fb.logged_in
     ? (fb.permissions || []).filter(p => p.startsWith('pages_') || p === 'business_management').map(p => `<code>✓ ${esc(p)}</code>`).join('')
       + (fb.missing_permissions || []).map(p => `<code class="miss" title="Thiếu quyền — thêm trong Graph API Explorer rồi tạo token mới">✕ ${esc(p)}</code>`).join('')
     : '';
-  $('#fbLogout').classList.toggle('hidden', !fb.logged_in);
+  ['#fbUser', '#setFbUser'].forEach(id => { if ($(id)) $(id).innerHTML = userHtml; });
+  ['#fbPerms', '#setFbPerms'].forEach(id => { if ($(id)) $(id).innerHTML = permsHtml; });
   $('#fbLoadPages').disabled = !fb.logged_in;
   const pages = fb.pages || [];
   const connected = pages.filter(p => p.connected).length;
@@ -473,7 +500,7 @@ function renderFacebook(fb) {
       ${p.link ? `<button class="btn ghost sq" data-act="open" title="Mở page">↗</button>` : ''}
     </div>`).join('')
     : `<div class="empty">${fb.logged_in ? 'Không có Fanpage nào — kiểm tra quyền pages_show_list và các page đã chọn khi tạo token.'
-      : 'Dán User Access Token để tải các Fanpage bạn quản lý.'}</div>`;
+      : 'Nhập User Access Token ở Cài đặt → API & kết nối để tải các Fanpage bạn quản lý.'}</div>`;
 }
 
 async function onFbPageClick(e) {
@@ -516,7 +543,8 @@ function openFbPost(page) {
     btn.textContent = `Đăng lên ${page.name}`;
     if (!res.ok) return toast(res.error, 'error');
     closeModal();
-    toast(`Đã đăng lên ${res.post.page}`, 'ok');
+    toast(`Đã đăng lên ${res.post.page} — đã lưu ở Quản lý bài đăng`, 'ok');
+    if (window.PostsPage) window.PostsPage.reload();
   };
 }
 
@@ -728,15 +756,25 @@ function fillProfileSelects() {
     const isBrowser = String(engine || '').endsWith('_browser') && !!state.profileSites[site];
     sel.classList.toggle('hidden', !isBrowser);
     if (!isBrowser) return;
-    const assigned = state.profiles.filter(p => p.sites.includes(site));
-    const others = state.profiles.filter(p => !p.sites.includes(site));
-    sel.innerHTML = `<option value="">Tự chọn profile rảnh (${assigned.length})</option>`
-      + assigned.map(p => `<option value="${esc(p.id)}">👤 ${esc(p.name)}${p.busy ? ' · đang bận' : ''}</option>`).join('')
-      + (others.length ? `<optgroup label="Chưa gán cho ${esc(state.profileSites[site])}">${others.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</optgroup>` : '');
-    sel.value = state.profiles.some(p => p.id === current) ? current : '';
+    sel.innerHTML = profileOptions(site, current);
   };
   fill($('#browserProfile'), $('#provider').value, state.form.browser_profile);
   if (state.img) fill($('#imgBrowserProfile'), state.img.engine, state.img.browser_profile);
+  renderStepProfiles(currentAiTemplate());
+  // template whiteboard: vẽ lại để có ô chọn profile (không vẽ lại khi đang gõ trong thẻ)
+  const wbT = currentWbTemplate();
+  if (wbT && !$('#wbBody').contains(document.activeElement)) renderWb(wbT);
+}
+
+/** <option> chọn profile cho một model (site); profile đang chọn không còn tồn tại → "Tự chọn". */
+function profileOptions(site, current) {
+  const assigned = state.profiles.filter(p => p.sites.includes(site));
+  const others = state.profiles.filter(p => !p.sites.includes(site));
+  const value = state.profiles.some(p => p.id === current) ? current : '';
+  const opt = (p, text) => `<option value="${esc(p.id)}"${p.id === value ? ' selected' : ''}>${text}</option>`;
+  return `<option value="">Tự chọn profile rảnh (${assigned.length})</option>`
+    + assigned.map(p => opt(p, `👤 ${esc(p.name)}${p.busy ? ' · đang bận' : ''}`)).join('')
+    + (others.length ? `<optgroup label="Chưa gán cho ${esc(state.profileSites[site] || site)}">${others.map(p => opt(p, esc(p.name))).join('')}</optgroup>` : '');
 }
 
 /* ------------------------------------------------------------------ quảng cáo Facebook */
@@ -792,7 +830,7 @@ async function refreshAds(force = false) {
     alert.innerHTML = 'Chưa kết nối Facebook. Vào <b>Fanpage Facebook</b>, dán User Access Token có quyền <code>ads_read</code> <code>ads_management</code>.'
       + '<button class="btn ghost sm" data-go="facebook">Đến Fanpage Facebook</button>';
   } else if (miss.length) {
-    alert.innerHTML = `Token thiếu quyền ${miss.map(p => `<code>${p}</code>`).join(' ')} — thêm trong Graph API Explorer, tạo token mới rồi dán lại ở mục Fanpage Facebook.`
+    alert.innerHTML = `Token thiếu quyền ${miss.map(p => `<code>${p}</code>`).join(' ')} — thêm trong Graph API Explorer, tạo token mới rồi dán lại ở Cài đặt → API &amp; kết nối.`
       + '<button class="btn ghost sm" data-go="facebook">Đến Fanpage Facebook</button>';
   }
   alert.classList.toggle('hidden', st.ads.logged_in && !miss.length);
@@ -1118,7 +1156,6 @@ function restoreForm() {
   $('#aiDuration').value = f.ai_duration || '15s';
   $('#aiResolution').value = f.ai_resolution || '720p';
   $('#geminiModel').value = s.gemini_model || '';
-  $('#geminiKey').value = s.gemini_api_key || '';
   updateLabels();
   updateProviderUI();
   updateEstimate();
@@ -1152,6 +1189,8 @@ function readForm() {
     // biến + ảnh của template AI đang chọn (backend đọc 2 khoá này)
     variables: currentAiTemplate() ? { ...aiValues(currentAiTemplate()).variables } : {},
     attachments: currentAiTemplate() ? { ...aiValues(currentAiTemplate()).attachments } : {},
+    // template nhiều bước: profile trình duyệt cho từng bước ({key bước | "video": profile id})
+    step_profiles: currentAiTemplate() ? { ...(aiValues(currentAiTemplate()).profiles || {}) } : {},
     // mong muốn của người dùng/template; backend tự chuẩn hoá theo engine (renderAiEngine hiện giá trị đã chuẩn hoá)
     ai_duration: state.form.ai_duration,
     ai_resolution: state.form.ai_resolution,
@@ -1193,7 +1232,137 @@ function aiValues(t) {
 }
 
 
+/* ---------- template SRT Whiteboard (srt-whiteboard-animation) ---------- */
+function currentWbTemplate() {
+  const t = findTemplate(state.form.template);
+  return t && t.kind === 'whiteboard' && state.form.genre !== PRODUCT_GENRE ? t : null;
+}
+
+function wbValues(t) {
+  const o = t.options || {};
+  const wb = state.form.wb || (state.form.wb = {});
+  const defaults = { text: '', audio: '', image_engine: o.image_engine || 'gemini_browser', profile: '', aspect: o.aspect || '16:9',
+    quality: o.quality || 'fast', hand: o.hand !== false, subtitles: o.subtitles !== false, hint: '' };
+  Object.entries(defaults).forEach(([k, v]) => { if (wb[k] == null) wb[k] = v; });
+  return wb;
+}
+
+// Giống whiteboard.is_srt — chỉ để hiện thông tin
+const wbIsSrt = text => /\d+:\d{2}:\d{2}[,.]\d{1,3}\s*-->/.test(text || '');
+function wbInfo(text) {
+  if (!(text || '').trim()) return 'Chưa có nội dung';
+  if (wbIsSrt(text)) {
+    const n = (text.match(/-->/g) || []).length;
+    return `SRT · ${n} câu — giữ đúng mốc thời gian; tiếng: file âm thanh đính kèm, hoặc giọng AI đọc từng câu đúng mốc`;
+  }
+  const n = text.split(/[.!?…\n]+/).filter(x => x.trim()).length;
+  return `Kịch bản thường · ~${n} câu — giọng AI (mục Giọng đọc) đọc, app tự tạo mốc phụ đề theo từng từ`;
+}
+
+function updateWbUI() {
+  const t = currentWbTemplate();
+  $('#wbCard').classList.toggle('hidden', !t);
+  if (!t) { $('#wbBody').dataset.tpl = ''; return; }
+  $('#wbTplName').textContent = t.name;
+  const box = $('#wbBody');
+  if (box.dataset.tpl === t.id) return;
+  box.dataset.tpl = t.id;
+  renderWb(t);
+}
+
+function renderWb(t) {
+  const wb = wbValues(t);
+  const engines = state.boot.image_engines || {};
+  const spec = engines[wb.image_engine] || {};
+  const site = siteOf(wb.image_engine);
+  const profile = spec.browser && (state.profileSites || {})[site]
+    ? `<label class="field"><span>Profile ${esc(spec.name || '')}</span><select data-wb="profile">${profileOptions(site, wb.profile)}</select></label>` : '';
+  const opt = (pairs, cur) => pairs.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('');
+  $('#wbBody').innerHTML = `
+    <div class="engine-line"><b>SRT → minh hoạ vẽ tay</b><small>Mỗi cảnh (~10 giây phụ đề) model ảnh vẽ 1 tranh line-art nền giấy kem;
+      máy bạn dựng bàn tay vẽ lần lượt từng ý đúng lúc lời đọc tới (srt-whiteboard-animation, mã nguồn mở MIT — lần đầu app tự tải + cài, cần Python 3).</small></div>
+    <label class="field"><span>Phụ đề SRT hoặc kịch bản *</span>
+      <textarea data-wb="text" rows="7" class="mono" placeholder="1&#10;00:00:00,500 --> 00:00:03,000&#10;Bà con trồng lúa thường gặp cảnh lá vàng.&#10;&#10;— hoặc dán kịch bản thường, giọng AI sẽ đọc">${esc(wb.text)}</textarea></label>
+    <div class="row wb-row"><small class="muted" id="wbInfo">${esc(wbInfo(wb.text))}</small>
+      <div class="row wb-acts">
+        <button class="btn ghost" type="button" data-wb-act="srt">Mở file .srt…</button>
+        <button class="btn ghost" type="button" data-wb-act="make-srt" title="Giọng AI (mục Giọng đọc) đọc kịch bản để lấy mốc → đổi ô này thành SRT (sửa được) và gắn sẵn file giọng đọc khớp mốc">📝 Tạo SRT từ kịch bản</button>
+        <button class="btn ghost" type="button" data-wb-act="save-srt" title="Lưu nội dung SRT ra file .srt">💾 Lưu .srt</button></div></div>
+    <div class="asset-row">
+      <div class="asset-info"><b>Âm thanh lời đọc (không bắt buộc)</b>
+        <small class="${wb.audio ? 'set' : ''}" title="${esc(wb.audio)}">${esc(wb.audio ? baseName(wb.audio) : 'Không có → giọng AI đọc. Chỉ đính kèm khi nội dung là SRT khớp file này')}</small></div>
+      <div class="row"><button class="btn ghost" type="button" data-wb-act="audio">Chọn…</button>
+        <button class="btn ghost sq" type="button" data-wb-act="noaudio" title="Bỏ chọn">✕</button></div>
+    </div>
+    <div class="grid2">
+      <label class="field"><span>Model vẽ ảnh line-art</span><select data-wb="image_engine">${opt(Object.entries(engines).map(([k, v]) => [k, v.name]), wb.image_engine)}</select></label>
+      ${profile}
+      <label class="field"><span>Tỉ lệ</span><select data-wb="aspect">${opt([['16:9', '16:9 ngang'], ['9:16', '9:16 dọc'], ['1:1', '1:1 vuông']], wb.aspect)}</select></label>
+      <label class="field"><span>Chất lượng dựng</span><select data-wb="quality">${opt([['fast', 'Nhanh — cạnh dài 1080px'], ['hd', 'Nét — 1920px (~3 lần lâu hơn)']], wb.quality)}</select></label>
+    </div>
+    <label class="field"><span>Gợi ý phong cách hình (không bắt buộc)</span>
+      <input data-wb="hint" value="${esc(wb.hint)}" placeholder="Ví dụ: nông dân Việt Nam, ruộng lúa, bao phân bón"></label>
+    <label class="check"><input type="checkbox" data-wb="hand" ${wb.hand ? 'checked' : ''}> Hiện bàn tay cầm bút</label>
+    <label class="check"><input type="checkbox" data-wb="subtitles" ${wb.subtitles ? 'checked' : ''}> Chèn phụ đề vào video</label>
+    <small class="muted">${esc(spec.note || '')}</small>`;
+}
+
+function onWbChange(e) {
+  const t = currentWbTemplate();
+  const el = e.target.closest('[data-wb]');
+  if (!t || !el) return;
+  e.stopPropagation();
+  const wb = wbValues(t);
+  wb[el.dataset.wb] = el.type === 'checkbox' ? el.checked : el.value;
+  if (el.dataset.wb === 'text') $('#wbInfo').textContent = wbInfo(el.value);
+  if (el.dataset.wb === 'image_engine' && e.type === 'change') { wb.profile = ''; renderWb(t); }
+  updateEstimate();
+  persistForm();
+}
+
+async function onWbClick(e) {
+  const t = currentWbTemplate();
+  const btn = e.target.closest('[data-wb-act]');
+  if (!t || !btn) return;
+  const wb = wbValues(t);
+  const act = btn.dataset.wbAct;
+  if (act === 'srt') {
+    const files = await api('pick_files', 'srt');
+    if (!files.length) return;
+    const r = await api('whiteboard_read_srt', files[0]);
+    if (!r.ok) return toast(r.error, 'error');
+    wb.text = r.text;
+    toast(`Đã nạp ${r.name} · ${r.cues} câu`, 'ok');
+  } else if (act === 'make-srt') {
+    if (!(wb.text || '').trim()) return toast('Dán kịch bản vào ô trước', 'warn');
+    if (wbIsSrt(wb.text)) return toast('Nội dung đã là SRT', 'warn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Đang đọc kịch bản…';
+    const r = await api('whiteboard_make_srt', wb.text, $('#voice').value, $('#rate').value);
+    if (!r.ok) { renderWb(t); return toast(r.error, 'error'); }
+    wb.text = r.text;
+    wb.audio = r.audio;  // giọng đọc vừa tạo khớp đúng mốc SRT → dùng luôn khi dựng
+    toast(`Đã tạo SRT ${r.cues} câu + gắn file giọng đọc khớp mốc — sửa chữ trong ô nếu cần`, 'ok');
+  } else if (act === 'save-srt') {
+    if (!wbIsSrt(wb.text)) return toast('Ô đang là kịch bản thường — bấm “📝 Tạo SRT từ kịch bản” trước', 'warn');
+    const r = await api('save_srt', wb.text, 'whiteboard.srt');
+    if (!r.ok) return toast(r.error, 'error');
+    if (r.path) toast(`Đã lưu ${baseName(r.path)}`, 'ok');
+    return;
+  } else if (act === 'audio') {
+    const files = await api('pick_files', 'audio');
+    if (!files.length) return;
+    wb.audio = files[0];
+  } else if (act === 'noaudio') {
+    wb.audio = '';
+  }
+  renderWb(t);
+  updateEstimate();
+  persistForm();
+}
+
 function updateAiUI() {
+  updateWbUI();
   const t = currentAiTemplate();
   $('#aiVideoCard').classList.toggle('hidden', !t);
   if (!t) return;
@@ -1219,6 +1388,8 @@ function updateAiUI() {
 
 // Engine tạo video = Provider AI đang chọn (grok_browser / gemini_browser / gemini_api)
 function aiEngine() {
+  const t = currentAiTemplate();  // template cố định engine (video_engine) → bỏ qua Provider đang chọn
+  if (t && t.video_engine && state.boot.video_engines[t.video_engine]) return t.video_engine;
   const provider = $('#provider').value;
   return state.boot.video_engines[provider] ? provider : null;
 }
@@ -1236,7 +1407,10 @@ function renderAiEngine(t) {
     ? '<b>Chưa có engine tạo video</b><small>Đổi Provider AI sang Grok Browser, Gemini Browser, Dola Browser hoặc Gemini API.</small>'
     : appRender
       ? '<b>Gemini · video thông thường</b><small>Gemini viết kịch bản theo prompt template; app tự dựng hình, giọng đọc, nhạc, phụ đề. Thời lượng & tỉ lệ theo mục Khung hình & thời lượng. Ảnh sản phẩm (nếu chọn) được đưa vào video.</small>'
-      : `Engine: <b>${esc(spec.name)}</b><small>${esc(spec.note)}</small>`;
+      : (t.image_steps || []).length
+        ? `<b>Template ${t.image_steps.length + 1} bước</b><small>Mỗi bước dùng engine cố định bên dưới (không phụ thuộc Provider AI). Chọn profile để dùng đúng tài khoản đã đăng nhập.</small>`
+        : `Engine: <b>${esc(spec.name)}</b><small>${esc(spec.note)}</small>`;
+  renderStepProfiles(t);
   $('#geminiModeBox').classList.toggle('hidden', !(spec && spec.regular_mode));
   $('#aiOptions').classList.toggle('hidden', !spec || appRender);
   if (!spec || appRender) return;
@@ -1266,7 +1440,7 @@ function renderAiAttachments(t) {
       <div class="asset-info"><b>${esc(a.label)}</b>
         <small class="${own || a.default ? 'set' : ''}" title="${esc(own || '')}">${esc(note)}</small></div>
       <div class="row">
-        <button class="btn ghost" type="button" data-pick="${esc(a.key)}" data-video="${a.video ? '1' : ''}">Chọn…</button>
+        <button class="btn ghost" type="button" data-pick="${esc(a.key)}" data-video="${a.keep_video ? 'only' : a.video ? '1' : ''}">Chọn…</button>
         <button class="btn ghost sq" type="button" data-clear="${esc(a.key)}" title="${a.default ? 'Về ảnh mẫu' : 'Bỏ chọn'}">✕</button>
       </div>
     </div>`;
@@ -1276,10 +1450,17 @@ function renderAiAttachments(t) {
 // Giống app/pipeline/ai_video.reference_sentence — câu mô tả vai trò ảnh theo thứ tự gửi lên Grok
 function referenceSentence(t) {
   const files = aiValues(t).attachments;
-  const specs = (t.attachments || []).filter(a => files[a.key] || a.default);
+  let specs = (t.attachments || []).filter(a => files[a.key] || a.default);
+  // template nhiều bước: bước video nhận file theo video_inputs (kết quả các bước ảnh + file đính kèm)
+  if ((t.image_steps || []).length) {
+    const known = new Set([...specs.map(a => a.key), ...t.image_steps.map(s => s.key)]);
+    specs = (t.video_inputs || []).filter(i => known.has(i.key))
+      .map(i => ({ ...((t.attachments || []).find(a => a.key === i.key) || {}), ...i }));
+  }
   if (!specs.length) return '';
-  return ' Reference images are attached in this order — '
-    + specs.map((s, i) => `image ${i + 1} = ${s.role}: ${s.prompt}`).join('; ') + '.';
+  const noun = specs.some(s => s.keep_video) ? 'files' : 'images';
+  return ` Reference ${noun} are attached in this order — `
+    + specs.map((s, i) => `${s.keep_video ? 'video' : 'image'} ${i + 1} = ${s.role}: ${s.prompt}`).join('; ') + '.';
 }
 
 function renderAiPrompt() {
@@ -1287,13 +1468,50 @@ function renderAiPrompt() {
   if (!t) return;
   // Giống ai_video.fill_prompt: biến tuỳ chọn để trống → rỗng, bỏ dòng chỉ còn “”; biến bắt buộc trống → giữ {Bien}
   const own = aiValues(t).variables;
-  const filled = t.prompt.replace(/\{(\w+)\}/g, (m, key) => {
+  const fill = prompt => prompt.replace(/\{(\w+)\}/g, (m, key) => {
     const spec = t.variables.find(v => v.key === key);
     if (!spec) return m;
     const value = (own[key] || '').trim();
     return value || (spec.required === false ? '' : m);
-  });
-  $('#aiPrompt').value = filled.split('\n').filter(l => !/^\s*[“"'‘]\s*[”"'’]\s*$/.test(l)).join('\n') + referenceSentence(t);
+  }).split('\n').filter(l => !/^\s*[“"'‘]\s*[”"'’]\s*$/.test(l)).join('\n');
+  const video = fill(t.prompt) + referenceSentence(t);
+  const steps = t.image_steps || [];
+  $('#aiPrompt').value = steps.length
+    ? [...steps.map((s, i) => `[Bước ${i + 1} · ${s.label || s.key}]\n${fill(s.prompt)}${stepSentence(t, s)}`),
+       `[Bước ${steps.length + 1} · Tạo video]\n${video}`].join('\n\n')
+    : video;
+}
+
+// Giống ai_video.step_inputs + reference_sentence: ảnh gửi ở một bước tạo ảnh (video → 1 khung hình)
+function stepSentence(t, step) {
+  const files = aiValues(t).attachments;
+  const done = new Set(t.image_steps.map(s => s.key));
+  const specs = (step.inputs || []).filter(i => files[i.key] || done.has(i.key));
+  if (!specs.length) return '';
+  return ' Reference images are attached in this order — '
+    + specs.map((s, i) => `image ${i + 1} = ${s.role}: ${s.prompt}`).join('; ') + '.';
+}
+
+// Template nhiều bước: mỗi bước một ô chọn profile trình duyệt (đúng tài khoản cho model của bước đó)
+function renderStepProfiles(t) {
+  const box = $('#aiStepProfiles');
+  const steps = t ? t.image_steps || [] : [];
+  box.classList.toggle('hidden', !steps.length);
+  if (!steps.length || !state.profiles) return;
+  const chosen = aiValues(t).profiles || (aiValues(t).profiles = {});
+  const rows = [
+    ...steps.map((s, i) => ({ key: s.key, label: `Bước ${i + 1} · ${s.label || s.key}`, engine: s.engine,
+                              name: (state.boot.image_engines[s.engine] || {}).name || s.engine })),
+    { key: 'video', label: `Bước ${steps.length + 1} · Tạo video`, engine: aiEngine(),
+      name: (state.boot.video_engines[aiEngine()] || {}).name || '' },
+  ];
+  box.innerHTML = rows.map(r => `
+    <label class="field"><span>${esc(r.label)} — <b>${esc(r.name)}</b></span>
+      <select data-step-profile="${esc(r.key)}">${profileOptions(siteOf(r.engine), chosen[r.key])}</select></label>`).join('');
+  $$('select[data-step-profile]', box).forEach(sel => sel.addEventListener('change', () => {
+    aiValues(t).profiles[sel.dataset.stepProfile] = sel.value;
+    persistForm();
+  }));
 }
 
 async function onAiAttachClick(e) {
@@ -1302,7 +1520,8 @@ async function onAiAttachClick(e) {
   const clear = e.target.closest('[data-clear]');
   if (!t || !(pick || clear)) return;
   if (pick) {
-    const files = await api('pick_files', pick.dataset.video ? 'image_or_video' : 'image');
+    const kind = { only: 'video', 1: 'image_or_video' }[pick.dataset.video] || 'image';
+    const files = await api('pick_files', kind);
     if (!files.length) return;
     aiValues(t).attachments[pick.dataset.pick] = files[0];
   } else {
@@ -1325,14 +1544,19 @@ function updateProviderUI() {
   const isBrowser = p.endsWith('_browser');
   $('#browserBox').classList.toggle('hidden', !isBrowser);
   if (isBrowser) {
-    $('#browserLabel').textContent = { grok_browser: 'Grok Browser', dola_browser: 'Dola Browser' }[p] || 'Gemini Browser';
+    $('#browserLabel').textContent = { grok_browser: 'Grok Browser', dola_browser: 'Dola Browser', muse_browser: 'Muse Browser', claude_browser: 'Claude Browser' }[p] || 'Gemini Browser';
   }
   $('#modelBox').classList.toggle('hidden', p !== 'gemini_api');
-  $('#keyBox').classList.toggle('hidden', p !== 'gemini_api');
 }
 
 function updateEstimate() {
   const f = state.form;
+  const wbT = currentWbTemplate();
+  if (wbT) {
+    const text = wbValues(wbT).text;
+    $('#estimate').textContent = wbIsSrt(text) ? `Whiteboard · ${(text.match(/-->/g) || []).length} câu SRT` : 'Whiteboard · kịch bản';
+    return;
+  }
   if (currentAiTemplate() && !geminiRegular()) {
     $('#estimate').textContent = `1 video AI · ~${$('#aiDuration').value || f.ai_duration || '15s'}`;
     return;
@@ -1443,9 +1667,86 @@ async function licenseLogin() {
   else toast(res.error, 'error');
 }
 
+/* ------------------------------------------------------------------ form duyệt đề xuất của model */
+// Model (Muse, ChatGPT…) không tạo mà đề xuất / hỏi lại → backend (app/llm/offers.py) chờ người dùng chọn.
+// Lớp phủ riêng (không dùng openModal) để không đè hộp thoại đang mở; nhiều tác vụ cùng hỏi → xếp hàng.
+const OfferForm = (() => {
+  const queue = [];
+  let timer = null;
+  function el() {
+    let box = document.getElementById('offerDlg');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'offerDlg';
+      box.className = 'offer-overlay hidden';
+      document.body.appendChild(box);
+      box.addEventListener('click', onClick);
+    }
+    return box;
+  }
+  function render() {
+    const box = el();
+    clearInterval(timer);
+    const cur = queue[0];
+    box.classList.toggle('hidden', !cur);
+    if (!cur) return;
+    box.innerHTML = `<div class="offer-card" role="dialog" aria-label="Duyệt đề xuất của model">
+      <div class="offer-head"><span class="tag">${esc(cur.site)}</span><b>Đề xuất thay vì tạo ${esc(cur.what || 'ảnh')}</b>
+        ${queue.length > 1 ? `<small class="muted">+${queue.length - 1} đang chờ</small>` : ''}</div>
+      <div class="offer-text">${esc(cur.text)}</div>
+      <label class="field"><span>Trả lời khác (tuỳ chọn) — ví dụ: chọn phương án 2, đổi chi tiết…</span>
+        <textarea id="offerCustom" rows="2" placeholder="Để trống rồi bấm Đồng ý = làm theo đề xuất của model"></textarea></label>
+      <label class="check"><input type="checkbox" id="offerAlways"> Lần sau tự đồng ý (đổi lại ở ⚙ Cài đặt)</label>
+      <div class="offer-foot"><small class="muted" id="offerLeft"></small>
+        <button class="btn ghost" data-offer="stop" type="button">✖ Dừng tác vụ</button>
+        <button class="btn ghost" data-offer="custom" type="button">✍ Gửi trả lời khác</button>
+        <button class="btn primary" data-offer="agree" type="button">✅ Đồng ý đề xuất</button></div></div>`;
+    const tick = () => {
+      const left = Math.max(0, Math.round((cur.deadline - Date.now()) / 1000));
+      const t = document.getElementById('offerLeft');
+      if (t) t.textContent = `Tự đồng ý sau ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    };
+    tick();
+    timer = setInterval(tick, 1000);
+  }
+  async function onClick(e) {
+    const btn = e.target.closest('[data-offer]');
+    const cur = queue[0];
+    if (!btn || !cur) return;
+    const choice = btn.dataset.offer;
+    const text = (document.getElementById('offerCustom') || {}).value || '';
+    if (choice === 'custom' && !text.trim()) { toast('Nhập câu trả lời trước', 'warn'); return; }
+    if (choice === 'stop' && !confirm('Dừng tác vụ này?')) return;
+    const always = !!(document.getElementById('offerAlways') || {}).checked;
+    const res = await api('offer_answer', cur.id, choice, text, always);
+    if (!res.ok) toast(res.error, 'warn');
+    else toast(choice === 'stop' ? 'Đã dừng tác vụ' : 'Đã gửi trả lời cho model', 'ok');
+    if (always && state.boot) state.boot.settings.offer_mode = 'auto';
+    close(cur.id);
+  }
+  function add(data) {
+    if (queue.some(q => q.id === data.id)) return;
+    queue.push({ ...data, deadline: Date.now() + (data.timeout || 180) * 1000 });
+    render();
+  }
+  function close(id) {
+    const i = queue.findIndex(q => q.id === id);
+    if (i >= 0) { queue.splice(i, 1); render(); }
+  }
+  return { add, close };
+})();
+
 /* ------------------------------------------------------------------ backend events */
 window.__onBackend = ({ event, data }) => {
   switch (event) {
+    case 'seedance': window.SeedanceStudio.update(data); break;
+    case 'studio_update': case 'studio_log': case 'studio_progress': case 'studio_done': case 'studio_error': case 'studio_cancelled':
+    case 'studio_tasks':
+      window.StudioPage.update(event, data); break;
+    case 'offer_request': OfferForm.add(data); break;
+    case 'offer_closed': OfferForm.close(data.id); break;
+    case 'cast_update': case 'cast_done': case 'cast_error': case 'cast_log': case 'cast_progress': case 'cast_tasks':
+      window.CastPage.update(event, data); break;
     // ---- tạo video (nhiều tác vụ song song — mọi sự kiện kèm data.task)
     case 'tasks':
       state.vt.update(data.tasks);
@@ -1477,6 +1778,12 @@ window.__onBackend = ({ event, data }) => {
       break;
     case 'image_error': toast(data.message, 'error'); break;
     case 'profiles': renderProfiles(data.profiles); break;
+    case 'workflow_run': case 'workflow_log': case 'workflow_progress': case 'workflow_tasks': case 'workflow_error': case 'workflow_done':
+      if (window.WorkflowStudio) window.WorkflowStudio.onEvent(event, data);
+      break;
+    case 'campaign_update': case 'campaign_log': case 'campaign_tasks': case 'campaign_error': case 'campaign_done':
+      if (window.CampaignStudio) window.CampaignStudio.onEvent(event, data);
+      break;
     case 'license': renderLicense(data); break;
     case 'toast': toast(data.message, data.level); break;
   }
@@ -1762,9 +2069,13 @@ function specialCard(choice, icon, title, desc, active) {
 function templateCard(t, active) {
   const cat = state.boot.categories.find(c => c.id === t.category);
   const ai = t.kind === 'ai_video';
+  const wb = t.kind === 'whiteboard';
   const opts = t.options || {};
   const thumb = t.has_thumb
     ? `<img src="/tpl/${encodeURIComponent(t.id)}/thumb" alt="">`
+    : wb
+      ? `<div class="poster wb-poster"><span class="poster-icon">✍</span><b>${esc(t.name)}</b>
+           <small>SRT → line-art vẽ tay · ${esc(opts.aspect || '')}</small></div>`
     : ai
       ? `<div class="poster"><span class="poster-icon">🎬</span><b>${esc(t.name)}</b>
            <small>Grok / Gemini Veo · ${esc(opts.aspect || '')} · ${esc(opts.duration || '')}</small></div>`
@@ -1776,7 +2087,7 @@ function templateCard(t, active) {
   return `<button class="tpl-card ${active ? 'active' : ''}" data-choice="${esc(t.id)}">
     <div class="tpl-thumb">${thumb}</div>
     <div class="meta">
-      <div class="badges"><span class="badge ${ai ? 'ai' : 'html'}">${ai ? 'Video AI · Grok / Gemini' : 'HTML động'}</span>
+      <div class="badges"><span class="badge ${ai || wb ? 'ai' : 'html'}">${wb ? 'Whiteboard · SRT' : ai ? 'Video AI · Grok / Gemini' : 'HTML động'}</span>
         ${cat ? `<span class="badge">${esc(cat.name)}</span>` : ''}</div>
       <b>${esc(t.name)}</b><small>${esc(t.description)}</small>${vars}
       <span class="use">${active ? '✓ Đang dùng' : 'Dùng template →'}</span>
@@ -1846,6 +2157,27 @@ function openSettings() {
       <div class="field"><span>Thư mục lưu video</span>
         <div class="inline"><input id="setOut" value="${esc(s.output_dir)}" readonly><button class="btn ghost" id="setOutPick">Chọn…</button></div></div>
       <label class="check"><input type="checkbox" id="setCleanup" ${s.cleanup_temp ? 'checked' : ''}> Dọn file tạm sau khi render</label>
+      <div class="sec">API &amp; KẾT NỐI</div>
+      <p class="hint">Mọi khoá API và kết nối chỉ nhập tại đây — các màn hình khác chỉ hiện trạng thái.</p>
+      <label class="field"><span>Anthropic API key — Claude (Chiến dịch, Tạo content, Workflow)</span><input id="setAnthropicKey" type="password" value="${esc(s.anthropic_api_key || '')}" placeholder="sk-ant-…" autocomplete="off"></label>
+      <label class="field"><span>OpenAI API key — GPT Image (Tạo hình ảnh) + GPT viết bài</span><input id="setOpenAIKey" type="password" value="${esc(s.openai_api_key || '')}" placeholder="sk-…" autocomplete="off"></label>
+      <label class="field"><span>Gemini API key — Gemini / Veo / Nano Banana</span><input id="setKey" type="password" value="${esc(s.gemini_api_key)}" placeholder="AIza…" autocomplete="off"></label>
+      <div class="sub-title fb-gap">FACEBOOK · META GRAPH API</div>
+      <div class="fb-user" id="setFbUser"></div>
+      <div class="fb-perms" id="setFbPerms"></div>
+      <p class="hint">Graph API Explorer → chọn Meta App → User Token với quyền <code>pages_show_list</code> <code>pages_read_engagement</code> <code>pages_manage_posts</code>
+        (Quảng cáo: thêm <code>ads_read</code> <code>ads_management</code>) → Generate Access Token → dán vào ô dưới.</p>
+      <label class="field"><span>User Access Token</span><textarea class="mono" id="fbToken" rows="2" spellcheck="false" placeholder="EAA…"></textarea></label>
+      <div class="row fb-gap"><button class="btn ghost" id="fbOpenExplorer" type="button">Mở Graph API Explorer ↗</button>
+        <button class="btn primary" id="fbConnect" type="button">Kết nối & tải Fanpage</button>
+        <button class="btn ghost" id="fbLogout" type="button">Ngắt kết nối</button></div>
+      <p class="hint">App ID + App Secret của đúng app đã chọn trong Explorer → app tự đổi sang token dài hạn (~60 ngày).</p>
+      <div class="grid2">
+        <label class="field"><span>App ID</span><input id="fbAppId" placeholder="1234567890123456"></label>
+        <label class="field"><span>Graph API version</span><input id="fbVersion" placeholder="v21.0"></label>
+      </div>
+      <label class="field"><span>App Secret</span><input id="fbAppSecret" type="password" placeholder="App Secret" autocomplete="off"></label>
+      <button class="btn ghost fb-gap" id="fbSaveApp" type="button">Lưu & kiểm tra App</button>
       <div class="sec">AI</div>
       <div class="grid2">
         <label class="field"><span>Trình duyệt cho Gemini/Grok/Dola Browser</span>
@@ -1854,18 +2186,18 @@ function openSettings() {
       </div>
       <label class="field"><span>Veo model (tạo video AI bằng Gemini API)</span><input id="setVeoModel" value="${esc(s.veo_model || '')}" placeholder="veo-3.1-generate-preview"></label>
       <div class="sec">TẠO HÌNH ẢNH</div>
-      <label class="field"><span>OpenAI API key (model chính của Tạo hình ảnh)</span><input id="setOpenAIKey" type="password" value="${esc(s.openai_api_key || '')}" placeholder="sk-…"></label>
       <div class="grid2">
         <label class="field"><span>OpenAI image model</span><input id="setOpenAIModel" value="${esc(s.openai_image_model || '')}" placeholder="gpt-image-1"></label>
         <label class="field"><span>Gemini image model (API)</span><input id="setGeminiImgModel" value="${esc(s.gemini_image_model || '')}" placeholder="gemini-2.5-flash-image"></label>
       </div>
-      <label class="field"><span>Gemini API key</span><input id="setKey" type="password" value="${esc(s.gemini_api_key)}"></label>
       <div class="sec">VIDEO &amp; ÂM THANH</div>
       <div class="grid2">
         <label class="field"><span>FPS</span><select id="setFps">${opt([[24, '24 fps'], [30, '30 fps'], [60, '60 fps']], s.fps)}</select></label>
         <label class="field"><span>Số video tạo song song</span><select id="setParVideo">${opt([1, 2, 3, 4, 5, 6].map(n => [n, `${n} luồng`]), s.max_parallel_video || 2)}</select></label>
         <label class="field"><span>Số tác vụ ảnh song song</span><select id="setParImage">${opt([1, 2, 3, 4, 5, 6].map(n => [n, `${n} luồng`]), s.max_parallel_image || 2)}</select></label>
         <label class="field"><span>Âm lượng nhạc nền (0–1)</span><input id="setBgmVol" type="number" min="0" max="1" step="0.01" value="${s.bgm_volume}"></label>
+        <label class="field" style="grid-column:1/-1"><span>Khi model trình duyệt (Muse, ChatGPT…) đề xuất phương án khác thay vì tạo ảnh / video</span>
+          <select id="setOfferMode">${opt([['ask', 'Hỏi tôi — hiện form duyệt (không trả lời sau 3 phút thì tự đồng ý)'], ['auto', 'Tự đồng ý đề xuất']], s.offer_mode || 'ask')}</select></label>
       </div>
       <div class="field"><span>Thư mục nhạc nền (trống = nhạc nền tự tổng hợp)</span>
         <div class="inline"><input id="setMusic" value="${esc(s.music_dir)}" readonly><button class="btn ghost" id="setMusicPick">Chọn…</button><button class="btn ghost" id="setMusicClear">Xoá</button></div></div>
@@ -1890,6 +2222,7 @@ function openSettings() {
   $('#licLogin').onclick = async () => { await saveSettings(false); licenseLogin(); };
   $('#licLogout').onclick = async () => { const r = await api('license_logout'); renderLicense(r.license); };
   $('#setSave').onclick = () => saveSettings(true);
+  bindFbSettings();
 }
 
 async function saveSettings(close) {
@@ -1899,19 +2232,20 @@ async function saveSettings(close) {
     gemini_model: $('#setModel').value.trim(),
     veo_model: $('#setVeoModel').value.trim() || 'veo-3.1-generate-preview',
     openai_api_key: $('#setOpenAIKey').value.trim(),
+    anthropic_api_key: $('#setAnthropicKey').value.trim(),
     openai_image_model: $('#setOpenAIModel').value.trim() || 'gpt-image-1',
     gemini_image_model: $('#setGeminiImgModel').value.trim() || 'gemini-2.5-flash-image',
     gemini_api_key: $('#setKey').value.trim(),
     fps: parseInt($('#setFps').value, 10),
     max_parallel_video: parseInt($('#setParVideo').value, 10),
     max_parallel_image: parseInt($('#setParImage').value, 10),
+    offer_mode: $('#setOfferMode').value,
     bgm_volume: Math.max(0, Math.min(1, parseFloat($('#setBgmVol').value) || 0)),
     music_dir: $('#setMusic').value,
     license_server: $('#setServer').value.trim(),
   };
   state.boot.settings = await api('save_settings', values);
   $('#geminiModel').value = values.gemini_model;
-  $('#geminiKey').value = values.gemini_api_key;
   const r = await api('license_refresh');
   renderLicense(r.license);
   renderHeader();
@@ -1922,7 +2256,11 @@ async function saveSettings(close) {
 async function onCreate() {
   const form = readForm();
   const aiTemplate = currentAiTemplate();
-  if (aiTemplate) {
+  const wbTemplate = currentWbTemplate();
+  if (wbTemplate) {
+    if (!(wbValues(wbTemplate).text || '').trim()) { toast('Hãy dán phụ đề SRT / kịch bản hoặc mở file .srt', 'warn'); return; }
+    form.wb = { ...wbValues(wbTemplate) };
+  } else if (aiTemplate) {
     if (!aiEngine()) { toast('Template video AI cần Provider AI: Grok Browser, Gemini Browser, Dola Browser hoặc Gemini API', 'warn'); return; }
     const missing = aiTemplate.variables.filter(v => v.required !== false && !(form.variables[v.key] || '').trim());
     if (missing.length) { toast(`Hãy điền: ${missing.map(v => v.label).join(', ')}`, 'warn'); return; }
@@ -1930,7 +2268,7 @@ async function onCreate() {
     if (!form.topic.trim()) { toast('Hãy nhập nội dung video', 'warn'); $('#topic').focus(); return; }
     if (form.genre === PRODUCT_GENRE && !(form.product_files || []).length) { toast('Hãy chọn ít nhất 1 ảnh/video sản phẩm', 'warn'); return; }
   }
-  if (form.provider === 'gemini_api' && !$('#geminiKey').value.trim()) { toast('Nhập Gemini API key trước', 'warn'); return; }
+  if (form.provider === 'gemini_api' && !state.boot.settings.gemini_api_key) { toast('Chưa có Gemini API key — nhập ở Cài đặt → API & kết nối', 'warn'); openSettings(); return; }
   const res = await api('start_job', form);
   if (!res.ok) return toast(res.error, 'error');
   if (state.view !== 'create') navigate('create');
@@ -1951,7 +2289,7 @@ function toast(message, level = '') {
 
 function bindEvents() {
   $$('.config-scroll input, .config-scroll select, .config-scroll textarea').forEach(el => {
-    if (el.id === 'geminiModel' || el.id === 'geminiKey') return;
+    if (el.id === 'geminiModel') return;
     if (el.id === 'aiDuration' || el.id === 'aiResolution') {  // chỉ đổi mong muốn khi người dùng tự chọn
       el.addEventListener('change', () => {
         state.form[el.id === 'aiDuration' ? 'ai_duration' : 'ai_resolution'] = el.value;
@@ -1962,7 +2300,6 @@ function bindEvents() {
     el.addEventListener(el.tagName === 'SELECT' || el.type === 'checkbox' ? 'change' : 'input', onFormChange);
   });
   $('#geminiModel').addEventListener('change', e => api('save_settings', { gemini_model: e.target.value.trim() }));
-  $('#geminiKey').addEventListener('change', e => api('save_settings', { gemini_api_key: e.target.value.trim() }));
   $('#topic').addEventListener('keydown', e => { if (e.key === 'Enter' && e.ctrlKey) onCreate(); });
 
   $('#genrePicker').onclick = openGenreModal;
@@ -1970,6 +2307,9 @@ function bindEvents() {
   $('#geminiLoginBtn').onclick = () => browserLogin($('#provider').value, $('#browserProfile').value);
   $('#createBtn').onclick = onCreate;
   $('#aiAttach').addEventListener('click', onAiAttachClick);
+  $('#wbBody').addEventListener('click', onWbClick);
+  $('#wbBody').addEventListener('change', onWbChange);
+  $('#wbBody').addEventListener('input', e => { if (e.target.matches('textarea, input:not([type=checkbox])')) onWbChange(e); });
   $('#copyPromptBtn').onclick = () => {
     $('#aiPrompt').select();
     document.execCommand('copy');

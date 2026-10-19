@@ -13,7 +13,8 @@ DEFAULTS = {
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash",
     "veo_model": "veo-3.1-generate-preview",  # model Veo khi tạo video AI bằng Gemini API
-    "openai_api_key": "",
+    "openai_api_key": "",  # dùng chung: Tạo hình ảnh (GPT Image) + model văn bản OpenAI (Chiến dịch, Tạo content)
+    "anthropic_api_key": "",  # Claude: Chiến dịch, Tạo content, Workflow
     "openai_image_model": "gpt-image-1",  # model chính của trang Tạo hình ảnh
     "gemini_image_model": "gemini-2.5-flash-image",
     "last_image_form": {},

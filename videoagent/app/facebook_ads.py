@@ -52,7 +52,7 @@ class AdsManager:
     def _token(self) -> str:
         token = self._fb._data.get("user_token")
         if not token:
-            raise FacebookError("Chưa kết nối Facebook — dán User Access Token ở mục Fanpage Facebook trước")
+            raise FacebookError("Chưa kết nối Facebook — nhập User Access Token ở Cài đặt → API & kết nối")
         return token
 
     def _get(self, path: str, **params) -> dict:

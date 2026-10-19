@@ -11,8 +11,9 @@ from playwright.sync_api import sync_playwright
 from . import dola_video as dola
 from .base import LLMError
 from ..browser_profiles import profile_session
-from .browser_chat import SITES, _launch
-from .gemini_veo import _enable_tool, _find_box, _upload_image
+from .browser_chat import PENDING_JS, SEND_BUTTONS, SITES, _launch
+from .uploads import attach_files, wait_send_ready, wait_uploads
+from .gemini_veo import _enable_tool, _find_box, _upload_images
 from .grok_imagine import (FETCH_BLOB_JS, IMAGINE_URL, LOGIN_ERROR, PROGRESS_JS, PROMPT_BOX, _attach_images,
                            _choose_option, type_multiline)
 
@@ -130,7 +131,7 @@ def gemini_images(prompt: str, *, aspect: str, count: int, images: list[Path], c
             box = _find_box(page, site)
             _enable_tool(page, GEMINI_IMAGE_TOOL, LLMError("Không tìm thấy công cụ 'Tạo hình ảnh' trên Gemini"))
             if images:
-                _upload_image(page, images[0], log)
+                _upload_images(page, images, log)
             before = set(_images(page, GEMINI_SCOPE))
             box.click()
             type_multiline(page, f"Tạo hình ảnh tỉ lệ {aspect}: {prompt}")
@@ -235,34 +236,149 @@ def chatgpt_images(prompt: str, *, aspect: str, count: int, images: list[Path], 
                 raise LLMError("Chưa đăng nhập ChatGPT — chọn model 'OpenAI · ChatGPT (trình duyệt)' và bấm 'Đăng nhập'.")
             if images:
                 log(f"Đang tải {len(images)} ảnh tham chiếu lên ChatGPT…")
-                if not _set_files(page, images, log):
-                    log("Không tìm thấy ô tải ảnh trên ChatGPT — bỏ qua ảnh tham chiếu", "warn")
-                page.wait_for_timeout(3000)
+                # đính kèm + xác minh ảnh hiện trong ô soạn + chờ tải lên xong; không được ảnh nào → dừng, KHÔNG gửi
+                # prompt trơn (ChatGPT sẽ đòi ảnh hoặc tạo sai người / sản phẩm, tốn lượt)
+                shown = attach_files(page, images, log, check_cancel=check_cancel)
+                if not shown:
+                    raise LLMError("Không đính kèm được ảnh tham chiếu lên ChatGPT (ảnh không hiện trong ô soạn) — "
+                                   "chưa gửi prompt để tránh tạo sai ảnh. Bật “Hiện Chrome” để xem rồi thử lại.")
+                log(f"Đã đính kèm {shown}/{len(images)} ảnh tham chiếu lên ChatGPT")
             # ChatGPT hay chỉ tạo 1 ảnh/tin nhắn (hoặc gom vào khối trượt chỉ tải ảnh đang hiện) →
             # xin từng ảnh một trong cùng cuộc trò chuyện, mỗi lượt chờ đúng 1 ảnh mới.
             results = []
             for i in range(count):
                 check_cancel()
+                # ảnh trước vừa hiện nhưng ChatGPT có thể vẫn đang trả lời (nút Dừng) → Enter không gửi được.
+                # Chờ xong hẳn rồi mới chụp danh sách ảnh cũ (bản nét cuối của ảnh trước không bị tính là ảnh mới).
+                _chatgpt_idle(page, check_cancel, log)
                 before = set(_images(page, CHATGPT_SCOPE, CHATGPT_EXCLUDE))
-                box = _find_box(page, site)
-                box.click()
                 if i == 0:
-                    message = (f"Hãy tạo 1 hình ảnh tỉ lệ {aspect} theo mô tả sau. Chỉ trả về ảnh, không giải thích.\n"
-                               + prompt)
+                    message = (f"Hãy tạo 1 hình ảnh tỉ lệ {aspect} theo mô tả sau. Chỉ trả về ảnh, không giải thích. "
+                               f"{CHATGPT_SELF_ADJUST}\n" + prompt)
                 else:
                     message = (f"Tạo thêm 1 phiên bản khác của ảnh trên (cùng yêu cầu, tỉ lệ {aspect}, bố cục/góc máy "
-                               "khác một chút). Chỉ trả về ảnh.")
-                type_multiline(page, message)
-                page.wait_for_timeout(500)
-                page.keyboard.press("Enter")
+                               f"khác một chút). Chỉ trả về ảnh. {CHATGPT_SELF_ADJUST}")
+                previous = _chatgpt_last_reply(page)
+                _chatgpt_send(page, site, message, check_cancel, log)
                 log(f"Đã gửi prompt — ChatGPT đang tạo ảnh {i + 1}/{count} (thường mất 30–90 giây)…")
-                src = _wait_for_images(page, before, 1, timeout_s, check_cancel, log, scope=CHATGPT_SCOPE,
-                                       busy=CHATGPT_BUSY, exclude=CHATGPT_EXCLUDE, prefer=CHATGPT_GENERATED)[0]
+                src = _chatgpt_wait_image(page, site, before, previous, timeout_s, check_cancel, log)
                 results.append(_download(ctx, page, src))
                 log(f"Đã nhận ảnh {i + 1}/{count} từ ChatGPT")
             return results
         finally:
             _close(ctx)
+
+
+CHATGPT_SELF_ADJUST = ("Nếu có chi tiết không phù hợp chính sách, hãy tự điều chỉnh sang phiên bản nhẹ nhàng hơn "
+                       "và tạo ảnh luôn, không cần hỏi lại.")
+CHATGPT_AUTO_REPLY = ("Có, bạn cứ làm theo hướng bạn vừa đề xuất và tạo ảnh luôn nhé (giữ đúng tỉ lệ khung hình), "
+                      "không cần hỏi lại.")
+CHATGPT_MAX_AUTO = 2  # số lần tự đồng ý tối đa cho 1 ảnh
+# ChatGPT hỏi lại / đề xuất phương án khác (thay vì tạo ảnh) → tự đồng ý; từ chối hẳn → báo lỗi kèm câu trả lời
+CHATGPT_OFFER = re.compile(r"(\?|bạn có muốn|muốn mình|có thể thử|mình có thể|phiên bản|thay vì|would you like|"
+                           r"do you want|shall i|should i|i can (?:try|create|make)|instead)", re.I)
+CHATGPT_WORKING = re.compile(r"(creating image|generating|đang tạo (hình )?ảnh|image created|đã tạo ảnh)", re.I)
+CHATGPT_REPLY_JS = """() => {
+  const msgs = [...document.querySelectorAll("[data-message-author-role='assistant']")];
+  return msgs.length ? msgs[msgs.length - 1].innerText : '';
+}"""
+
+
+def _chatgpt_busy(page) -> bool:
+    try:
+        busy = page.locator(CHATGPT_BUSY)
+        return bool(busy.count()) and busy.first.is_visible()
+    except PWError:
+        return False
+
+
+def _chatgpt_idle(page, check_cancel, log, timeout_s: int = 150) -> None:
+    """Chờ ChatGPT trả lời xong lượt trước (hết nút Dừng). Quá giờ thì vẫn đi tiếp (_chatgpt_send tự gửi lại)."""
+    deadline, warned = time.time() + timeout_s, False
+    while _chatgpt_busy(page) and time.time() < deadline:
+        check_cancel()
+        if not warned:
+            log("ChatGPT vẫn đang trả lời lượt trước — chờ xong rồi mới gửi yêu cầu tiếp")
+            warned = True
+        page.wait_for_timeout(1000)
+
+
+def _chatgpt_send(page, site, message: str, check_cancel, log, tries: int = 4) -> None:
+    """Gõ + gửi rồi KIỂM TRA đã gửi thật: prompt còn nằm trong ô soạn thảo (Enter bị bỏ qua vì ChatGPT đang bận /
+    giao diện mới Enter chỉ xuống dòng) → chờ hết bận, bấm nút Gửi. Vẫn không gửi được → báo lỗi thay vì treo."""
+    _chatgpt_idle(page, check_cancel, log)
+    _find_box(page, site).click()
+    type_multiline(page, message)
+    page.wait_for_timeout(500)
+    page.keyboard.press("Enter")
+    probe = " ".join(message.split())[:40]
+    for attempt in range(tries):
+        page.wait_for_timeout(1500)
+        check_cancel()
+        try:
+            if not page.evaluate(PENDING_JS, probe):
+                return
+        except PWError:
+            return
+        if attempt == 0:
+            log("Prompt chưa được gửi đi — chờ ChatGPT rảnh / ảnh đính kèm tải xong rồi bấm nút Gửi", "warn")
+        _chatgpt_idle(page, check_cancel, log, timeout_s=60)
+        # nút Gửi khoá vì ảnh đính kèm chưa tải xong → chờ (tối đa 3 phút), không tính là một lần gửi hỏng
+        wait_uploads(page, log, check_cancel=check_cancel)
+        wait_send_ready(page, SEND_BUTTONS, log, check_cancel=check_cancel)
+        try:
+            button = page.locator(SEND_BUTTONS).first
+            if button.count() and button.is_visible() and button.is_enabled():
+                button.click(timeout=3_000)
+            else:
+                _find_box(page, site).click()
+                page.keyboard.press("Enter")
+        except PWError:
+            pass
+    raise LLMError("Không gửi được yêu cầu lên ChatGPT (chữ vẫn nằm trong ô nhập) — bật “Hiện Chrome” để xem rồi thử lại")
+
+
+def _chatgpt_last_reply(page) -> str:
+    try:
+        return " ".join(page.evaluate(CHATGPT_REPLY_JS).split())
+    except PWError:
+        return ""
+
+
+def _chatgpt_wait_image(page, site, before: set, previous: str, timeout_s: int, check_cancel, log) -> str:
+    """Chờ ảnh ChatGPT tạo. Mỗi 30 giây chưa có ảnh thì xem ChatGPT có trả lời bằng CHỮ không (câu trả lời mới, đã
+    đứng yên qua 2 lần kiểm tra, không còn đang tạo): hỏi lại / đề xuất phương án nhẹ nhàng hơn → tự trả lời đồng ý
+    (tối đa CHATGPT_MAX_AUTO lần); từ chối hẳn → báo lỗi kèm câu ChatGPT nói (thay vì chờ tới hết giờ)."""
+    deadline = time.time() + timeout_s
+    replies, seen = 0, ""
+    while True:
+        left = deadline - time.time()
+        if left <= 0:
+            raise LLMError("ChatGPT chưa tạo xong ảnh (hết thời gian chờ)")
+        try:
+            return _wait_for_images(page, before, 1, min(30, left), check_cancel, log, scope=CHATGPT_SCOPE,
+                                    busy=CHATGPT_BUSY, exclude=CHATGPT_EXCLUDE, prefer=CHATGPT_GENERATED)[0]
+        except LLMError:
+            pass  # 30 giây chưa có ảnh → xem ChatGPT đang nói gì
+        busy = page.locator(CHATGPT_BUSY)
+        if busy.count() and busy.first.is_visible():
+            continue
+        text = _chatgpt_last_reply(page)
+        if not text or text == previous or CHATGPT_WORKING.search(text):
+            continue
+        if text != seen:  # câu trả lời mới → đợi thêm 1 lượt cho chắc ChatGPT đã nói xong (và ảnh không tới sau)
+            seen = text
+            continue
+        if replies < CHATGPT_MAX_AUTO and CHATGPT_OFFER.search(text):
+            from . import offers
+
+            replies += 1
+            # đề xuất / hỏi lại → form duyệt cho người dùng (hoặc tự đồng ý, theo ⚙ Cài đặt)
+            reply = offers.resolve("ChatGPT", text, log, check_cancel, "ảnh")
+            previous, seen = text, ""
+            _chatgpt_send(page, site, reply, check_cancel, log)
+            continue
+        raise LLMError(f"ChatGPT không tạo ảnh — ChatGPT trả lời: “{text[:240]}”")
 
 
 def _set_files(page, files: list[Path], log) -> bool:

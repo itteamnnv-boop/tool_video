@@ -95,6 +95,24 @@ class TaskPool:
             self._cond.notify_all()
         return len(targets)
 
+    def wait(self, task_id: str, check_cancel=None, poll: float = 0.5) -> dict:
+        """Chờ một tác vụ kết thúc (gọi từ thread KHÁC, VD: chiến dịch chờ tác vụ ảnh/video), trả về summary.
+        check_cancel() ném Cancelled (phía chờ bị huỷ) → huỷ luôn tác vụ đang chờ rồi ném tiếp."""
+        while True:
+            with self._cond:
+                task = self._tasks.get(task_id)
+                if task is None:
+                    raise RuntimeError(f"Không còn tác vụ {task_id}")
+                if task.status not in ACTIVE:
+                    return task.summary()
+                self._cond.wait(poll)
+            if check_cancel is not None:
+                try:
+                    check_cancel()
+                except Cancelled:
+                    self.cancel(task_id)
+                    raise
+
     def clear_finished(self) -> None:
         with self._cond:
             for tid in [t.id for t in self._tasks.values() if t.status not in ACTIVE]:

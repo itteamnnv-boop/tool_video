@@ -1,0 +1,64 @@
+{
+  "type": "ai_video",
+  "name": "Tạo TVC quảng cáo phân bón MuseAI",
+  "description": "TVC quảng cáo phân bón 2 bước: (1) ChatGPT ghép ảnh sản phẩm vào layout mong muốn thành ảnh quảng cáo hoàn chỉnh; (2) MuseAI (Meta) dựng video TVC dọc từ ảnh hoàn chỉnh đó. Cần đăng nhập ChatGPT và Muse trong Profile trình duyệt",
+  "tags": ["phân bón", "tvc", "quảng cáo", "nông nghiệp", "muse", "chatgpt", "ghép sản phẩm"],
+  "options": {"aspect": "9:16", "duration": "10s", "resolution": "720p"},
+  "variables": [
+    {"key": "TenSanPham", "label": "Tên sản phẩm (đúng như in trên bao bì)", "default": "Phân bón BOSS 1", "required": true},
+    {"key": "LoiIch", "label": "Lợi ích chính", "default": "cây xanh tốt, ra rễ mạnh, đậu trái nhiều", "required": true},
+    {"key": "CauThoai", "label": "Câu thoại / slogan trong video", "default": "Dùng BOSS 1 – cây khỏe, mùa bội thu!", "required": true},
+    {"key": "CTA", "label": "Lời kêu gọi cuối video", "default": "Liên hệ đại lý gần nhất", "required": false}
+  ],
+  "attachments": [
+    {"key": "product", "label": "Ảnh sản phẩm (bao bì rõ nhãn)", "hint": "Ảnh bao / xô / chai phân bón chụp rõ logo và chữ trên nhãn",
+     "required": true, "role": "product photo",
+     "prompt": "the exact product to place into the scene — keep its packaging, logo, label text, colors and proportions identical"},
+    {"key": "layout", "label": "Layout mong muốn (ảnh hoặc video mẫu)", "hint": "Ảnh quảng cáo mẫu có bố cục, bối cảnh, người mẫu bạn muốn — video sẽ được cắt 1 khung hình",
+     "required": true, "video": true, "role": "layout reference",
+     "prompt": "follow its composition, background, people, lighting, camera angle and text placement"}
+  ],
+  "prompt": [
+    "Create a vertical 9:16 Vietnamese TV commercial (TVC) for a fertilizer product, about 10 seconds, realistic cinematic advertising style.",
+    "",
+    "Use the finished advertising image as the opening frame and the main look of the whole video: keep the same scene, people, lighting, colors and composition.",
+    "The product is {TenSanPham}. Its packaging, logo, label text, colors and proportions must stay exactly like the product photo in every frame — never redraw or misspell the label.",
+    "",
+    "Story (smooth, continuous motion — no static slideshow):",
+    "- 0–3s: gentle camera push-in on the scene; the person presents {TenSanPham} proudly.",
+    "- 3–7s: show the benefit: {LoiIch} — healthy green crops, strong roots, plenty of fruit, warm natural sunlight.",
+    "- 7–10s: hero shot of {TenSanPham} in the foreground; the person smiles at the camera.",
+    "",
+    "Vietnamese voice-over (friendly, confident, clear): “{CauThoai}”",
+    "End with the call to action: “{CTA}”",
+    "",
+    "Audio: upbeat advertising music with light countryside ambience.",
+    "Text: minimal, large and readable Vietnamese; no extra logos, no watermark.",
+    "Avoid: deformed hands, duplicated people, distorted product packaging, wrong or misspelled label text."
+  ],
+  "video_engine": "muse_browser",
+  "image_steps": [
+    {
+      "key": "finished",
+      "label": "Ghép sản phẩm vào layout (ChatGPT)",
+      "engine": "chatgpt_browser",
+      "aspect": "9:16",
+      "prompt": [
+        "Create ONE photorealistic vertical 9:16 advertising image for the fertilizer product {TenSanPham}.",
+        "Recreate the layout reference: same composition, background, people (pose, outfit, expression), lighting, colors and camera angle.",
+        "Replace the product shown in the layout with the EXACT product from the product photo: identical packaging shape, logo, label text, colors and proportions. Do not redraw, translate or misspell the label.",
+        "Blend the product naturally into the scene: correct scale, perspective, shadows, reflections and hand contact if a person is holding it.",
+        "If the layout has a headline or speech bubble, write this Vietnamese text exactly: “{CauThoai}”. Otherwise add no text.",
+        "Sharp, clean, high-quality commercial photo. No watermark, no extra logos, no extra people, no distorted hands."
+      ],
+      "inputs": [
+        {"key": "layout", "role": "layout reference", "prompt": "keep this composition, background, people, lighting and camera angle"},
+        {"key": "product", "role": "product photo", "prompt": "place exactly this product into the scene — packaging, logo, label text and colors unchanged"}
+      ]
+    }
+  ],
+  "video_inputs": [
+    {"key": "finished", "role": "finished advertising image", "prompt": "use it as the opening frame and keep its scene, people and look throughout the video"},
+    {"key": "product", "role": "product photo", "prompt": "the product packaging and label must look exactly like this in every frame"}
+  ]
+}

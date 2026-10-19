@@ -421,6 +421,8 @@ select option{background:#1c231d}
 .use{margin-top:auto;padding-top:4px;color:var(--lime);font-weight:700;font-size:12.5px}
 .ai-vars{display:flex;flex-direction:column;gap:12px;margin-bottom:12px}
 .ai-attach{margin:2px 0 14px}
+.ai-steps{display:grid;gap:10px;margin:-4px 0 14px}
+.ai-steps .field{margin:0}
 .engine-line{margin:-4px 0 14px;padding:10px 12px;border-radius:10px;background:#1c231d;border:1px solid var(--line2);font-size:13px}
 .engine-line b{color:var(--lime)}
 .gemini-mode{margin:-4px 0 14px}
@@ -452,3 +454,28 @@ select option{background:#1c231d}
 .toast.ok{border-color:#4f7a2a;color:var(--lime)}
 .toast.warn{border-color:#7a5a2a;color:#ffd59a}
 .toast.error{border-color:#7a2a2a;color:#ffb3b3}
+
+/* template SRT Whiteboard */
+.wb-poster{background:radial-gradient(circle at 50% 30%,#f5ebd7,#b9a682 75%);color:#2b2b2b}
+.wb-poster small{color:#4a4031}
+.wb-row{justify-content:space-between;align-items:center;gap:10px;margin:2px 0 10px}
+#wbBody .check{display:flex;margin:6px 0}
+
+/* Provider AI: profile + Hiện Chrome + Đăng nhập tự xuống dòng, không tràn khung */
+#browserBox{min-width:0}
+#browserBox .inline{flex-wrap:wrap;justify-content:flex-start;gap:8px 12px}
+#browserBox .profile-select{flex:1 1 150px;min-width:0;max-width:none}
+#browserBox .check{white-space:nowrap}
+.wb-row{flex-wrap:wrap}
+.wb-acts{gap:6px;flex-wrap:wrap}
+.wb-acts .btn{padding:6px 10px;font-size:12.5px}
+
+/* form duyệt đề xuất của model (Muse, ChatGPT…) */
+.offer-overlay{position:fixed;inset:0;z-index:9000;display:grid;place-items:center;background:rgba(0,0,0,.55);padding:16px}
+.offer-overlay.hidden{display:none}
+.offer-card{width:min(620px,100%);max-height:90vh;overflow:auto;display:flex;flex-direction:column;gap:12px;padding:20px;border-radius:16px;background:var(--panel,#141a15);border:1px solid var(--lime);box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.offer-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.offer-head b{font-size:16px}
+.offer-text{white-space:pre-wrap;padding:12px 14px;border-radius:12px;background:#0f1510;border:1px solid var(--line2);font-size:14px;line-height:1.5;max-height:260px;overflow:auto}
+.offer-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.offer-foot small{margin-right:auto}

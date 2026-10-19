@@ -20,8 +20,9 @@ ENGINES = {
     },
     "gemini_browser": {
         "name": "Gemini · Tạo hình ảnh (trình duyệt)", "browser": True,
-        "aspects": ["1:1", "9:16", "16:9", "3:4", "4:3"], "counts": [1], "max_images": 1,
-        "note": "Công cụ 'Tạo hình ảnh' của gemini.google.com — tài khoản miễn phí dùng được. Mỗi lần 1 ảnh.",
+        "aspects": ["1:1", "9:16", "16:9", "3:4", "4:3"], "counts": [1], "max_images": 10,
+        "note": "Công cụ 'Tạo hình ảnh' của gemini.google.com — tài khoản miễn phí dùng được. Mỗi lần 1 ảnh, "
+                "gửi kèm tối đa 10 ảnh tham chiếu.",
     },
     "grok_browser": {
         "name": "Grok Imagine · Image (trình duyệt)", "browser": True,
@@ -32,6 +33,12 @@ ENGINES = {
         "name": "Dola · Seedream (trình duyệt)", "browser": True,
         "aspects": ["9:16", "16:9", "1:1", "2:3", "3:4", "4:3"], "counts": [1, 2, 4], "max_images": 4,
         "note": "Dola AI Creation → Image (Seedream) — cần đăng nhập Dola.",
+    },
+    "muse_browser": {
+        "name": "Meta · Muse (trình duyệt)", "browser": True,
+        "aspects": ["1:1", "9:16", "16:9", "3:4", "4:3"], "counts": [1, 2, 4], "max_images": 4,
+        "note": "Trợ lý Muse của Meta (muse.ai, Muse Image) — cần đăng nhập Muse trong Profile trình duyệt. "
+                "Tính năng mới: giao diện Muse đổi thì có thể cần cập nhật app.",
     },
     "gemini_api": {
         "name": "Gemini · Nano Banana (API key)",
@@ -70,6 +77,9 @@ def generate(engine: str, prompt: str, *, aspect: str, count: int, quality: str,
     if engine == "dola_browser":
         from .browser_images import dola_images
         return dola_images(prompt, **browser)
+    if engine == "muse_browser":
+        from .muse_browser import muse_images
+        return muse_images(prompt, **browser)
     if engine == "gemini_api":
         return _gemini_api(prompt, settings=settings, aspect=aspect, count=count, images=images, log=log,
                            check_cancel=check_cancel)

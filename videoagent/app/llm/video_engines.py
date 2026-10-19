@@ -10,20 +10,27 @@ ENGINES = {
         "name": "Grok Imagine (trình duyệt)",
         "durations": ["6s", "10s", "15s"], "resolutions": ["480p", "720p", "1080p"],
         "aspects": ["9:16", "16:9", "1:1", "2:3", "3:2"], "max_images": 10,
+        "video_input": True,  # ô đính kèm nhận được file video (template có attachment keep_video)
         "note": "Cần đăng nhập grok.com (Provider Grok Browser → Đăng nhập).",
     },
     "gemini_browser": {
         "name": "Gemini · Veo (trình duyệt)",
-        "durations": ["8s"], "resolutions": ["720p"], "aspects": ["9:16", "16:9"], "max_images": 1,
+        "durations": ["8s"], "resolutions": ["720p"], "aspects": ["9:16", "16:9"], "max_images": 3,
         "note": "Dùng công cụ 'Tạo video' (Veo) của tài khoản Gemini; không có Veo thì tự chuyển sang video thông thường. "
-                "Chỉ gửi được 1 ảnh tham chiếu.",
+                "Gửi kèm tối đa 3 ảnh tham chiếu (nhật ký báo nếu Gemini nhận thiếu).",
         "regular_mode": True,  # có thể chọn 'Video thông thường' (Gemini viết kịch bản, app tự dựng)
     },
     "dola_browser": {
         "name": "Dola · Seedance (trình duyệt)",
         "durations": ["5s", "10s"], "resolutions": ["720p"],
-        "aspects": ["9:16", "16:9", "1:1", "3:4", "4:3", "21:9"], "max_images": 4,
+        "aspects": ["9:16", "16:9", "1:1", "3:4", "4:3", "21:9"], "max_images": 4, "video_input": True,
         "note": "Dùng AI Creation → Video của dola.com (Seedance). Cần đăng nhập Dola (Provider Dola Browser → Đăng nhập).",
+    },
+    "muse_browser": {
+        "name": "Meta · Muse Video (trình duyệt)",
+        "durations": ["5s", "10s"], "resolutions": ["720p"], "aspects": ["9:16", "16:9", "1:1"], "max_images": 3,
+        "note": "Trợ lý Muse của Meta (muse.ai). Muse Video đang mở dần — tài khoản chưa có thì Muse chỉ trả lời "
+                "bằng chữ và app báo lỗi rõ. Cần đăng nhập Muse trong Profile trình duyệt.",
     },
     "gemini_api": {
         "name": "Gemini · Veo (API key)",
@@ -65,6 +72,9 @@ def generate(engine: str, prompt: str, out_path: Path, *, options: dict, images:
     elif engine == "dola_browser":
         from .dola_video import generate_video as dola_generate
         dola_generate(prompt, out_path, channel=settings.get("browser_channel"), show_browser=show_browser, **common)
+    elif engine == "muse_browser":
+        from .muse_browser import muse_video
+        muse_video(prompt, out_path, channel=settings.get("browser_channel"), show_browser=show_browser, **common)
     elif engine == "gemini_api":
         from .gemini_veo import generate_video_api
         generate_video_api(prompt, out_path, api_key=settings.get("gemini_api_key"), model=settings.get("veo_model"),

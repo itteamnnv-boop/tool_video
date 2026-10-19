@@ -1,0 +1,7 @@
+{
+  "type": "whiteboard",
+  "name": "SRT Whiteboard animation",
+  "description": "Phụ đề SRT (hoặc kịch bản) → minh hoạ line-art vẽ tay trên giấy kem, bàn tay vẽ lần lượt từng ý đúng lúc lời đọc tới. Dùng bộ dựng mã nguồn mở srt-whiteboard-animation, render ngay trên máy.",
+  "tags": ["whiteboard", "srt", "vẽ tay", "giải thích", "line art"],
+  "options": {"aspect": "16:9", "image_engine": "gemini_browser", "quality": "fast", "hand": true, "subtitles": true}
+}

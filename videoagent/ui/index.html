@@ -6,6 +6,13 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap">
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="seedance.css">
+<link rel="stylesheet" href="campaign.css">
+<link rel="stylesheet" href="workflow.css">
+<link rel="stylesheet" href="content.css">
+<link rel="stylesheet" href="studio.css">
+<link rel="stylesheet" href="posts.css">
+<link rel="stylesheet" href="cast.css">
 </head>
 <body>
 <header class="topbar">
@@ -49,10 +56,27 @@
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 9"/></svg></span>
     <span class="sb-label">Tạo hình ảnh</span><span class="sb-badge" id="sbImageCount">0</span><i class="sb-dot hidden" id="sbImgRunning" title="Đang tạo ảnh"></i>
   </button>
+  <button class="sb-item" data-view="studio" title="Studio — storyboard → video dài">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M8 5v4M13 5v4M18 5v4M10 12.5v4l3.5-2z"/></svg></span>
+    <span class="sb-label">Studio</span>
+  </button>
+  <button class="sb-item" data-view="cast" title="Nhân vật & Layout cố định — dùng cho Studio">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8.5" cy="8" r="3.2"/><path d="M3 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><rect x="14.5" y="4" width="6.5" height="9" rx="1.5"/><path d="M14.5 10.5l2-2 2 2 2.5-2.5"/></svg></span>
+    <span class="sb-label">Nhân vật &amp; Layout</span>
+  </button>
+  <button class="sb-item" data-view="content" title="Tạo content bài viết">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4h10l4 4v12H5z"/><path d="M14 4v5h5M8 13h8M8 17h5"/></svg></span>
+    <span class="sb-label">Tạo content bài viết</span>
+  </button>
+  <button class="sb-item" data-view="seedance" title="Seedance Studio Pro">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"/><path d="m19 2 1 3 3 1"/></svg></span>
+    <span class="sb-label">Seedance Studio Pro</span><i class="sb-dot hidden" id="sbSeedanceRunning" title="Studio đang chạy"></i>
+  </button>
   <button class="sb-item" data-view="templates" title="Template">
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z"/></svg></span>
     <span class="sb-label">Template</span><span class="sb-badge" id="sbTplCount">0</span>
   </button>
+  <div class="sb-group">FACEBOOK</div>
   <button class="sb-item" data-view="facebook" title="Fanpage Facebook">
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M15.5 7.5h-2a2 2 0 0 0-2 2V21M9 12.5h6"/></svg></span>
     <span class="sb-label">Fanpage Facebook</span><span class="sb-badge" id="sbFbCount">0</span>
@@ -60,6 +84,36 @@
   <button class="sb-item" data-view="ads" title="Quảng cáo Facebook">
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 10v4a1 1 0 0 0 1 1h2l5 4V5L6 9H4a1 1 0 0 0-1 1z"/><path d="M15 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg></span>
     <span class="sb-label">Quảng cáo Facebook</span><span class="sb-badge" id="sbAdsCount">0</span>
+  </button>
+  <button class="sb-item" data-view="posts" title="Quản lý bài đăng — lưu, sửa, đăng lại">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2.5"/><path d="M8 8h8M8 12h8M8 16h4"/><path d="M15.5 15.5l1.5 1.5 3-3"/></svg></span>
+    <span class="sb-label">Quản lý bài đăng</span><span class="sb-badge" id="sbPostCount">0</span>
+  </button>
+  <div class="sb-group">WORKFLOW</div>
+  <button class="sb-item" data-view="wf-list" title="Danh sách workflow">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="4" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 15.5h7M14 19.5h5"/></svg></span>
+    <span class="sb-label">Danh sách workflow</span><span class="sb-badge" id="sbWfCount">0</span><i class="sb-dot hidden" id="sbWfRunning" title="Đang chạy"></i>
+  </button>
+  <button class="sb-item" data-view="workflow" title="Thiết kế workflow">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2.5" y="4" width="6" height="5" rx="1.5"/><rect x="15.5" y="4" width="6" height="5" rx="1.5"/><rect x="9" y="15" width="6" height="5" rx="1.5"/><path d="M8.5 6.5h7M18.5 9v3a2 2 0 0 1-2 2H12v1M5.5 9v3a2 2 0 0 0 2 2H12"/></svg></span>
+    <span class="sb-label">Thiết kế workflow</span>
+  </button>
+  <div class="sb-group hidden">CHIẾN DỊCH</div><!-- tạm ẩn nhóm Chiến dịch: bỏ class hidden ở dòng này và 4 nút bên dưới để hiện lại -->
+  <button class="sb-item hidden" data-view="camp-new" title="Tạo chiến dịch">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M14 6l3 3M12 20h8"/></svg></span>
+    <span class="sb-label">Tạo chiến dịch</span>
+  </button>
+  <button class="sb-item hidden" data-view="camp-list" title="Danh sách chiến dịch">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16M4 12h16M4 19h10"/><circle cx="19" cy="19" r="2"/></svg></span>
+    <span class="sb-label">Danh sách chiến dịch</span><span class="sb-badge" id="sbCampCount">0</span><i class="sb-dot hidden" id="sbCampRunning" title="Đang chạy"></i>
+  </button>
+  <button class="sb-item hidden" data-view="camp-lib" title="Thư viện chiến dịch">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h4v16H4zM10 4h4v16h-4z"/><path d="M16 5l3.5-1 3 15-3.5 1z"/></svg></span>
+    <span class="sb-label">Thư viện chiến dịch</span>
+  </button>
+  <button class="sb-item hidden" data-view="camp-history" title="Lịch sử & chi phí">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+    <span class="sb-label">Lịch sử &amp; chi phí</span>
   </button>
   <div class="sb-group">HỆ THỐNG</div>
   <button class="sb-item" data-view="profiles" title="Profile trình duyệt">
@@ -109,6 +163,7 @@
       <div class="card hidden" id="aiVideoCard">
         <div class="card-title">VIDEO AI <span class="tag" id="aiTplName"></span></div>
         <div class="engine-line" id="aiEngine"></div>
+        <div class="ai-steps hidden" id="aiStepProfiles"></div>
         <label class="field hidden gemini-mode" id="geminiModeBox"><span>Cách tạo với Gemini Browser</span>
           <select id="geminiMode">
             <option value="veo">Veo — tự chuyển sang video thông thường nếu tài khoản không có Veo</option>
@@ -132,6 +187,11 @@
           <button class="btn ghost" id="copyPromptBtn" type="button">Sao chép prompt</button>
           <small class="muted">Engine tạo video theo Provider AI: Grok Browser → Grok Imagine · Gemini Browser / Gemini API → Veo. Ô Nội dung không dùng cho template này.</small>
         </div>
+      </div>
+
+      <div class="card hidden" id="wbCard">
+        <div class="card-title">WHITEBOARD VẼ TAY <span class="tag" id="wbTplName"></span></div>
+        <div id="wbBody"></div>
       </div>
 
       <div class="card hidden" id="assetsCard">
@@ -180,6 +240,8 @@
               <option value="gemini_browser">Gemini Browser (free)</option>
               <option value="grok_browser">Grok Browser (free)</option>
               <option value="dola_browser">Dola Browser (free)</option>
+              <option value="muse_browser">Muse Browser (Meta)</option>
+              <option value="claude_browser">Claude Browser (viết kịch bản)</option>
               <option value="gemini_api">Gemini API (API key)</option>
               <option value="offline">Offline (không dùng AI)</option>
             </select>
@@ -193,7 +255,6 @@
           </div>
           <label class="field hidden" id="modelBox"><span>Model</span><input id="geminiModel" placeholder="gemini-2.5-flash"></label>
         </div>
-        <label class="field hidden" id="keyBox"><span>Gemini API key</span><input id="geminiKey" type="password" placeholder="AIza…"></label>
       </div>
 
       <div class="card">
@@ -400,36 +461,16 @@
   <div class="page-head">
     <small class="eyebrow">FANPAGE FACEBOOK</small>
     <h2>Kết nối & quản lý Fanpage</h2>
-    <p class="muted">Lấy User Access Token trên Graph API Explorer → dán vào đây → app lấy danh sách Fanpage và Page Token tương ứng.</p>
+    <p class="muted">Bật “Kết nối” cho Fanpage muốn dùng và đăng bài. Token và App Meta nhập ở <b>Cài đặt → API &amp; kết nối</b>.</p>
   </div>
   <div class="fb-layout page-body">
     <div class="fb-col">
       <div class="card">
-        <div class="card-title">① USER ACCESS TOKEN</div>
-        <ol class="fb-steps">
-          <li>Mở <b>Graph API Explorer</b> (nút bên dưới), chọn <b>Meta App</b> của bạn.</li>
-          <li>Ở <b>User or Page</b> chọn <b>User Token</b>, thêm quyền: <code>pages_show_list</code> <code>pages_read_engagement</code> <code>pages_manage_posts</code>
-            — dùng <b>Quảng cáo Facebook</b> thì thêm <code>ads_read</code> <code>ads_management</code>.</li>
-          <li>Bấm <b>Generate Access Token</b>, đăng nhập và cho phép các page cần dùng.</li>
-          <li>Copy <b>Access Token</b> (bắt đầu bằng EAA…) và dán vào ô dưới.</li>
-        </ol>
-        <label class="field fb-gap"><span>User Access Token</span>
-          <textarea class="mono" id="fbToken" rows="3" spellcheck="false" placeholder="EAA…"></textarea></label>
-        <div class="row fb-gap">
-          <button class="btn ghost" id="fbOpenExplorer" type="button">Mở Graph API Explorer ↗</button>
-          <button class="btn primary" id="fbConnect" type="button">Kết nối & tải Fanpage</button>
-        </div>
-        <div class="fb-user fb-gap" id="fbUser"></div>
+        <div class="card-title">KẾT NỐI FACEBOOK <span class="tag" id="fbAppTag">—</span></div>
+        <div class="fb-user" id="fbUser"></div>
         <div class="fb-perms" id="fbPerms"></div>
-        <button class="btn ghost fb-gap" id="fbLogout" type="button">Ngắt kết nối</button>
-      </div>
-      <div class="card">
-        <div class="card-title">② APP META <span class="tag" id="fbAppTag">tuỳ chọn</span></div>
-        <p class="hint">Token lấy từ Graph API Explorer chỉ sống ~1–2 giờ. Nhập App ID + App Secret của <b>đúng app đã chọn trong Explorer</b> để app tự đổi sang token dài hạn (~60 ngày) — Page Token cũng dài hạn theo.</p>
-        <label class="field fb-gap"><span>App ID</span><input id="fbAppId" placeholder="Ví dụ: 1234567890123456"></label>
-        <label class="field fb-gap"><span>App Secret</span><input id="fbAppSecret" type="password" placeholder="App Secret"></label>
-        <label class="field fb-gap"><span>Graph API version</span><input id="fbVersion" placeholder="v21.0"></label>
-        <button class="btn ghost fb-gap" id="fbSaveApp" type="button">Lưu & kiểm tra App</button>
+        <p class="hint">User Access Token, App ID / App Secret nhập ở <b>Cài đặt → API &amp; kết nối</b> — không nhập ở màn hình này.</p>
+        <button class="btn ghost fb-gap" id="fbOpenSettings" type="button">Mở Cài đặt</button>
       </div>
     </div>
     <div class="fb-col">
@@ -440,6 +481,26 @@
       <div class="fb-pages" id="fbPages"></div>
     </div>
   </div>
+</section>
+
+<section class="panel page hidden" id="page-cast">
+  <div class="page-head">
+    <small class="eyebrow">STUDIO</small>
+    <h2>Nhân vật &amp; Layout cố định</h2>
+    <p class="muted">Tạo nhân vật và bối cảnh dùng lại nhiều video: lên ý tưởng, AI viết mô tả, tạo góc mặt / cơ thể / sheet
+      nhân vật, sửa ảnh tới khi ưng rồi ⭐ chọn ảnh — Studio dùng khi bạn chọn ở ⚙ Cài đặt dự án.</p>
+  </div>
+  <div id="castBody"></div>
+</section>
+
+<section class="panel page hidden" id="page-posts">
+  <div class="page-head">
+    <small class="eyebrow">FACEBOOK</small>
+    <h2>Quản lý bài đăng</h2>
+    <p class="muted">Mọi bài đăng (từ Fanpage, Workflow, Chiến dịch) được lưu kèm ảnh / video — sửa nội dung rồi đăng lại lên
+      một hoặc nhiều Fanpage, đăng ngay hoặc hẹn giờ. Mỗi lần đăng đều cần bạn xác nhận và được ghi lại.</p>
+  </div>
+  <div id="postsBody"></div>
 </section>
 
 <section class="panel page hidden" id="page-ads">
@@ -468,6 +529,103 @@
   <div class="ads-table-wrap"><table class="ads-table" id="adsTable"></table></div>
 </section>
 
+<section class="panel page hidden" id="page-seedance">
+  <div class="sd-heading">
+    <div><small class="eyebrow">AI VIDEO WORKSPACE</small><h2>Seedance Studio <span>Pro</span></h2><p class="muted">Từ kịch bản đến thư viện video. Điều phối bằng tài khoản trình duyệt của bạn.</p></div>
+    <span class="status-pill mono" id="sdStatus" role="status">Sẵn sàng</span>
+  </div>
+  <div class="sd-stats" id="sdStats"></div>
+  <div class="sd-limit-banner hidden" id="sdLimitBanner" role="status"></div>
+  <div class="sd-layout">
+    <aside class="sd-config">
+      <div class="card">
+        <div class="card-title">THIẾT LẬP VIDEO <span class="tag">SEEDANCE</span></div>
+        <div class="sd-mode" role="group" aria-label="Chế độ tạo video"><button data-sd-mode="text" class="active">Text to Video</button><button data-sd-mode="image">Image to Video</button></div>
+        <div class="grid2">
+          <label class="field"><span>Nhà cung cấp</span><select id="sdProvider"><option value="dola">Dola</option><option value="doubao">Doubao · thử nghiệm</option></select></label>
+          <label class="field"><span>Model video</span><select id="sdModel"><option value="2.5">Seedance 2.5</option><option value="2.0">Seedance 2.0</option></select></label>
+          <label class="field"><span>Tỉ lệ khung hình</span><select id="sdAspect"><option>16:9</option><option>9:16</option><option>1:1</option><option>4:3</option><option>21:9</option><option value="none">Không chèn tỉ lệ</option></select></label>
+          <label class="field"><span>Thời lượng</span><select id="sdDuration"><option value="10s">10s</option><option value="5s">5s</option><option value="15s">15s · chat</option></select></label>
+        </div>
+        <label class="field"><span>Luồng tạo video</span><select id="sdRoute"><option value="auto">Tự nhận diện giao diện</option><option value="chat">Pro/Fast chat · như extension gốc</option><option value="video">Video · chọn model trực tiếp</option></select></label>
+        <label class="field"><span>Phong cách</span><select id="sdPreset"><option value="">Theo prompt gốc</option></select></label>
+        <label class="field"><span>Tiền tố prompt</span><input id="sdPrefix" placeholder="tạo video: "></label>
+        <label class="sd-check"><input type="checkbox" id="sdDirect"> Tạo trực tiếp, không hỏi lại</label>
+        <p class="sd-hint">Luồng Video kiểm tra model trong bộ chọn thực tế. Luồng chat dùng Pro/Fast và yêu cầu model qua prompt, như extension gốc.</p>
+      </div>
+      <div class="card">
+        <div class="card-title">PROFILE &amp; PHÂN PHỐI <button class="sd-text-btn" id="sdRefreshProfiles" title="Tải lại profile">↻</button></div>
+        <div id="sdProfiles" class="sd-profiles"></div>
+        <div class="sd-toolbar"><button class="btn ghost sm" id="sdLogin">Đăng nhập</button><button class="sd-text-btn" id="sdManageProfiles">Quản lý profile ↗</button></div>
+        <div class="grid2">
+          <label class="field"><span>Tab mỗi profile</span><select id="sdTabs"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+          <label class="field"><span>Nghỉ trước chat mới (s)</span><input type="number" id="sdDelay" min="0" max="300" value="30"></label>
+        </div>
+        <label class="field"><span>Chờ render tối đa (s)</span><input type="number" id="sdTimeout" min="60" max="3600" step="60" value="900"></label>
+        <label class="sd-check"><input type="checkbox" id="sdShowBrowser"> Hiện trình duyệt khi chạy</label>
+        <p class="sd-hint">Tối đa 2 cảnh/chat · mỗi tab chờ video trước cảnh tiếp theo. Các tab cùng profile dùng chung tài khoản.</p>
+      </div>
+      <div class="card">
+        <div class="card-title">LƯU &amp; XUẤT</div>
+        <label class="sd-check"><input type="checkbox" id="sdAutoDownload"> Tự tải MP4 khi có video</label>
+        <label class="sd-check"><input type="checkbox" id="sdMaster"> Ưu tiên bản master không watermark</label>
+        <label class="sd-check"><input type="checkbox" id="sdZipMode"> Gom ZIP · tạm dừng tải lẻ tự động</label>
+        <p class="sd-hint">Video và ZIP lưu trong thư mục <code>_seedance</code>. Độ phân giải thực được đọc sau khi tải.</p>
+        <div class="sd-toolbar"><button class="btn ghost sm" id="sdExport">Xuất dự án JSON</button><button class="sd-text-btn" id="sdFolder">Mở thư mục ↗</button></div>
+      </div>
+    </aside>
+    <div class="sd-workspace">
+      <div class="card sd-input-card">
+        <div class="card-title">KỊCH BẢN <span class="tag" id="sdPromptCount">0 cảnh</span><label class="sd-text-btn sd-import">Nhập file ↥<input type="file" id="sdPromptFile" accept=".txt,.text,.csv,.json" hidden></label></div>
+        <div class="sd-stylebar"><b>✨ PHONG CÁCH:</b><div id="sdStyleChips" class="sd-style-chips" role="group" aria-label="Phong cách video"></div></div>
+        <p id="sdStyleDescription" class="sd-hint"></p>
+        <textarea id="sdPromptText" rows="5" placeholder="Một cảnh mỗi dòng, hoặc dùng dòng trống để tách cảnh nhiều dòng.&#10;&#10;Ví dụ: Một thuyền gỗ lướt trên hồ lúc bình minh, máy quay tiến chậm, ánh sáng điện ảnh."></textarea>
+        <div class="sd-toolbar sd-input-footer"><span class="sd-hint">Kéo thả TXT, CSV hoặc JSON vào đây · Ctrl + Enter để thêm</span><button class="btn ghost" id="sdAddPrompts">+ Thêm vào hàng đợi</button></div>
+      </div>
+      <div class="sd-tabs-row"><div class="sd-tabs" role="tablist"><button class="active" data-sd-tab="queue" role="tab" aria-selected="true">Hàng đợi</button><button data-sd-tab="images" role="tab" aria-selected="false">Ảnh tham chiếu</button><button data-sd-tab="media" role="tab" aria-selected="false">Video đầu ra</button><button data-sd-tab="logs" role="tab" aria-selected="false">Nhật ký</button></div></div>
+      <div class="sd-view" id="sdView-queue">
+        <div class="sd-toolbar sd-filterbar"><input id="sdSearch" aria-label="Tìm cảnh" placeholder="Tìm trong kịch bản…"><select id="sdJobFilter" aria-label="Lọc trạng thái"><option value="all">Tất cả trạng thái</option><option value="queued">Đang chờ</option><option value="active">Đang xử lý</option><option value="submitted">Đã gửi</option><option value="media_ready">Video sẵn sàng</option><option value="completed">Đã tải</option><option value="failed">Lỗi / đã dừng</option></select><button class="sd-text-btn" id="sdRetryAll">Thử lại cảnh lỗi</button><button class="sd-text-btn sd-red" id="sdClearJobs">Xoá tất cả</button></div>
+        <div class="sd-pairing hidden" id="sdPairing"></div>
+        <div id="sdJobs" class="sd-jobs"></div>
+      </div>
+      <div class="sd-view hidden" id="sdView-images">
+        <div class="sd-toolbar"><button class="btn ghost" id="sdAddImages">+ Thêm ảnh</button><select id="sdImageFilter" aria-label="Lọc ảnh"><option value="all">Tất cả ảnh</option><option value="queued">Đang chờ</option><option value="attached">Đã đính kèm</option></select><button class="sd-text-btn" id="sdClearImages">Xoá thư viện ảnh</button></div>
+        <p class="sd-hint">JPEG, PNG, WebP, GIF, AVIF · tối đa 200 ảnh, 25 MB/ảnh. Ghép ảnh và cảnh theo thứ tự; dùng mũi tên để đổi thứ tự.</p>
+        <div class="sd-images" id="sdImages"></div>
+      </div>
+      <div class="sd-view hidden" id="sdView-media">
+        <div class="sd-toolbar"><input id="sdHistoryUrl" type="url" placeholder="https://www.dola.com/chat/…" aria-label="URL chat để quét lịch sử"><button class="btn ghost" id="sdHistory">Quét lịch sử</button><button class="btn ghost" id="sdZip">↓ Xuất ZIP</button></div>
+        <p class="sd-hint">Quét tối đa 50 lượt cuộn trong cuộc trò chuyện được chỉ định. URL hết hạn có thể được cập nhật bằng cách quét lại.</p>
+        <div class="sd-media" id="sdMedia"></div>
+      </div>
+      <div class="sd-view hidden" id="sdView-logs"><div class="sd-toolbar"><span class="sd-hint">Nhật ký lưu trên máy · tối đa 2.000 sự kiện</span><button class="sd-text-btn" id="sdRefresh">↻ Làm mới</button></div><pre id="sdLogs" class="sd-log" aria-live="polite"></pre></div>
+      <div class="sd-runbar"><div><b id="sdRunSummary">Sẵn sàng tạo video</b><small id="sdWorkerSummary" class="muted">Chọn profile và thêm cảnh để bắt đầu.</small></div><button class="btn danger" id="sdStop" disabled>■ Dừng</button><button class="btn primary" id="sdStart">Tạo video →</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== STUDIO ============================== -->
+<section class="panel page hidden" id="page-studio">
+  <div class="page-head">
+    <small class="eyebrow">STUDIO</small>
+    <h2>Ý tưởng → storyboard → video dài</h2>
+    <p class="muted">AI viết storyboard 5–10 cảnh (sửa được), mỗi cảnh tạo ảnh khung đầu rồi model video làm chuyển động; app đọc giọng,
+      thêm phụ đề, nhạc nền và ghép thành video 30–90 giây. Ảnh / clip chạy trong hàng đợi Tạo hình ảnh / Tạo video.</p>
+  </div>
+  <div id="studioBody"></div>
+</section>
+
+<!-- ============================== TẠO CONTENT BÀI VIẾT ============================== -->
+<section class="panel page hidden" id="page-content">
+  <div class="page-head">
+    <small class="eyebrow">TẠO CONTENT BÀI VIẾT</small>
+    <h2>Viết bài đăng bán hàng theo mẫu</h2>
+    <p class="muted">Chọn model, nhập đúng thông tin sản phẩm — AI viết theo bố cục, emoji và giọng văn của mẫu, rồi ứng dụng tự kiểm tra giá,
+      số điện thoại, website, địa chỉ có đúng nguyên văn và không có con số lạ.</p>
+  </div>
+  <div id="contentBody"></div>
+</section>
+
 <section class="panel page hidden" id="page-profiles">
   <div class="page-head">
     <small class="eyebrow">PROFILE TRÌNH DUYỆT</small>
@@ -486,6 +644,110 @@
     </div>
   </div>
   <div class="prof-list" id="profList"></div>
+</section>
+
+<!-- ============================== CHIẾN DỊCH ============================== -->
+<section class="panel page hidden" id="page-camp-list">
+  <div id="campListView">
+    <div class="page-head ads-head">
+      <div>
+        <small class="eyebrow">CHIẾN DỊCH</small>
+        <h2>Phòng marketing AI</h2>
+        <p class="muted">6 vai trò AI chạy dây chuyền: brief → 5 ý tưởng → content → 2 ảnh 9:16 → duyệt → đăng Facebook (chỉ khi bạn đồng ý).</p>
+      </div>
+      <button class="btn primary" type="button" data-go-view="camp-new">+ Tạo chiến dịch</button>
+    </div>
+    <div class="camp-stats" id="campStats"></div>
+    <div class="camp-filters">
+      <input id="campSearch" placeholder="Tìm theo tên chiến dịch…">
+      <select id="campFilterStatus"><option value="">Mọi trạng thái</option></select>
+      <select id="campFilterProduct"><option value="">Mọi sản phẩm</option></select>
+      <select id="campFilterDate"><option value="">Mọi ngày</option><option value="7">7 ngày qua</option><option value="30">30 ngày qua</option></select>
+    </div>
+    <div class="camp-grid" id="campGrid"></div>
+  </div>
+  <div class="hidden" id="campDetailView"></div>
+</section>
+
+<section class="panel page hidden" id="page-camp-new">
+  <div class="page-head ads-head">
+    <div>
+      <small class="eyebrow">CHIẾN DỊCH · TẠO MỚI</small>
+      <h2>Tạo chiến dịch</h2>
+      <p class="muted">Thay cho lệnh <code>/marketing</code>. Ô nào không bắt buộc mà để trống thì hệ thống <b>không tự bịa</b> (giá, mã, khuyến mãi).</p>
+    </div>
+  </div>
+  <div class="camp-form" id="campForm"></div>
+</section>
+
+<section class="panel page hidden" id="page-camp-lib">
+  <div class="page-head">
+    <small class="eyebrow">CHIẾN DỊCH · THƯ VIỆN</small>
+    <h2>Thư viện chiến dịch</h2>
+    <p class="muted">Sản phẩm, ảnh tham chiếu, người mẫu, phong cách nhân vật, mẫu content và cấu hình 6 vai trò AI.</p>
+  </div>
+  <div class="camp-tabs" id="campLibTabs"></div>
+  <div class="camp-lib-body" id="campLibBody"></div>
+</section>
+
+<section class="panel page hidden" id="page-camp-history">
+  <div class="page-head">
+    <small class="eyebrow">CHIẾN DỊCH · LỊCH SỬ</small>
+    <h2>Lịch sử đăng &amp; chi phí</h2>
+    <p class="muted">Bài đã đăng (ai bấm đăng, lúc nào), chi phí ước tính theo chiến dịch và từng lần gọi AI.</p>
+  </div>
+  <div class="camp-tabs" id="campHistTabs"></div>
+  <div id="campHistBody"></div>
+</section>
+
+<!-- ============================== WORKFLOW ============================== -->
+<section class="panel page hidden" id="page-wf-list">
+  <div class="page-head ads-head">
+    <div>
+      <small class="eyebrow">WORKFLOW</small>
+      <h2>Danh sách workflow</h2>
+      <p class="muted">Quy trình sản xuất video của bạn — làm 1 lần, đổi input rồi chạy lại mãi mãi.</p>
+    </div>
+    <button class="btn primary" id="wflNew" type="button">+ Tạo workflow</button>
+  </div>
+  <div class="camp-stats" id="wflStats"></div>
+  <div class="camp-filters wfl-filters">
+    <input id="wflSearch" placeholder="Tìm theo tên hoặc mô tả…">
+    <select id="wflStatus"><option value="">Mọi trạng thái</option><option value="running">Đang chạy</option><option value="done">Lần gần nhất: xong</option>
+      <option value="error">Lần gần nhất: lỗi</option><option value="never">Chưa chạy</option></select>
+    <select id="wflSort"><option value="updated">Sửa gần nhất</option><option value="run">Chạy gần nhất</option><option value="name">Tên A → Z</option></select>
+  </div>
+  <div class="wfl-grid" id="wflGrid"></div>
+  <div class="wfl-presets"><div class="card-title">MẪU CÓ SẴN</div><div class="wfl-preset-row" id="wflPresets"></div></div>
+</section>
+
+<section class="panel page hidden wf-page" id="page-workflow">
+  <div class="wf-top">
+    <div class="wf-title">
+      <small class="eyebrow"><button class="wf-back" id="wfBack" type="button">← Danh sách</button> · WORKFLOW</small>
+      <div class="row"><input id="wfName" class="wf-name" maxlength="80" placeholder="Tên workflow"><span class="wf-saved" id="wfSaved"></span></div>
+    </div>
+    <div class="wf-steps" id="wfSteps"></div>
+    <div class="row wf-actions">
+      <select id="wfSelect" title="Mở workflow đã lưu"></select>
+      <button class="btn ghost sm" id="wfNew" type="button">+ Mới</button>
+      <button class="btn ghost sm" id="wfDup" type="button" title="Nhân bản workflow">⧉</button>
+      <button class="btn ghost sm" id="wfDel" type="button" title="Xoá workflow">🗑</button>
+      <button class="btn primary" id="wfRun" type="button">▶ Chạy</button>
+    </div>
+  </div>
+  <div class="wf-body">
+    <aside class="wf-palette" id="wfPalette"></aside>
+    <div class="wf-canvas" id="wfCanvas" tabindex="0">
+      <div class="wf-world" id="wfWorld"><svg class="wf-edges" id="wfEdges"></svg><div id="wfNodes"></div></div>
+      <div class="wf-empty hidden" id="wfEmpty"><b>Kéo block từ bảng bên trái vào đây</b><span>hoặc chọn một mẫu: <span id="wfEmptyPresets"></span></span></div>
+      <div class="wf-zoom"><button type="button" data-zoom="-1">−</button><span id="wfZoomPct">100%</span>
+        <button type="button" data-zoom="1">+</button><button type="button" data-zoom="fit" title="Vừa màn hình">⤢</button></div>
+      <div class="wf-hint">Kéo cổng <i class="dot-out"></i> sang cổng <i class="dot-in"></i> để nối · Kéo nền để di chuyển · Lăn chuột để phóng to · Delete để xoá</div>
+    </div>
+    <aside class="wf-inspector" id="wfInspector"></aside>
+  </div>
+  <div class="wf-tray" id="wfTray"></div>
 </section>
 
 <section class="panel page hidden" id="page-templates">
@@ -539,5 +801,12 @@
 </div>
 <div class="toast hidden" id="toast"></div>
 <script src="app.js"></script>
+<script src="seedance.js"></script>
+<script src="campaign.js"></script>
+<script src="workflow.js"></script>
+<script src="content.js"></script>
+<script src="studio.js"></script>
+<script src="posts.js"></script>
+<script src="cast.js"></script>
 </body>
 </html>

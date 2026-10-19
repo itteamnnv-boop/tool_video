@@ -11,7 +11,7 @@ from ..templates_registry import registry
 from ..util import slugify, unique_dir, write_json
 from . import Cancelled
 from .tasks import TaskPool
-from .ai_video import (IMAGE_EXT, collect_attachments, collect_variables, fill_prompt, import_attachments,
+from .ai_video import (IMAGE_EXT, collect_attachments, collect_variables, dedupe_attachments, fill_prompt, import_attachments,
                        reference_sentence)
 
 log = logging.getLogger(__name__)
@@ -58,7 +58,16 @@ class ImageRunner:
             path = Path(str(raw))
             if not path.is_file() or path.suffix.lower() not in IMAGE_EXT:
                 raise ValueError(f"Ảnh tham chiếu không hợp lệ: {path.name}")
-            attachments.append(({"key": f"ref{i}", "label": f"Ảnh tham chiếu {i}", **FREE_REF}, path))
+            attachments.append(({"key": f"ref{i}", "label": f"Ảnh tham chiếu {i}", **FREE_REF,
+                                 **({"prompt": str(form["ref_prompt"]).strip()[:300]} if str(form.get("ref_prompt") or "").strip() else {})},
+                                path))
+        for i, extra in enumerate(form.get("extra_refs") or [], 1):  # ảnh kèm có vai trò riêng (vd. logo của Studio)
+            path = Path(str(extra.get("path") or ""))
+            if not path.is_file() or path.suffix.lower() not in IMAGE_EXT:
+                raise ValueError(f"Ảnh đính kèm không hợp lệ: {path.name}")
+            attachments.append(({"key": f"extra{i}", "label": str(extra.get("role") or f"Ảnh kèm {i}"),
+                                 "role": str(extra.get("role") or "reference image"),
+                                 "prompt": str(extra.get("prompt") or FREE_REF["prompt"])}, path))
         aspect, count = normalize(engine, str(form.get("aspect") or ""), int(form.get("count") or 1))
         quality = form.get("quality") if form.get("quality") in QUALITIES else "auto"
         pin = form.get("pinterest") or {}
@@ -70,7 +79,8 @@ class ImageRunner:
                 raise ValueError("Bật 'Tham khảo ảnh Pinterest' thì cần nhập từ khoá tìm kiếm")
             pinterest = {"keyword": keyword, "urls": urls[:PIN_MAX], "count": max(1, min(PIN_MAX, int(pin.get("count") or 3)))}
         job = dict(engine=engine, prompt=prompt, title=title, attachments=attachments, aspect=aspect, count=count,
-                   quality=quality, show_browser=bool(form.get("show_browser")), pinterest=pinterest)
+                   quality=quality, show_browser=bool(form.get("show_browser")), pinterest=pinterest,
+                   ref_note=form.get("ref_note", True) is not False)  # False: không thêm câu "Reference images are attached…"
         return self.pool.submit(title, self._job, job, profile=str(form.get("browser_profile") or ""),
                                 meta={"kind": "image", "engine": engine, "count": count})
 
@@ -118,10 +128,11 @@ class ImageRunner:
             attachments = list(job["attachments"])
             if job["pinterest"]:
                 attachments += self._pinterest_refs(job["pinterest"], job_dir)
+            attachments = dedupe_attachments(attachments, self._log)  # cùng 1 ảnh ở 2 vai trò → gửi 1 lần
             if len(attachments) > spec["max_images"]:
                 self._log(f"{spec['name']} nhận tối đa {spec['max_images']} ảnh tham chiếu — bỏ bớt ảnh thừa", "warn")
                 attachments = attachments[:spec["max_images"]]
-            prompt = job["prompt"] + reference_sentence([a[0] for a in attachments])
+            prompt = job["prompt"] + (reference_sentence([a[0] for a in attachments]) if job.get("ref_note", True) else "")
             refs = import_attachments(job_dir, attachments)
             self._log(f"{spec['name']} · {job['aspect']} · {job['count']} ảnh"
                       + (f" · {len(refs)} ảnh tham chiếu" if refs else ""))
