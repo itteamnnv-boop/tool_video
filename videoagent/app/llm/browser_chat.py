@@ -177,6 +177,9 @@ PAGE_JUNK = (r"ChatGPT can make mistakes", r"ChatGPT có thể mắc lỗi", r"A
 ANSWER_PREFIX = re.compile(r"^\s*(ChatGPT said:|ChatGPT đã nói:|Gemini said:|Grok said:|Claude said:|Claude đã nói:)\s*", re.I)
 
 
+_flagged: set = set()  # cửa sổ app đã ẩn icon taskbar (để trả lại nếu sau này nó lên màn hình / không còn là của app)
+
+
 def _hide_offscreen_from_taskbar() -> None:
     """Windows: cửa sổ Chrome chạy ngoài màn hình (OFFSCREEN_ARG) vẫn hiện icon trên thanh taskbar → đổi thành
     cửa sổ công cụ (WS_EX_TOOLWINDOW) để ẩn icon. Chỉ đụng cửa sổ Chrome nằm ngoài màn hình, không đụng Chrome của người dùng."""
@@ -193,20 +196,46 @@ def _hide_offscreen_from_taskbar() -> None:
     set_style.restype = ctypes.c_ssize_t
     set_style.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
 
+    class WINDOWPLACEMENT(ctypes.Structure):
+        _fields_ = [("length", wintypes.UINT), ("flags", wintypes.UINT), ("showCmd", wintypes.UINT),
+                    ("ptMinPosition", wintypes.POINT), ("ptMaxPosition", wintypes.POINT),
+                    ("rcNormalPosition", wintypes.RECT)]
+
+    def restyle(hwnd, style, show_cmd):
+        user32.ShowWindow(hwnd, 0)  # đổi kiểu cửa sổ khi đang ẩn thì taskbar mới cập nhật
+        set_style(hwnd, GWL_EXSTYLE, style)
+        user32.ShowWindow(hwnd, show_cmd)
+
     def visit(hwnd, _):
         cls = ctypes.create_unicode_buffer(64)
         user32.GetClassNameW(hwnd, cls, 64)
         if cls.value != "Chrome_WidgetWin_1" or not user32.IsWindowVisible(hwnd):
             return True
+        style = get_style(hwnd, GWL_EXSTYLE)
+        # Xét VỊ TRÍ BÌNH THƯỜNG (không phải toạ độ hiện tại): cửa sổ thu nhỏ — hoặc đang trong lúc thu nhỏ — Windows
+        # báo toạ độ -32000, TRÙNG vị trí "ngoài màn hình" → trước đây Chrome của người dùng bị ẩn nhầm thành ô nhỏ.
+        wp = WINDOWPLACEMENT()
+        wp.length = ctypes.sizeof(WINDOWPLACEMENT)
+        user32.GetWindowPlacement(hwnd, ctypes.byref(wp))
+        ours = wp.rcNormalPosition.left <= -20000  # Chrome chạy ẩn của app (mở ở ngoài màn hình)
+        iconic = user32.IsIconic(hwnd)
+        if not ours:
+            # Chrome của người dùng / Chrome đang "Hiện": không ẩn; bị ẩn nhầm (bản cũ / do app) → trả lại nút taskbar.
+            # Chỉ gỡ khi cửa sổ thu nhỏ hoặc chính app đã gắn cờ (menu / popup của Chrome tự có cờ này — giữ nguyên).
+            if style & WS_EX_TOOLWINDOW and (iconic or hwnd in _flagged):
+                restyle(hwnd, style & ~WS_EX_TOOLWINDOW, 7 if iconic else 8)  # 7: vẫn thu nhỏ · 8: SW_SHOWNA
+                _flagged.discard(hwnd)
+            return True
+        if iconic:
+            user32.ShowWindow(hwnd, 4)  # Chrome ẩn của app bị thu nhỏ (Win+D…) → về lại ngoài màn hình, không cướp focus
         rect = wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
-        if rect.left > -20000:  # cửa sổ trên màn hình (Chrome của người dùng / Chrome đang "Hiện") → giữ nguyên
+        if rect.left > -20000:  # Chrome của app vừa được đưa lên màn hình ("Hiện") → giữ nguyên
             return True
-        style = get_style(hwnd, GWL_EXSTYLE)
         if not style & WS_EX_TOOLWINDOW:
-            user32.ShowWindow(hwnd, 0)  # đổi kiểu cửa sổ khi đang ẩn thì taskbar mới cập nhật
-            set_style(hwnd, GWL_EXSTYLE, (style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
-            user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE: hiện lại (vẫn ngoài màn hình), không cướp focus
+            # SW_SHOWNOACTIVATE: hiện lại (vẫn ngoài màn hình), không cướp focus
+            restyle(hwnd, (style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW, 4)
+            _flagged.add(hwnd)
         return True
 
     user32.EnumWindows(proc(visit), 0)

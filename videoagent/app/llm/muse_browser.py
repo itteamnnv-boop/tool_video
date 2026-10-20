@@ -9,6 +9,7 @@ Cấu trúc trang (kiểm chứng 10/2026, đã đăng nhập):
 - bảng Activity bên phải: mỗi việc Muse làm là một dòng ("Create … / Created …") → dùng để báo tiến trình.
 Muse là agent làm được việc khác (gửi email, mua hàng…) nên lời nhắn luôn giới hạn: chỉ tạo ảnh/video.
 """
+import logging
 import re
 import time
 import uuid
@@ -320,6 +321,8 @@ class MuseChatProvider(BrowserChatProvider):
             try:
                 if ONBOARDING.search(page.evaluate(LOG_TAIL_JS) or ""):
                     raise LLMError(ONBOARDING_ERROR)
+                if images:  # vd. ảnh lưới khung hình video mẫu — chỉ khi bên gọi truyền vào (supports_images vẫn False)
+                    _attach(page, [Path(p) for p in images], lambda m, *a, **k: logging.getLogger(__name__).info(m))
                 marker = _send(page, box, prompt)
                 return self._wait_text(page, marker, complete)
             except PWError as exc:

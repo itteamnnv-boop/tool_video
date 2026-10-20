@@ -7,6 +7,7 @@ thư viện file + ghép video.
 - Hạn mức tuần: đọc chỉ đọc từ trang muse.ai đã đăng nhập (server action của trang Muse, không tốn lượt).
 - Dữ liệu: <DATA_DIR>/muse_hub/{hub.json, tasks.json, assets/}; file kết quả: <thư mục video>/_muse_hub/<dự án>/.
 """
+import base64
 import json
 import re
 import shutil
@@ -25,6 +26,7 @@ OUT_DIR = "_muse_hub"
 SITE = "muse"
 MAX_IMAGES = 3  # Muse nhận tối đa 3 ảnh đính kèm / lệnh (app/llm/video_engines.py)
 RATIOS = ("9:16", "16:9", "1:1", "4:3", "3:4")
+VIDEO_SECONDS = (5, 8, 10, 15, 20, 25, 30, 40, 50, 60)  # độ dài 1 video Muse (tab Studio — tạo lẻ)
 DEFAULT_SETTINGS = {"max_accounts": 2, "total_threads": 2, "mode": "rotate", "use_topup": True, "keep_going": False,
                     "limit_image": 5, "limit_video": 30, "show_browser": False, "retries": 1, "bgm_dir": "",
                     "bgm_volume": 0.15}
@@ -97,7 +99,10 @@ def parse_quota(data: dict) -> dict | None:
             "paid": bool(tier.get("isPaid")),
             "topup_left": (left / total) if isinstance(left, (int, float)) and total else (0.0 if left == 0 else None),
             "label": str(sub.get("usageRowValueLabel") or ""), "subtitle": str(sub.get("statusSubtitle") or ""),
-            "topup_label": str(sub.get("topupRowValueLabel") or ""), "checked_at": now_ms()}
+            "topup_label": str(sub.get("topupRowValueLabel") or ""), "checked_at": now_ms(),
+            # số token bổ sung (Additional token) còn lại / tổng — hiện ở tab Tài khoản
+            "topup_balance": left if isinstance(left, (int, float)) else None,
+            "topup_total": total if isinstance(total, (int, float)) else None}
 
 
 def weekly_out(q: dict | None) -> bool:
@@ -272,7 +277,7 @@ class MuseHub:
                     "model": {**self.hub["model"], "images": urls(self.hub["model"]["images"])},
                     "rotate": {**self.hub["rotate"], "images": urls(self.hub["rotate"]["images"])},
                     "stopped": self._stopped,
-                    "tasks": [self._public(t) for t in self.tasks], "statuses": STATUS, "ratios": list(RATIOS),
+                    "tasks": [self._public(t) for t in self.tasks], "statuses": STATUS, "ratios": list(RATIOS), "video_seconds": list(VIDEO_SECONDS),
                     "max_images": MAX_IMAGES, "out_dir": str(self.out_root()),
                     "groups": [self._public_group(g) for g in self.groups], "bgm_dir": str(self.bgm_dir())}
 
@@ -490,6 +495,21 @@ class MuseHub:
                 out.append({"path": str(dest), "url": asset_url(str(dest)), "name": p.name})
         return out
 
+    def import_data(self, name: str, data_url: str) -> list:
+        """Ảnh kéo thả vào app (data URL) → kho uploads. Chỉ nhận png / jpg / webp, tối đa 20MB."""
+        head, _, body = str(data_url or "").partition(",")
+        ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}.get(head[5:].split(";")[0])
+        if not ext or ";base64" not in head:
+            raise HubError(f"{name}: chỉ nhận ảnh PNG / JPG / WEBP")
+        raw = base64.b64decode(body, validate=False)
+        if len(raw) > 20 * 1024 * 1024:
+            raise HubError(f"{name}: ảnh quá lớn (tối đa 20MB)")
+        folder = STORE / "uploads"
+        folder.mkdir(parents=True, exist_ok=True)
+        dest = folder / f"{uuid.uuid4().hex[:12]}{ext}"
+        dest.write_bytes(raw)
+        return [{"path": str(dest), "url": asset_url(str(dest)), "name": str(name or dest.name)[:120]}]
+
     def _take_rotate(self) -> str:
         r = self.hub["rotate"]
         imgs = r.get("images") or []
@@ -506,18 +526,48 @@ class MuseHub:
         if not prompts:
             raise HubError("Nhập ít nhất 1 prompt (mỗi khối cách nhau 1 dòng trống = 1 task)")
         ratio = form.get("ratio") if form.get("ratio") in RATIOS else ""
+        try:  # độ dài video Muse tạo (giây) — chọn ở tab Studio
+            seconds = int(form.get("duration") or 10)
+        except (TypeError, ValueError):
+            seconds = 10
+        seconds = seconds if seconds in VIDEO_SECONDS else 10
         images = [str(p) for p in (form.get("images") or []) if Path(str(p)).is_file()]
         pairing = form.get("pairing") == "pair"  # ghép cặp: ảnh thứ i cho prompt thứ i; dùng chung: mọi prompt cùng ảnh
         project = form.get("project") or self.hub["current"]
         created = []
+        from . import muse_script as ms
+
         with self._lock:
+            mine = [g for g in self.groups if (g.get("project") or "default") == project]
+            batch = max((int(g.get("batch") or 0) for g in mine), default=0) + 1
+            no = max((int(g.get("no") or 0) for g in mine), default=0)
             for i, prompt in enumerate(prompts[:200]):
                 own = ([images[i]] if i < len(images) else []) if pairing else images
                 refs, notes = compose_images(prompt, self.hub, own, self._take_rotate)
-                task = {"id": _uid("tk"), "project": project, "kind": kind, "prompt": prompt[:6000], "ratio": ratio,
-                        "images": refs, "notes": notes, "status": "queued", "account": "", "attempts": 0,
-                        "created_at": now_ms() + i, "started_at": 0, "finished_at": 0, "files": [], "error": "",
-                        "log": []}
+                base = {"project": project, "kind": kind, "ratio": ratio, "images": refs, "notes": notes,
+                        "status": "queued", "account": "", "attempts": 0, "started_at": 0, "finished_at": 0,
+                        "files": [], "error": "", "log": []}
+                if kind == "video" and seconds > ms.MUSE_CLIP_MAX:
+                    # Muse làm mỗi clip tối đa ~10 giây → chia đoạn ≤ 10s (mỗi đoạn 1 lệnh), xong app tự ghép đúng độ dài
+                    no += 1
+                    title = next((x.strip() for x in prompt.splitlines() if x.strip()), "Video")
+                    title = ms.HEADER_RE.sub("", title).strip() or title
+                    g = {"id": _uid("g"), "project": project, "mode": "split", "ratio": ratio, "status": "running",
+                         "created_at": now_ms() + i, "outputs": [], "bgm": False, "versions": 1, "version": 1,
+                         "batch": batch, "no": no, "title": title[:70], "method": "direct", "duration": str(seconds),
+                         "merge": True, "scenes": [prompt[:2000]]}
+                    self.groups.append(g)
+                    parts = ms.split_prompt(prompt, seconds)
+                    for k, (sec, part) in enumerate(parts, 1):
+                        task = {**base, "id": _uid("tk"), "prompt": part[:6000], "created_at": now_ms() + i * 100 + k,
+                                "duration": sec, "role": "scene", "scene": k, "group": g["id"],
+                                "notes": [*notes, f"Phần {k}/{len(parts)} của video {seconds}s — xong tự ghép"]}
+                        self.tasks.append(task)
+                        created.append(task["id"])
+                    continue
+                task = {**base, "id": _uid("tk"), "prompt": prompt[:6000], "created_at": now_ms() + i}
+                if kind == "video":
+                    task["duration"] = seconds
                 self.tasks.append(task)
                 created.append(task["id"])
             self._save()
@@ -687,15 +737,106 @@ class MuseHub:
         self._push()
 
     # ------------------------------------------------------------ thư viện + ghép video
+    def move_to_project(self, paths: list, project: str) -> dict:
+        """Chuyển các file đã chọn ở Thư viện sang dự án khác. File thuộc kịch bản → chuyển CẢ kịch bản (mọi cảnh +
+        bản ghép) để không bị tách rời. File trên ổ đĩa giữ nguyên chỗ, chỉ đổi dự án mà task / kịch bản thuộc về."""
+        if not any(p["id"] == project for p in self.hub["projects"]):
+            raise HubError("Dự án không tồn tại")
+        key = lambda p: str(Path(str(p)).resolve()).lower()  # noqa: E731
+        want = {key(p) for p in paths or []}
+        if not want:
+            raise HubError("Chưa chọn file nào")
+        with self._lock:
+            hit = {t["id"] for t in self.tasks if any(key(f) in want for f in t.get("files") or [])}
+            gids = {t.get("group") for t in self.tasks if t["id"] in hit and t.get("group")}
+            gids |= {g["id"] for g in self.groups if any(key(f) in want for f in g.get("outputs") or [])}
+            moved = hit | {t["id"] for t in self.tasks if t.get("group") in gids}
+            for t in self.tasks:
+                if t["id"] in moved:
+                    t["project"] = project
+            for g in self.groups:
+                if g["id"] in gids:
+                    g["project"] = project
+            self._save()
+        self._push()
+        return {"tasks": len(moved), "groups": len(gids), "extra": len(moved - hit)}
+
+    @staticmethod
+    def _label(t: dict, groups: dict) -> str:
+        """Tên dễ nhận biết của 1 file kết quả: "Tên kịch bản · Cảnh n" — không thuộc kịch bản thì dòng đầu prompt."""
+        g = groups.get(t.get("group"))
+        if g:
+            part = ("Storyboard" if t.get("role") == "storyboard" else f"Cảnh {t['scene']}" if t.get("scene") else "")
+            no = f"#{int(g['no']):02d}" if g.get("no") else ""
+            return " · ".join(x for x in (no, str(g.get("title") or "Kịch bản"), part) if x)[:140]
+        line = next((x.strip() for x in str(t.get("prompt") or "").splitlines() if x.strip()), "")
+        return line[:140] or ("Video" if t.get("kind") == "video" else "Ảnh")
+
     def library(self, project: str = "") -> list:
         out = []
+        groups = {g["id"]: g for g in self.groups}
         for t in self.tasks:
             if t["status"] != "succeeded" or (project and t.get("project") != project):
                 continue
+            label = self._label(t, groups)
             for f in self._public(t)["files"]:
-                out.append({**f, "task": t["id"], "kind": t["kind"], "prompt": t["prompt"][:300],
+                out.append({**f, "task": t["id"], "kind": t["kind"], "prompt": t["prompt"][:300], "label": label,
                             "project": t.get("project"), "finished_at": t.get("finished_at")})
+        # bản ghép của nhóm (video dài chia đoạn / kịch bản từng cảnh / lót nhạc) — file khác với file của các task
+        have = {str(Path(x["path"]).resolve()).lower() for x in out}
+        for g in groups.values():
+            if project and (g.get("project") or "default") != project:
+                continue
+            for o in self._public_group(g)["outputs"]:
+                p = Path(o["path"])
+                if str(p.resolve()).lower() in have:
+                    continue
+                n = sum(1 for t in self.tasks if t.get("group") == g["id"] and t.get("role") in ("video", "scene"))
+                kind = "bản có nhạc nền" if p.stem.endswith(" - nhac") else f"bản ghép {n} đoạn"
+                no = f"#{int(g['no']):02d} · " if g.get("no") else ""
+                out.append({**o, "video": True, "task": "", "kind": "video", "prompt": str(g.get("title") or "")[:300],
+                            "label": f"{no}{g.get('title') or 'Video'} · {kind}"[:140], "project": g.get("project"),
+                            "finished_at": int(p.stat().st_mtime * 1000) if p.is_file() else g.get("created_at")})
         return sorted(out, key=lambda x: x.get("finished_at") or 0, reverse=True)
+
+    def post_sources(self, project: str = "") -> dict:
+        """Video để chọn ở tab Hậu kỳ, NHÓM THEO KỊCH BẢN (cảnh xếp đúng thứ tự Cảnh 1, 2, 3…) + bản đã ghép của kịch
+        bản; video không thuộc kịch bản nào → "others". project rỗng = mọi dự án."""
+        by_task = {t["id"]: t for t in self.tasks}
+        groups = {g["id"]: g for g in self.groups if not project or (g.get("project") or "default") == project}
+        scenes_of: dict[str, list] = {}
+        others = []
+        for f in self.library(project):
+            if not f.get("video") or not f.get("task"):  # bản ghép của nhóm: thêm riêng ở khối kịch bản bên dưới
+                continue
+            t = by_task.get(f["task"]) or {}
+            item = {**f, "scene": int(t.get("scene") or 0), "role": t.get("role", ""), "group": t.get("group", "")}
+            if item["group"] in groups:
+                scenes_of.setdefault(item["group"], []).append(item)
+            else:
+                others.append(item)
+        out = []
+        for gid, g in groups.items():
+            items = sorted(scenes_of.get(gid, []), key=lambda x: (x["scene"], x.get("finished_at") or 0))
+            # kết quả của kịch bản: bỏ file TRÙNG với cảnh (kịch bản 1 video / không ghép → kết quả chính là video đó),
+            # gắn nhãn đúng loại: bản ghép nhiều cảnh / bản lót nhạc nền
+            seen = {str(Path(x["path"]).resolve()).lower() for x in items}
+            outputs = []
+            for o in self._public_group(g)["outputs"]:
+                if str(Path(o["path"]).resolve()).lower() in seen:
+                    continue
+                kind = "Bản có nhạc nền" if Path(o["path"]).stem.endswith(" - nhac") else f"Bản đã ghép ({len(items)} cảnh)"
+                outputs.append({**o, "label": kind})
+            if not items and not outputs:
+                continue
+            out.append({"id": gid, "title": (f"#{int(g['no']):02d} · " if g.get("no") else "") + g.get("title", ""),
+                        "no": int(g.get("no") or 0), "batch": int(g.get("batch") or 0),
+                        "project": g.get("project") or "default",
+                        "version": g.get("version", 1), "versions": g.get("versions", 1), "created_at": g["created_at"],
+                        "lines": list(g.get("scenes") or []), "scenes": items, "outputs": outputs})
+        # đợt tạo mới nhất trên cùng; trong 1 đợt theo đúng số thứ tự kịch bản (#01 → #n)
+        out.sort(key=lambda x: (-x["batch"], x["no"] or 0, -x["created_at"]))
+        return {"groups": out, "others": others}
 
     def merge(self, paths: list, name: str, project: str = "") -> dict:
         """Ghép nhiều video theo thứ tự (chạy nền, tiến độ qua sự kiện mhub_merge)."""
@@ -811,9 +952,16 @@ class MuseHub:
             created.append(t["id"])
             return t
 
+        # đánh số: mỗi video 1 số nối tiếp trong dự án (#01, #02…) đúng thứ tự trong kịch bản; batch = đợt tạo
+        mine = [g for g in self.groups if (g.get("project") or "default") == project]
+        numbering = {"batch": max((int(g.get("batch") or 0) for g in mine), default=0) + 1,
+                     "no": max((int(g.get("no") or 0) for g in mine), default=0)}
+
         def new_group(**kw):
+            numbering["no"] += 1
             g = {"id": _uid("g"), "project": project, "mode": mode, "ratio": ratio, "status": "running",
-                 "created_at": now_ms(), "outputs": [], "bgm": bool(form.get("bgm")), "versions": versions}
+                 "created_at": now_ms(), "outputs": [], "bgm": bool(form.get("bgm")), "versions": versions,
+                 "batch": numbering["batch"], "no": numbering["no"]}
             g.update(kw)
             self.groups.append(g)
             return g
@@ -855,6 +1003,21 @@ class MuseHub:
                                              prompt=ms.video_prompt([scene], seconds=10, prefix=prefix, voice=voice,
                                                                     presenter=presenter, storyboard=bool(sb),
                                                                     product=bool(product)))
+                            elif ms.DURATIONS[duration] > ms.MUSE_CLIP_MAX:
+                                # Muse làm mỗi clip tối đa ~10 giây → chia đoạn ≤ 10s, chia cảnh cho từng đoạn, xong tự ghép
+                                secs = ms.DURATIONS[duration]
+                                parts = ms.split_seconds(secs)
+                                n = len(parts)
+                                chunks = ([scenes[round(j * len(scenes) / n):round((j + 1) * len(scenes) / n)] for j in range(n)]
+                                          if len(scenes) >= n else [scenes] * n)
+                                g["merge"] = True
+                                start = 0
+                                for k, (sec, chunk) in enumerate(zip(parts, chunks), 1):
+                                    p = ms.video_prompt(chunk, seconds=sec, prefix=prefix, voice=voice, presenter=presenter,
+                                                        storyboard=bool(sb), product=bool(product or shared))
+                                    new_task(g, role="scene", scene=k, duration=sec, images=list(refs), **extra,
+                                             prompt=p + "\n" + ms.part_note(k, n, start, start + sec, secs, sec))
+                                    start += sec
                             else:
                                 secs = ms.DURATIONS[duration]
                                 new_task(g, role="video", duration=secs, images=list(refs), **extra,

@@ -535,7 +535,7 @@ def _clip_text(text: str, limit: int) -> str:
 
 
 def ask_model(settings, options: dict, prompt: str, *, complete=None, what: str = "viết storyboard", log=None,
-              check_cancel=None, system: str = "") -> str:
+              check_cancel=None, system: str = "", images: list | None = None) -> str:
     """Hỏi model chữ theo options {model, text_profile, show_browser}: API (api:<model>) hoặc chat trình duyệt.
     Dùng chung cho Studio (storyboard, hậu kỳ) và màn Nhân vật & Layout (viết mô tả)."""
     system = system or SYSTEM
@@ -558,6 +558,8 @@ def ask_model(settings, options: dict, prompt: str, *, complete=None, what: str 
             provider.timeout_s = STORYBOARD_TIMEOUT
             log(f"Đang chờ {provider.site.name} {what} (tối đa {STORYBOARD_TIMEOUT // 60} phút)"
                 + (" — đang hiện cửa sổ trình duyệt" if options.get("show_browser") else ""))
+            if images:  # ảnh đính kèm (vd. lưới khung hình video mẫu cho Muse) — chỉ khi bên gọi truyền vào
+                return provider.generate(system + "\n\n" + prompt, images=images, complete=complete)
             return provider.generate(system + "\n\n" + prompt, complete=complete)
         return provider.generate(system + "\n\n" + prompt)
 

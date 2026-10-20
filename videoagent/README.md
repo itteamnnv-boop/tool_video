@@ -408,11 +408,38 @@ Có 5 tab:
   - **Thời lượng:** 10–60 giây gộp 1 lệnh, hoặc từng cảnh 10 giây gửi lần lượt rồi app tự ghép.
   - **Tuỳ chọn khác:** tiền tố câu lệnh; giọng đọc (không lồng tiếng / nhân vật tự nói khớp môi / giọng nam, nữ); người dẫn nam / nữ; nhân vật dẫn lấy từ Tư liệu; số bản cho mỗi video; ảnh sản phẩm (mỗi ảnh ra 1 bộ video riêng).
   - **Nhạc nền:** video xong thì app lấy ngẫu nhiên 1 bài trong thư mục nhạc nền, lót nhỏ dưới giọng đọc, và giữ cả bản không nhạc.
-  - **Danh sách video:** từng bước của mỗi video (SB / C1 / C2…), file kết quả, nút Duyệt, nút Xoá. Bấm "Xem lệnh" để xem trước nội dung sẽ gửi Muse.
+  - **Ảnh sản phẩm:** kéo thả vào ô hoặc bấm "Chọn ảnh" (PNG / JPG / WEBP, tối đa 20MB mỗi ảnh).
+  - **Danh sách video:**
+    - lọc theo Chờ / Đang làm / Xong / Lỗi;
+    - bảng hiện từng bước của mỗi video (SB / C1 / C2…);
+    - bấm 1 video để xem chi tiết bên phải: video kết quả, các cảnh, trạng thái từng bước, nút Duyệt, nút Chạy lại phần lỗi.
+  - **Thanh dưới:** Chọn tất cả, Xoá đã chọn, Xoá hết, Dừng, Bắt đầu render. Bấm "Xem lệnh sẽ gửi Muse" để xem trước nội dung.
+- **Tiến trình** — theo dõi trực tiếp mọi việc Muse đang làm, của dự án đang mở hoặc tất cả dự án:
+  - **Chỉ số:** đang chạy / số luồng, đang chờ, xong và lỗi hôm nay, thời gian trung bình.
+  - **Mỗi tài khoản:** việc đang làm, với đồng hồ chạy, thanh tiến độ ước tính (theo thời gian trung bình 20 lượt gần nhất), dòng nhật ký mới nhất và nút Huỷ.
+  - **Sắp chạy:** các việc kèm lý do đang chờ (chờ luồng trống, chờ storyboard, chờ duyệt, hàng đợi dừng, hết tài khoản rảnh).
+  - **Vừa xong:** thời gian từng việc mất, nút mở file hoặc chạy lại.
+  - Bấm vào một việc để xem chi tiết.
 - **LadiPage:**
   - Dán link landing page: app đọc tên sản phẩm, ảnh, giá và chữ trên trang. Nội dung trang chỉ được dùng làm dữ liệu.
   - Muse viết 3 kịch bản phân cảnh, mỗi cảnh có lời thoại và mô tả hình. Có tuỳ chọn "Không đọc giá".
   - Bạn chọn 1–3 ảnh sản phẩm (gửi kèm mọi video), sửa từng cảnh, xem trước lệnh, rồi đưa các kịch bản đã tích vào hàng đợi. Cách làm, tỉ lệ, thời lượng và giọng đọc lấy theo tab Kịch bản.
+- **Video mẫu** — tạo video tương tự một video mẫu (`app/muse_sample.py`):
+  1. Chọn file video trên máy hoặc dán link (TikTok / YouTube / Facebook… qua yt-dlp). Máy tự cắt các khung đổi cảnh, ghép ảnh lưới có mốc giây, đo thời lượng, tỉ lệ, số lần cắt cảnh, độ dài mỗi cảnh; nếu link có phụ đề / mô tả thì lấy luôn. Bước này **không tốn lượt Muse**.
+  2. Nhập **Nội dung mới** (đổi sản phẩm, thông điệp, đối tượng…). Có thể dán lời thoại video mẫu, chọn mức bám (Bám sát / Lấy ý tưởng), số kịch bản (1–3), số cảnh.
+     - Đính kèm tối đa 2 ảnh sản phẩm / nhân vật: gửi kèm Muse và mọi video.
+     - Đính kèm tối đa 5 tài liệu (.txt .md .csv .json .docx .srt .vtt): thông tin sản phẩm, kịch bản thô…
+  3. Bấm "Muse phân tích & viết kịch bản": Muse xem ảnh lưới và ảnh sản phẩm **1 lần**, trả về bản phân tích video mẫu (hook, cấu trúc theo giây, nhịp, phong cách) và các kịch bản mới sửa được từng cảnh.
+     - Nội dung video mẫu và tài liệu chỉ được dùng làm dữ liệu.
+     - Muse không chép nguyên văn lời thoại, thương hiệu, khuôn mặt người thật, và không bịa công dụng hay số liệu.
+  4. Tỉ lệ và thời lượng lấy gần với video mẫu; cách làm, giọng đọc, nhạc nền theo tab Kịch bản. Xem lệnh rồi đưa vào hàng đợi.
+- **Hậu kỳ** — ghép các video tự chọn thành 1 video hoàn chỉnh, cùng bộ hậu kỳ với Studio (`app/muse_post.py`):
+  - Thêm video **từ Thư viện** (tick theo thứ tự) hoặc **từ máy**, sắp xếp ↑↓, mỗi cảnh nhập lời đọc / lời thoại.
+  - Âm thanh: **Lồng tiếng AI** (edge-tts, giọng + tốc độ, nghe thử; clip tự kéo dài / tua nhẹ cho khớp lời) · **Giữ tiếng gốc** (nhạc nền tự nhỏ lại) · **Không lời**.
+  - Phụ đề (từ lời đã nhập), nhạc nền + âm lượng (thư mục nhạc của Studio Muse AI, không có bài thì dùng thư mục ở Cài đặt).
+  - Chuyển cảnh: kiểu, thời lượng, âm chuyển cảnh (nghe thử) + âm lượng — giống Studio.
+  - ✨ Hậu kỳ AI: Muse chọn từ khoá tô nổi, hiệu ứng âm thanh, hook, mức nhạc; kiểu **HyperFrames** dựng đồ hoạ động trên máy (cần Node.js 22+). Muse / HyperFrames lỗi thì vẫn ghép bình thường.
+  - Chạy nền lần lượt, có tiến độ %, nhật ký, nút Dừng. Video xong hiện ở "Video hậu kỳ đã làm" và trong Thư viện video.
 - **Storyboard dài** — Studio storyboard nhiều cảnh (lồng tiếng, phụ đề, ghép), mọi bước khoá dùng Muse.
 - **Thư viện** — file kết quả của dự án đang mở. Tick các video rồi bấm **Ghép video**: sắp thứ tự ↑↓, đặt tên file, có thanh tiến độ %. Ghép xong, app mở Explorer chọn sẵn file.
 - **Tài khoản:**

@@ -40,6 +40,7 @@ Nhiệm vụ: làm phụ đề và âm thanh NỔI BẬT, cuốn hút nhưng kh�
   mạnh) — phải chép NGUYÊN VĂN từ lời dẫn của đúng cảnh đó (để tô màu trên phụ đề). Cảnh không lời: [].
 - "am_thanh": mỗi cảnh 0–{MAX_CUES} hiệu ứng, mỗi hiệu ứng gắn vào một từ có trong lời dẫn cảnh đó:
   {{"tu": "<từ nguyên văn>", "loai": "<mã>"}}. Mã: {sounds}.
+  Cảnh không lời: tối đa 1 hiệu ứng hợp với hình (đặt ở đầu cảnh), ghi {{"tu": "", "loai": "<mã>"}}.
   Gợi ý: ding cho giá / ưu đãi / kết quả tốt, impact cho cao trào / tiết lộ, pop cho ý liệt kê, riser ngay trước cao trào,
   whoosh / swoosh khi chuyển ý. Dùng tiết chế — tổng cả video khoảng 1 hiệu ứng mỗi 6–8 giây.
 - "hook": tiêu đề ngắn (tối đa 7 từ, tiếng Việt) hiện ở đầu video để giữ người xem, đúng nội dung, không bịa thông tin.
@@ -88,6 +89,12 @@ def apply_plan(data: dict, scenes: list[dict], offsets: list[float], voice_lead:
                 marks.update(found)
             scene["highlight"] = sorted(marks)
         if audio:
+            if not words:  # cảnh không lời: không có từ để gắn → 1 hiệu ứng ở đầu cảnh (trước đây bị bỏ hết)
+                key = next((str((c or {}).get("loai") or "").lower() for c in raw.get("am_thanh") or []
+                            if str((c or {}).get("loai") or "").lower() in SFX_KEYS), "")
+                if key:
+                    cues.append({"t": round(offsets[k] + 0.25, 3), "key": key, "vol": CUE_VOLUME.get(key, 0.65)})
+                continue
             for cue in (raw.get("am_thanh") or [])[:MAX_CUES]:
                 key = str((cue or {}).get("loai") or "").lower()
                 found = _find(words, (cue or {}).get("tu") or "") if key in SFX_KEYS else []

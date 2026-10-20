@@ -69,15 +69,30 @@ def fetch(source: str, work: Path, log) -> dict:
         raise RefVideoError("Thiếu thư viện yt-dlp — chạy: pip install yt-dlp") from exc
     log("Đang tải video tham khảo từ link…")
     opts = {"outtmpl": str(work / "video.%(ext)s"), "quiet": True, "no_warnings": True, "noprogress": True,
-            "noplaylist": True, "max_filesize": MAX_BYTES, "merge_output_format": "mp4",
+            "noplaylist": True, "max_filesize": MAX_BYTES, "merge_output_format": "mp4", "no_color": True,
             "format": "bv*[height<=720]+ba/b[height<=720]/bv*+ba/b",
-            "writesubtitles": True, "writeautomaticsub": True, "subtitleslangs": ["vi", "vi-*", "en", "en-*"],
-            "subtitlesformat": "vtt/srt/best", "ffmpeg_location": str(Path(ffmpeg.FFMPEG).parent)}
+            # ít ngôn ngữ phụ đề (không lấy bản dịch tự động en-*, vi-*) để YouTube không chặn 429 "Too Many Requests"
+            "writesubtitles": True, "writeautomaticsub": True, "subtitleslangs": ["vi", "en"],
+            # trỏ thẳng file exe: ffmpeg của imageio tên "ffmpeg-win-x86_64-v….exe" → trỏ thư mục thì yt-dlp không thấy
+            # (lỗi "requested merging of multiple formats but ffmpeg is not installed")
+            "subtitlesformat": "vtt/srt/best", "ffmpeg_location": str(ffmpeg.FFMPEG)}
+    clean = lambda exc: re.sub(r"\x1b\[[0-9;]*m|\[[0-9;]*m", "", str(exc)).strip()[-300:]  # noqa: E731 — bỏ mã màu
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(source, download=True)
     except Exception as exc:  # yt-dlp ném nhiều kiểu lỗi (link riêng tư, cần đăng nhập, bị chặn…)
-        raise RefVideoError(f"Không tải được video từ link: {str(exc)[-300:]}") from exc
+        if not re.search(r"subtitle|429|Too Many Requests", clean(exc), re.I):
+            raise RefVideoError(f"Không tải được video từ link: {clean(exc)}") from exc
+        # chỉ phụ đề lỗi / bị chặn → tải lại video KHÔNG kèm phụ đề (phân tích vẫn chạy bằng hình)
+        log("Không tải được phụ đề (máy chủ chặn tạm thời) — tải video không kèm phụ đề…")
+        for f in work.glob("video*"):
+            f.unlink(missing_ok=True)
+        opts.update(writesubtitles=False, writeautomaticsub=False)
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(source, download=True)
+        except Exception as exc2:
+            raise RefVideoError(f"Không tải được video từ link: {clean(exc2)}") from exc2
     files = [p for p in work.glob("video.*") if p.suffix.lower() in VIDEO_EXT]
     if not files:
         raise RefVideoError("Tải xong nhưng không thấy file video (link có thể là ảnh / bài viết)")

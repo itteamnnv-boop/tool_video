@@ -35,6 +35,9 @@ def _fail(exc: Exception) -> dict:
 class Api:
     def __init__(self) -> None:
         self._window = None
+        if os.name == "nt":  # trả lại nút taskbar cho Chrome bị bản cũ ẩn nhầm (ô nhỏ góc màn hình) — chạy nền, 1 lần
+            from .llm.browser_chat import _hide_offscreen_from_taskbar
+            threading.Thread(target=_hide_offscreen_from_taskbar, daemon=True, name="taskbar-repair").start()
         self._license = LicenseManager(settings, on_change=lambda st: self._emit("license", st))
         self._runner = JobRunner(settings, self._license, self._emit)
         from .llm import offers  # model trình duyệt đề xuất / hỏi lại → form duyệt hoặc tự đồng ý
@@ -64,6 +67,14 @@ class Api:
         self._studio_muse.cast = self._cast
         from .muse_hub import MuseHub
         self._muse_hub = MuseHub(settings, self._emit)  # Studio Muse AI: tài khoản, hàng đợi, tư liệu, thư viện
+        from .muse_post import PostRunner
+        from .pipeline.sfx import AUDIO_EXT
+
+        def hub_music() -> str:  # nhạc nền: thư mục nhạc của Studio Muse AI (nếu có bài) → không thì thư mục ở Cài đặt
+            folder = self._muse_hub.bgm_dir()
+            return str(folder) if any(p.suffix.lower() in AUDIO_EXT for p in folder.iterdir()) else ""
+
+        self._muse_post = PostRunner(settings, self._emit, music_dir=hub_music)  # tab Hậu kỳ của Studio Muse AI
         from .workflow.runner import WorkflowRunner
         self._workflows = WorkflowRunner(settings, self._license, self._emit, facebook=self._facebook, ads=self._ads,
                                          studio=self._studio)
@@ -335,16 +346,18 @@ class Api:
             "image": ("Ảnh (*.png;*.jpg;*.jpeg;*.webp)",),
             "image_or_video": ("Ảnh và video (*.png;*.jpg;*.jpeg;*.webp;*.mp4;*.mov;*.webm;*.m4v)",),
             "video": ("Video (*.mp4;*.mov;*.webm;*.m4v)",),
+            "videos": ("Video (*.mp4;*.mov;*.webm;*.m4v)",),
             "images_multi": ("Ảnh (*.png;*.jpg;*.jpeg;*.webp)",),
             "seedance_images": ("Ảnh (*.png;*.jpg;*.jpeg;*.webp;*.gif;*.avif)",),
             "media": ("Ảnh và video (*.png;*.jpg;*.jpeg;*.webp;*.mp4;*.mov;*.webm;*.m4v)",),
             "srt": ("Phụ đề SRT (*.srt)",),
             "audio": ("Âm thanh (*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.flac)",),
+            "docs": ("Tài liệu (*.txt;*.md;*.csv;*.json;*.docx;*.srt;*.vtt)",),
         }.get(kind)
         if file_types is None:
             return []
         open_dialog = getattr(getattr(webview, "FileDialog", None), "OPEN", None) or webview.OPEN_DIALOG
-        result = self._window.create_file_dialog(open_dialog, allow_multiple=kind in ("products", "images_multi", "seedance_images"), file_types=file_types)
+        result = self._window.create_file_dialog(open_dialog, allow_multiple=kind in ("products", "images_multi", "seedance_images", "docs", "videos"), file_types=file_types)
         return list(result or [])
 
     def open_output_dir(self) -> dict:
@@ -1380,6 +1393,10 @@ def _mhub_methods():
     def mhub_import(self, paths: list) -> dict:
         return _hub_call("images", self._muse_hub.import_images, list(paths or []))
 
+    def mhub_import_data(self, name: str, data_url: str) -> dict:
+        """Ảnh kéo thả vào ô Ảnh sản phẩm (data URL) → kho uploads của Studio Muse AI."""
+        return _hub_call("images", self._muse_hub.import_data, str(name or ""), str(data_url or ""))
+
     # ---- Kịch bản (mỗi dòng 1 cảnh, dòng trống = video mới) / Từ ảnh
     def mhub_script(self, form: dict) -> dict:
         return _hub_call("result", self._muse_hub.add_script, form or {})
@@ -1420,11 +1437,105 @@ def _mhub_methods():
 
         return _hub_call("result", run)
 
+    def mhub_timeline(self, form: dict, show_browser: bool = False) -> dict:
+        """Tab Studio: Muse viết prompt video dạng timeline (0–3s, 3–6s…) từ ý tưởng / kịch bản (1–3 phút)."""
+        from . import muse_script
+
+        f = dict(form or {})
+
+        def run():
+            return muse_script.write_timeline(settings, str(f.get("idea") or ""), count=int(f.get("count") or 1),
+                                              seconds=int(f.get("seconds") or 10), ratio=str(f.get("ratio") or ""),
+                                              style=str(f.get("style") or ""), show_browser=bool(show_browser),
+                                              log=lambda m, level="info": log.info("timeline: %s", m))
+
+        return _hub_call("result", run)
+
     def mhub_ladi_images(self, urls: list) -> dict:
         return _hub_call("images", self._muse_hub.ladi_images, list(urls or []))
 
+    # ---- Hậu kỳ: ghép video tuỳ chọn + lồng tiếng + chuyển cảnh + âm chuyển + phụ đề + nhạc + Hậu kỳ AI / HyperFrames
+    def mhub_post_meta(self) -> dict:
+        from . import muse_post
+
+        return _ok(meta=muse_post.meta())
+
+    def mhub_post_state(self) -> dict:
+        return _ok(state=self._muse_post.state())
+
+    def mhub_post_start(self, form: dict) -> dict:
+        from .muse_post import PostError
+
+        try:
+            return _ok(job=self._muse_post.start(dict(form or {})))
+        except PostError as exc:
+            return _fail(exc)
+
+    def mhub_post_probe(self, paths: list) -> dict:
+        """Thời lượng các video chọn từ máy (để hiện trong danh sách cảnh)."""
+        from pathlib import Path
+
+        from . import ffmpeg
+        from .muse_post import VIDEO_EXT
+
+        out = []
+        for p in (paths or [])[:40]:
+            path = Path(str(p))
+            if path.is_file() and path.suffix.lower() in VIDEO_EXT:
+                try:
+                    out.append({"path": str(path), "duration": ffmpeg.media_duration(path)})
+                except ffmpeg.FFmpegError:
+                    out.append({"path": str(path), "duration": 0})
+        return _ok(items=out)
+
+    def mhub_post_cancel(self, job_id: str) -> dict:
+        return _ok(state=self._muse_post.cancel(str(job_id or "")))
+
+    def mhub_post_open(self, path: str) -> dict:
+        """Mở Explorer chọn sẵn video hậu kỳ (chỉ file final.mp4 trong thư mục lưu video)."""
+        import subprocess
+        from pathlib import Path
+
+        root, target = Path(settings.output_dir).resolve(), Path(str(path or "")).resolve()
+        if not target.is_relative_to(root) or target.name != "final.mp4" or not target.is_file():
+            return _fail(ValueError("Không tìm thấy video hậu kỳ"))
+        subprocess.Popen(["explorer", "/select,", str(target)])
+        return _ok()
+
+    # ---- Video mẫu: phân tích video (file / link) → Muse viết kịch bản tương tự cho nội dung mới
+    def mhub_sample_prepare(self, source: str) -> dict:
+        """Tải / đọc video mẫu, cắt khung đổi cảnh + ảnh lưới + nhịp dựng (máy tự làm, không tốn lượt AI)."""
+        from . import muse_sample
+
+        return _hub_call("sample", muse_sample.prepare, str(source or ""),
+                         lambda m, level="info": log.info("sample: %s", m))
+
+    def mhub_sample_docs(self, paths: list) -> dict:
+        from . import muse_sample
+
+        return _hub_call("docs", muse_sample.docs_info, list(paths or []))
+
+    def mhub_sample_scripts(self, sample_id: str, form: dict, profile: str = "", show_browser: bool = False) -> dict:
+        """Muse xem ảnh lưới video mẫu (+ ảnh sản phẩm, tài liệu) → phân tích + 1–3 kịch bản mới (1–3 phút)."""
+        from . import muse_sample
+
+        def run():
+            return muse_sample.write(settings, str(sample_id or ""), dict(form or {}), profile=str(profile or ""),
+                                     show_browser=bool(show_browser),
+                                     log=lambda m, level="info": log.info("sample: %s", m))
+
+        return _hub_call("result", run)
+
     def mhub_library(self, project: str = "") -> dict:
         return _hub_call("items", self._muse_hub.library, str(project or ""))
+
+    def mhub_move(self, paths: list, project: str) -> dict:
+        """Thư viện: chuyển file đã chọn (và cả kịch bản chứa nó) sang dự án khác."""
+        return _hub_call("result", self._muse_hub.move_to_project, list(paths or []), str(project or ""))
+
+    def mhub_post_sources(self, project: str = "") -> dict:
+        """Video cho tab Hậu kỳ, nhóm theo kịch bản (cảnh đúng thứ tự); project rỗng = mọi dự án."""
+        return _hub_call("sources", self._muse_hub.post_sources, str(project or ""))
 
     def mhub_merge(self, paths: list, name: str = "", project: str = "") -> dict:
         return _hub_call("job", self._muse_hub.merge, list(paths or []), str(name or ""), str(project or ""))
