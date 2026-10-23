@@ -809,24 +809,37 @@ POST {server}/license/verify  {token, device, app}       → 200 {active, user:{
                                                             403 = tài khoản đang gắn máy khác
 ```
 
-## Đóng gói .exe
+## Đóng gói .exe / bộ cài
+
+Cần: Python venv của dự án + [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`).
 
 ```powershell
-.\build.ps1
+.\build.ps1                 # dist\VideoAgent\VideoAgent.exe  +  dist\installer\VideoAgent-Setup-<phiên bản>.exe
+.\build.ps1 -SkipInstaller  # chỉ thư mục dist\VideoAgent
 ```
 
-Kết quả nằm ở `dist\VideoAgent\VideoAgent.exe`. Chromium vẫn được tải ở lần chạy đầu trên máy người dùng.
+- Phiên bản lấy từ `app/__init__.py` (`__version__`); icon: `assets/icon.ico` (logo VideoAgent, nguồn `assets/logo.svg`).
+- Bộ cài theo người dùng (không cần Admin) vào `%LOCALAPPDATA%\Programs\VideoAgent`, có shortcut Start Menu / Desktop,
+  gỡ ở Settings → Apps. Gỡ cài đặt hỏi có xoá dữ liệu không (mặc định giữ); video đã xuất không bao giờ bị xoá.
+- **Không đóng gói dữ liệu người dùng** (`%APPDATA%\VideoAgent`: profile trình duyệt, tài khoản, cài đặt, token Facebook…):
+  máy mới phải đăng nhập lại các tài khoản trình duyệt (Muse, ChatGPT, Grok, Gemini…) ở Profile trình duyệt và kết nối
+  lại Facebook ở Cài đặt.
+- Máy cài cần **Google Chrome** (tự động hoá trình duyệt dùng Chrome thật). Chromium (Playwright, để dựng cảnh HTML) tự tải
+  ở lần dựng video đầu tiên.
+- Prompt vai trò Chiến dịch đóng gói kèm ở `assets/campaign_agents` (máy dev ưu tiên thư mục `maketing\.claude` gốc).
 
 ## Cấu trúc mã
 
 ```
 main.py                  khởi động server nội bộ + cửa sổ pywebview
-app/api.py               cầu nối JS ↔ Python
+app/api/                 cầu nối JS ↔ Python — lớp Api ghép từ mixin theo tính năng (core, media, studio, musehub…)
+app/muse_hub/            Studio Muse AI — MuseHub ghép từ mixin (accounts, assets, queue, library, groups)
 app/server.py            phục vụ UI, file video (hỗ trợ Range), preview template
 app/pipeline/            orchestrator, script_writer, tts, scene_designer, renderer, composer, subtitles, sfx
 app/llm/                 Gemini Browser (Playwright), Gemini API, prompt
 app/library.py           thư viện video (job.json)
 app/license.py           license ITNNV
 ui/                      giao diện (HTML/CSS/JS thuần)
+ui/musehub/              Studio Muse AI theo tab — core.js (state + helper, window.MH) nạp trước, events.js cuối
 templates/               template HTML/CSS theo nhóm
 ```

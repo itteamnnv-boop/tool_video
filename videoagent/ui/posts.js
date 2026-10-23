@@ -1,11 +1,22 @@
-/* Quản lý bài đăng Facebook — lưu mọi bài (kèm ảnh / video), sửa, đăng lại lên nhiều Fanpage (đăng ngay / hẹn giờ).
+/* Quản lý bài đăng Facebook — lưu mọi bài (kèm ảnh / video), sửa, đăng lại lên nhiều Fanpage (đăng ngay / lên lịch app
+   tự đăng — sửa, đổi lịch, đăng ngay được / hẹn giờ trên Facebook).
    Dùng chung helper của app.js: $, $$, api, esc, toast, openModal, closeModal, baseName. */
 (() => {
   'use strict';
 
   const P = { posts: [], types: [], schedulable: [], filter: 'all', source: '', q: '', pages: [] };
-  const STATUS = { draft: 'Nháp', posted: 'Đã đăng', scheduled: 'Hẹn giờ', error: 'Lỗi' };
-  const FILTERS = [['all', 'Tất cả'], ['draft', 'Nháp'], ['posted', 'Đã đăng'], ['scheduled', 'Hẹn giờ'], ['error', 'Lỗi']];
+  const STATUS = { draft: 'Nháp', queued: 'Lên lịch', missed: 'Lỡ lịch', posted: 'Đã đăng', scheduled: 'Hẹn giờ FB', error: 'Lỗi' };
+  const FILTERS = [['all', 'Tất cả'], ['queued', 'Lên lịch'], ['draft', 'Nháp'], ['posted', 'Đã đăng'], ['scheduled', 'Hẹn giờ FB'], ['error', 'Lỗi']];
+  const inFilter = (p, f) => f === 'all' || p.status === f || (f === 'queued' && p.status === 'missed');  // lỡ lịch nằm trong Lên lịch
+  // "còn 2 giờ 5 phút" / "quá giờ 3 phút"
+  const left = at => {
+    const s = Math.round(at - Date.now() / 1000), a = Math.abs(s);
+    const txt = a < 60 ? `${a} giây` : a < 3600 ? `${Math.round(a / 60)} phút` : a < 86400 ? `${Math.floor(a / 3600)} giờ ${Math.round((a % 3600) / 60)} phút`
+      : `${Math.floor(a / 86400)} ngày ${Math.round((a % 86400) / 3600)} giờ`;
+    return s >= 0 ? `còn ${txt}` : `quá giờ ${txt}`;
+  };
+  // giá trị cho <input type="datetime-local"> theo giờ máy
+  const localInput = sec => { const d = new Date(sec * 1000); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
 
   async function show() {
     await load();
@@ -28,12 +39,13 @@
   // ------------------------------------------------------------ danh sách
   function visible() {
     const q = P.q.trim().toLowerCase();
-    return P.posts.filter(p => (P.filter === 'all' || p.status === P.filter) && (!P.source || p.source === P.source)
+    const list = P.posts.filter(p => inFilter(p, P.filter) && (!P.source || p.source === P.source)
       && (!q || `${p.title} ${p.caption} ${(p.publishes || []).map(x => x.page).join(' ')}`.toLowerCase().includes(q)));
+    return P.filter === 'queued' ? list.sort((a, b) => (a.schedule ? a.schedule.at : 0) - (b.schedule ? b.schedule.at : 0)) : list;
   }
 
   function render() {
-    const counts = Object.fromEntries(FILTERS.map(([k]) => [k, k === 'all' ? P.posts.length : P.posts.filter(p => p.status === k).length]));
+    const counts = Object.fromEntries(FILTERS.map(([k]) => [k, P.posts.filter(p => inFilter(p, k)).length]));
     const sources = [...new Map(P.posts.map(p => [p.source, p.source_label])).entries()];
     const list = visible();
     $('#postsBody').innerHTML = `<div class="ps-toolbar card">
@@ -54,8 +66,7 @@
     const m = (p.media || [])[0];
     if (!m) return `<div class="ps-thumb text"><span>${esc((p.caption || p.title || '').slice(0, 90))}</span></div>`;
     if (!m.exists) return '<div class="ps-thumb missing"><span>Thiếu file</span></div>';
-    return `<div class="ps-thumb">${m.video ? `<video src="${esc(m.url)}#t=0.5" muted preload="metadata"></video><i class="ps-play">▶</i>`
-      : `<img src="${esc(m.url)}" alt="" loading="lazy">`}${p.media.length > 1 ? `<em>+${p.media.length - 1}</em>` : ''}</div>`;
+    return `<div class="ps-thumb"><img src="${esc(thumbUrl(m.url, 360))}" alt="" loading="lazy" decoding="async">${m.video ? '<i class="ps-play">▶</i>' : ''}${p.media.length > 1 ? `<em>+${p.media.length - 1}</em>` : ''}</div>`;
   }
 
   function cardHtml(p) {
@@ -72,9 +83,17 @@
         <p class="ps-caption">${esc(p.caption || '(không có chữ)')}</p>
         <small class="muted">${esc(p.source_label)}${p.source_name ? ' · ' + esc(p.source_name) : ''}</small>
         <small class="muted">${p.posted_count ? `Đã đăng ${p.posted_count} lần · ` : ''}${lastText}</small>
-        <div class="ps-actions">
-          <button class="btn primary sm" data-act="publish" type="button">${p.posted_count ? '↻ Đăng lại' : '➤ Đăng'}</button>
+        ${p.schedule ? `<div class="ps-sched ${p.status === 'missed' ? 'missed' : ''}">
+            <b>⏰ ${esc(p.schedule.when)}</b><span data-left="${p.schedule.at}">${p.status === 'missed' ? 'lỡ lịch — chưa đăng' : left(p.schedule.at)}</span>
+            <small>→ ${esc((p.schedule.pages || []).join(', '))}</small></div>` : ''}
+        ${p.auto && !p.auto.ok && p.auto.error ? `<small class="warn-text ps-autoerr" title="${esc(p.auto.error)}">⚠ ${esc(p.auto.how)}: ${esc(p.auto.error)}</small>` : ''}
+        <div class="ps-actions">${p.schedule ? `
+          <button class="btn primary sm" data-act="now" type="button" title="Đăng ngay lên ${esc((p.schedule.pages || []).join(', '))}, không chờ tới giờ">➤ Đăng ngay</button>
+          <button class="btn ghost sm" data-act="publish" type="button" title="Đổi giờ / Fanpage">⏱ Đổi lịch</button>
           <button class="btn ghost sm" data-act="edit" type="button">✎ Sửa</button>
+          <button class="btn ghost sm" data-act="unsched" type="button" title="Huỷ lịch — bài về Nháp">✕ Huỷ lịch</button>` : `
+          <button class="btn primary sm" data-act="publish" type="button">${p.posted_count ? '↻ Đăng lại' : '➤ Đăng'}</button>
+          <button class="btn ghost sm" data-act="edit" type="button">✎ Sửa</button>`}
         </div>
       </div></div>`;
   }
@@ -102,6 +121,23 @@
       if (act === 'edit') return openEditor(post);
       if (act === 'publish') return openPublish(post);
       if (act === 'open') return api('open_url', post.last_publish.url);
+      if (act === 'now') {
+        const pages = (post.schedule.pages || []).join(', ');
+        if (!confirm(`Đăng ngay “${post.title}” lên ${pages}?\n\nKhông chờ tới giờ hẹn ${post.schedule.when}.`)) return;
+        t.disabled = true; t.textContent = 'Đang đăng…';
+        const res = await api('post_publish_now', post.id, true);
+        await load(); render();
+        if (!res.ok) return toast(res.error, 'error');
+        const bad = res.result.results.filter(r => r.error);
+        return toast(res.result.error && !res.result.results.length ? res.result.error
+          : bad.length ? `Lỗi: ${bad.map(b => `${b.page}: ${b.error}`).join('; ')}` : `Đã đăng lên ${pages}`, bad.length || res.result.error ? 'error' : 'ok');
+      }
+      if (act === 'unsched') {
+        if (!confirm(`Huỷ lịch đăng “${post.title}” (${post.schedule.when})? Bài vẫn giữ trong danh sách.`)) return;
+        const res = await api('post_unschedule', post.id);
+        if (!res.ok) return toast(res.error, 'error');
+        await load(); render(); return toast('Đã huỷ lịch đăng', 'ok');
+      }
       if (act === 'delete') {
         if (!confirm('Xoá bài này khỏi Quản lý bài đăng (kèm bản sao ảnh / video)? Bài đã đăng trên Facebook vẫn giữ nguyên.')) return;
         const res = await api('post_delete', post.id);
@@ -125,11 +161,12 @@
         ${d.kind === 'text' ? '' : `<div class="field"><span>Ảnh / video (tối đa 10 ảnh, hoặc 1 video)</span>
           <div class="ps-media">${d.files.map((f, i) => `<span class="ps-mchip">${/\.(mp4|mov|webm|m4v)$/i.test(f) ? '🎬' : '🖼'} ${esc(baseName(f))}<button data-rm="${i}" type="button" title="Bỏ">✕</button></span>`).join('')}
             <button class="btn ghost sm" data-pick type="button">+ Chọn ảnh / video…</button></div></div>`}
+        ${post && post.schedule ? `<div class="ps-sched inline"><b>⏰ Đang lên lịch ${esc(post.schedule.when)}</b><small>→ ${esc((post.schedule.pages || []).join(', '))} · lưu sửa đổi vẫn giữ lịch, tới giờ đăng nội dung mới</small></div>` : ''}
         ${post && (post.publishes || []).length ? `<div class="field"><span>Lịch sử đăng</span><div class="ps-history">${historyHtml(post)}</div></div>` : ''}
         <div class="modal-foot ps-foot">
           <button class="btn ghost" data-close type="button">Huỷ</button>
           <button class="btn ghost" data-save type="button">💾 Lưu bài</button>
-          <button class="btn primary" data-save-publish type="button">💾 Lưu &amp; đăng…</button>
+          <button class="btn primary" data-save-publish type="button">${post && post.schedule ? '💾 Lưu &amp; đổi lịch…' : '💾 Lưu &amp; đăng…'}</button>
         </div>`;
     };
     openModal(post ? 'SỬA BÀI ĐĂNG' : 'BÀI MỚI', post ? post.title : 'Soạn bài đăng Facebook', '<div id="psEditor" class="ps-editor"></div>', true);
@@ -179,7 +216,10 @@
     await loadPages();
     const pages = P.pages.filter(p => p.connected);
     const canSchedule = P.schedulable.includes(post.kind);
-    const st = { pages: new Set(), when: 'now', at: '' };
+    const sch = post.schedule;
+    const nextHour = Math.ceil(Date.now() / 3600000) * 3600 + 3600;  // mặc định: tròn giờ sau
+    const st = sch ? { pages: new Set(sch.page_ids), when: 'app', at: localInput(sch.at > Date.now() / 1000 + 60 ? sch.at : nextHour) }  // lỡ lịch → gợi ý giờ mới
+      : { pages: new Set(), when: 'now', at: localInput(nextHour) };
     const draw = () => {
       const n = st.pages.size;
       $('#psPublish').innerHTML = `
@@ -189,16 +229,20 @@
           ${pages.length ? `<div class="ps-pages">${pages.map(p => `<label class="check ps-page ${st.pages.has(p.id) ? 'on' : ''}">
             <input type="checkbox" data-page="${esc(p.id)}" ${st.pages.has(p.id) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('')}</div>`
             : '<div class="warn-text">Chưa có Fanpage nào bật “Kết nối” — vào Fanpage Facebook để kết nối.</div>'}</div>
-        <div class="field"><span>Thời điểm</span><div class="ps-when">
-          <label class="check"><input type="radio" name="psWhen" value="now" ${st.when === 'now' ? 'checked' : ''}> Đăng ngay</label>
-          <label class="check ${canSchedule ? '' : 'disabled'}"><input type="radio" name="psWhen" value="at" ${st.when === 'at' ? 'checked' : ''} ${canSchedule ? '' : 'disabled'}> Hẹn giờ</label>
-          ${st.when === 'at' ? `<input type="datetime-local" id="psAt" value="${esc(st.at)}">` : ''}
-          ${canSchedule ? '' : '<small class="muted">Story không hẹn giờ được.</small>'}</div>
-          ${st.when === 'at' ? '<small class="muted">Facebook cho hẹn từ 10 phút đến 30 ngày tính từ bây giờ.</small>' : ''}</div>
+        <div class="field"><span>Thời điểm</span><div class="ps-whens">
+          <label class="ps-wopt ${st.when === 'now' ? 'on' : ''}"><input type="radio" name="psWhen" value="now" ${st.when === 'now' ? 'checked' : ''}>
+            <b>➤ Đăng ngay</b><small>Đăng luôn khi bấm nút</small></label>
+          <label class="ps-wopt ${st.when === 'app' ? 'on' : ''}"><input type="radio" name="psWhen" value="app" ${st.when === 'app' ? 'checked' : ''}>
+            <b>⏰ Lên lịch</b><small>App tự đăng đúng giờ · sửa bài, đổi lịch, đăng ngay được · cần mở app lúc tới giờ</small></label>
+          <label class="ps-wopt ${st.when === 'at' ? 'on' : ''} ${canSchedule ? '' : 'disabled'}"><input type="radio" name="psWhen" value="at" ${st.when === 'at' ? 'checked' : ''} ${canSchedule ? '' : 'disabled'}>
+            <b>🗓 Hẹn giờ trên Facebook</b><small>${canSchedule ? 'Facebook tự đăng kể cả khi tắt app · 10 phút → 30 ngày · gửi rồi không sửa từ app được' : 'Story không hẹn giờ trên Facebook được'}</small></label></div>
+          ${st.when !== 'now' ? `<div class="ps-at"><input type="datetime-local" id="psAt" value="${esc(st.at)}">
+            <span class="muted" id="psAtLeft">${st.at && !isNaN(new Date(st.at)) ? left(new Date(st.at).getTime() / 1000) : ''}</span></div>` : ''}
+          ${st.when === 'app' ? '<small class="muted">Mở app trễ hơn giờ hẹn quá 15 phút thì bài KHÔNG tự đăng — chuyển “Lỡ lịch” để bạn quyết định.</small>' : ''}</div>
         ${post.posted_count ? `<div class="field"><span>Đã đăng trước đó</span><div class="ps-history">${historyHtml(post)}</div></div>` : ''}
-        <label class="check ps-confirm"><input type="checkbox" id="psConfirm"> <span>Tôi xác nhận ${st.when === 'at' ? 'hẹn giờ' : 'đăng'} bài này lên <b>${n}</b> Fanpage</span></label>
+        <label class="check ps-confirm"><input type="checkbox" id="psConfirm"> <span>Tôi xác nhận ${st.when === 'now' ? 'đăng' : st.when === 'app' ? 'lên lịch đăng' : 'hẹn giờ'} bài này lên <b>${n}</b> Fanpage</span></label>
         <div class="modal-foot ps-foot"><button class="btn ghost" data-close type="button">Huỷ</button>
-          <button class="btn primary" data-go type="button" ${n ? '' : 'disabled'}>${st.when === 'at' ? '⏱ Hẹn giờ đăng' : '➤ Đăng ngay'}</button></div>`;
+          <button class="btn primary" data-go type="button" ${n ? '' : 'disabled'}>${st.when === 'at' ? '🗓 Hẹn giờ trên Facebook' : st.when === 'app' ? (sch ? '⏰ Lưu lịch mới' : '⏰ Lên lịch') : '➤ Đăng ngay'}</button></div>`;
     };
     openModal(post.posted_count ? 'ĐĂNG LẠI' : 'ĐĂNG BÀI', post.title, '<div id="psPublish" class="ps-publish"></div>', true);
     draw();
@@ -207,7 +251,7 @@
       const t = e.target;
       if (t.dataset.page) { if (t.checked) st.pages.add(t.dataset.page); else st.pages.delete(t.dataset.page); return draw(); }
       if (t.name === 'psWhen') { st.when = t.value; return draw(); }
-      if (t.id === 'psAt') st.at = t.value;
+      if (t.id === 'psAt') { st.at = t.value; const l = $('#psAtLeft'); if (l) l.textContent = isNaN(new Date(st.at)) ? '' : left(new Date(st.at).getTime() / 1000); }
     };
     box.onclick = async e => {
       const t = e.target.closest('button');
@@ -217,10 +261,18 @@
       if (t.dataset.go === undefined) return;
       if (!$('#psConfirm').checked) return toast('Tick ô xác nhận trước khi đăng', 'warn');
       let at = null;
-      if (st.when === 'at') {
+      if (st.when !== 'now') {
         const ms = new Date(st.at).getTime();
         if (!st.at || isNaN(ms)) return toast('Chọn ngày giờ hẹn đăng', 'warn');
         at = Math.floor(ms / 1000);
+      }
+      if (st.when === 'app') {
+        t.disabled = true;
+        const res = await api('post_schedule', post.id, [...st.pages], at, true);
+        if (!res.ok) { draw(); return toast(res.error, 'error'); }
+        closeModal(); P.filter = 'queued';
+        await load(); render();
+        return toast(`Đã lên lịch đăng lúc ${res.post.schedule.when} lên ${st.pages.size} Fanpage`, 'ok');
       }
       t.disabled = true; t.textContent = 'Đang đăng…';
       const res = await api('post_publish', post.id, [...st.pages], true, at);
@@ -233,6 +285,8 @@
         : `${at ? 'Đã hẹn giờ' : 'Đã đăng'} lên ${ok} Fanpage`, bad.length ? (ok ? 'warn' : 'error') : 'ok');
     };
   }
+
+  setInterval(() => $$('#postsBody [data-left]').forEach(el => { el.textContent = left(+el.dataset.left); }), 30000);
 
   window.PostsPage = { show, reload: async () => { await load(); if (!$('#page-posts').classList.contains('hidden')) render(); } };
   window.addEventListener('pywebviewready', () => setTimeout(load, 1500));  // số bài trên menu ngay khi mở app

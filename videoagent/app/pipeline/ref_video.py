@@ -171,27 +171,68 @@ Thông tin video:
 - Mô tả: {description}
 - Phụ đề / lời thoại (nếu có): {subtitles}
 
-Trả về MỘT object JSON (tiếng Việt, không markdown):
+Trả về MỘT object JSON (tiếng Việt, không markdown) — đây là VẬT LIỆU để dựng lại video, càng cụ thể càng tốt:
 {{"chu_de": "video nói về gì, cho ai", "hook": "3 giây đầu gây chú ý thế nào",
- "cau_truc": [{{"tu": 0, "den": 5, "noi_dung": "chuyện gì xảy ra", "hinh": "cỡ cảnh, góc máy, chuyển động máy"}}],
+ "canh": [{{"tu": 0, "den": 5, "noi_dung": "chuyện gì xảy ra, ai làm gì, cầm / giới thiệu gì",
+   "hinh": "cỡ cảnh, góc máy, chuyển động máy, bố cục", "loi": "lời nói / thoại trong đoạn này (theo phụ đề nếu có, nếu
+   không thì tóm ý)", "chu": "chữ hiện trên màn (nếu có)"}}],
+ "nhan_vat": [{{"ten": "vai (vd. cô bán hàng)", "mo_ta": "ngoại hình, trang phục, thần thái"}}],
+ "san_pham": "sản phẩm xuất hiện: loại, bao bì, cách cầm / trưng bày", "boi_canh": "địa điểm, đạo cụ, giao diện phủ
+ (livestream, bình luận…) nếu có",
  "nhip": "nhịp dựng, độ dài cảnh, chuyển cảnh", "phong_cach": "màu, ánh sáng, bố cục, kiểu quay",
  "loi_thoai": "kiểu lời dẫn / thoại, giọng điệu, câu chốt", "am_thanh": "nhạc, hiệu ứng (đoán nếu không nghe được)",
  "diem_hay": ["điểm nên học"], "goi_y": "cách áp dụng cho video mới"}}
-Chỉ mô tả cách làm, KHÔNG chép nguyên văn tên thương hiệu, logo, câu thoại dài của video."""
+"canh" chia theo các đoạn / cảnh thật của video (khớp mốc giây trong ảnh lưới), tối đa 12 đoạn."""
+MATERIAL_SCENES = 12
+MATERIAL_KEYS = ("chu_de", "hook", "san_pham", "boi_canh", "nhip", "phong_cach", "loi_thoai", "am_thanh", "goi_y")
+
+
+def clean_materials(raw) -> dict | None:
+    """Vật liệu phân tích được (người dùng sửa được): trường chữ + nhân vật + từng cảnh. Không có gì → None."""
+    if not isinstance(raw, dict):
+        return None
+    text = lambda v, n: " ".join(str(v or "").split())[:n]  # noqa: E731
+    out = {k: text(raw.get(k), 1200) for k in MATERIAL_KEYS}
+    rows = raw.get("canh") if isinstance(raw.get("canh"), list) else raw.get("cau_truc")
+    scenes = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        sc = {"tu": _num(r.get("tu")), "den": _num(r.get("den")), "noi_dung": text(r.get("noi_dung"), 600),
+              "hinh": text(r.get("hinh"), 400), "loi": str(r.get("loi") or "").strip()[:800], "chu": text(r.get("chu"), 200)}
+        if sc["noi_dung"] or sc["loi"] or sc["hinh"]:
+            scenes.append(sc)
+    out["canh"] = scenes[:MATERIAL_SCENES]
+    out["nhan_vat"] = [{"ten": text(c.get("ten"), 60), "mo_ta": text(c.get("mo_ta"), 400)}
+                       for c in raw.get("nhan_vat") or [] if isinstance(c, dict) and (c.get("ten") or c.get("mo_ta"))][:6]
+    out["diem_hay"] = [text(x, 200) for x in raw.get("diem_hay") or [] if str(x).strip()][:8]
+    return out if out["canh"] or any(out[k] for k in MATERIAL_KEYS) else None
+
+
+def _num(v) -> float:
+    try:
+        return round(max(0.0, float(v)), 1)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _format(data: dict) -> str:
     parts = [p for p in (f"Chủ đề: {data.get('chu_de') or ''}", f"Hook: {data.get('hook') or ''}")
              if p.split(":", 1)[1].strip()]
-    rows = data.get("cau_truc") or []
+    rows = data.get("canh") or data.get("cau_truc") or []
     if rows:
         parts.append("Cấu trúc:")
         for r in rows[:20]:
             if isinstance(r, dict):
                 parts.append(f"- {r.get('tu', '?')}–{r.get('den', '?')}s: {r.get('noi_dung', '')}"
-                             + (f" ({r.get('hinh')})" if r.get("hinh") else ""))
-    for key, label in (("nhip", "Nhịp dựng"), ("phong_cach", "Phong cách hình"), ("loi_thoai", "Lời thoại"),
-                       ("am_thanh", "Âm thanh")):
+                             + (f" ({r.get('hinh')})" if r.get("hinh") else "")
+                             + (f" — lời: “{r.get('loi')}”" if r.get("loi") else "")
+                             + (f" — chữ trên màn: “{r.get('chu')}”" if r.get("chu") else ""))
+    if data.get("nhan_vat"):
+        parts.append("Nhân vật: " + "; ".join(f"{c.get('ten', '')}: {c.get('mo_ta', '')}" for c in data["nhan_vat"]
+                                               if isinstance(c, dict)))
+    for key, label in (("san_pham", "Sản phẩm"), ("boi_canh", "Bối cảnh"), ("nhip", "Nhịp dựng"),
+                       ("phong_cach", "Phong cách hình"), ("loi_thoai", "Lời thoại"), ("am_thanh", "Âm thanh")):
         if data.get(key):
             parts.append(f"{label}: {data[key]}")
     if data.get("diem_hay"):
@@ -222,7 +263,7 @@ def ask(model: str, prompt: str, sheet: Path | None, settings, *, profile: str, 
     with task_context(profile, check_cancel=check_cancel, log=log):
         if model == "gemini_api":
             return provider.generate(prompt, images=images)
-        return provider.generate(prompt, images=images, complete=lambda t: "cau_truc" in t)
+        return provider.generate(prompt, images=images, complete=lambda t: '"canh"' in t or "cau_truc" in t)
 
 
 def analyze(source: str, settings, *, model: str, profile: str = "", show_browser: bool = False, log=None,
@@ -257,8 +298,10 @@ def analyze(source: str, settings, *, model: str, profile: str = "", show_browse
         raise RefVideoError("Model không trả về phân tích — thử lại hoặc đổi model (Gemini xem được hình)")
     head = (f"Video tham khảo: {meta['title']} · {stats['duration']:.0f}s · {stats['cuts']} lần cắt cảnh · "
             f"~{stats['avg_shot']}s / cảnh")
+    materials = clean_materials(data)
     result = {"source": source.strip(), "title": meta["title"], "duration": stats["duration"],
-              "brief": f"{head}\n{brief}", "sheet": str(sheet), "vision": vision}
+              "brief": f"{head}\n{brief}", "sheet": str(sheet), "vision": vision,
+              **({"data": materials} if materials else {})}
     (work / "brief.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), "utf-8")
     if is_link(source):  # chỉ giữ ảnh lưới + phân tích; xoá video đã tải
         for f in work.glob("video.*"):
@@ -271,11 +314,37 @@ def analyze(source: str, settings, *, model: str, profile: str = "", show_browse
 
 def clean(raw) -> dict | None:
     """Dữ liệu video tham khảo lưu trong dự án (người dùng sửa được phần tóm tắt)."""
-    if not isinstance(raw, dict) or not str(raw.get("brief") or "").strip():
+    if not isinstance(raw, dict):
+        return None
+    materials = clean_materials(raw.get("data"))
+    brief = str(raw.get("brief") or "").strip()
+    if materials:  # vật liệu là bản gốc người dùng sửa → tóm tắt dựng lại từ vật liệu (luôn khớp nhau)
+        head = brief.splitlines()[0] if brief.startswith("Video tham khảo:") else f"Video tham khảo: {raw.get('title') or ''}"
+        brief = f"{head}\n{_format(materials)}"
+    if not brief:
         return None
     return {"source": str(raw.get("source") or "")[:1000], "title": str(raw.get("title") or "")[:200],
-            "duration": float(raw.get("duration") or 0), "brief": str(raw["brief"]).strip()[:6000],
-            "sheet": str(raw.get("sheet") or "")[:1000], "vision": bool(raw.get("vision"))}
+            "duration": float(raw.get("duration") or 0), "brief": brief[:8000],
+            "sheet": str(raw.get("sheet") or "")[:1000], "vision": bool(raw.get("vision")),
+            **({"data": materials} if materials else {})}
+
+
+def materials_block(ref: dict | None) -> str:
+    """Nguồn kịch bản = video phân tích: toàn bộ vật liệu (đã duyệt) để CHUYỂN THỂ thành storyboard."""
+    data = (ref or {}).get("data")
+    if not data:
+        return f"<vat_lieu_video>\n{(ref or {}).get('brief') or ''}\n</vat_lieu_video>"
+    lines = [f"{label}: {data[k]}" for k, label in (
+        ("chu_de", "Chủ đề"), ("hook", "Hook"), ("san_pham", "Sản phẩm"), ("boi_canh", "Bối cảnh"),
+        ("phong_cach", "Phong cách hình"), ("nhip", "Nhịp dựng"), ("loi_thoai", "Kiểu lời thoại"),
+        ("am_thanh", "Âm thanh"), ("goi_y", "Ghi chú")) if data.get(k)]
+    if data.get("nhan_vat"):
+        lines.append("Nhân vật: " + "; ".join(f"{c['ten']} — {c['mo_ta']}" for c in data["nhan_vat"]))
+    for i, sc in enumerate(data.get("canh") or [], 1):
+        lines.append(f"Cảnh {i} ({sc['tu']:g}–{sc['den']:g}s): {sc['noi_dung']}"
+                     + (f" | Hình: {sc['hinh']}" if sc["hinh"] else "") + (f" | Lời: “{sc['loi']}”" if sc["loi"] else "")
+                     + (f" | Chữ trên màn: “{sc['chu']}”" if sc["chu"] else ""))
+    return "<vat_lieu_video>\n" + "\n".join(lines) + "\n</vat_lieu_video>"
 
 
 def storyboard_block(ref: dict | None, mode: str) -> str:

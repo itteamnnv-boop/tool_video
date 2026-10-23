@@ -18,3 +18,55 @@
 .ct-hist .row{grid-row:1/3;grid-column:2;gap:5px;align-items:center}
 @media (max-width:1100px){.ct-grid{grid-template-columns:1fr}}
 @media (max-width:640px){.ct-fields{grid-template-columns:1fr}}
+/* Thông tin sản phẩm: tab Nhập tay / Từ link */
+.ct-src{display:inline-flex;padding:3px;gap:2px;border-radius:10px;background:#0f1410;border:1px solid var(--line2);margin-bottom:10px}
+.ct-src button{padding:6px 14px;border-radius:8px;color:#aab4a7;font-weight:600;font-size:12.5px}
+.ct-src button.on{background:#2a2412;color:var(--orange);box-shadow:inset 0 0 0 1px #7a5d1d}
+.ct-link{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.ct-linkrow{display:flex;gap:8px}
+.ct-linkrow input{flex:1;min-width:0}
+.ct-linkrow .btn{white-space:nowrap}
+.ct-linkinfo{display:flex;flex-direction:column;gap:3px;padding:9px 12px;border-radius:10px;border:1px solid #2f6f3c;background:#16261a;font-size:12px}
+.ct-linkinfo b{color:#8fe3a2;font-size:12.5px}
+.ct-filled>span::after{content:" ✓ từ link";color:#8fe3a2;font-size:10.5px;font-weight:700}
+.ct-filled input,.ct-filled textarea{border-color:#2f6f3c}
+/* 2 màn: Quản lý content / Tạo content */
+.ct-screens{display:inline-flex;gap:3px;padding:3px;margin-bottom:12px;border-radius:12px;background:#0f1410;border:1px solid var(--line2)}
+.ct-screens button{padding:8px 16px;border-radius:9px;color:#aab4a7;font-weight:700;font-size:13px}
+.ct-screens button span{margin-left:4px;padding:1px 7px;border-radius:99px;background:#1a211b;font:700 11px var(--mono)}
+.ct-screens button.on{background:#2a2412;color:var(--orange);box-shadow:inset 0 0 0 1px #7a5d1d}
+.ct-sp{flex:1}
+.ct-more{margin-left:auto;font-size:11.5px;font-family:inherit;letter-spacing:0}
+.card-title:has(.ct-more){display:flex;align-items:center;gap:6px}
+.ct-danger{color:#ff9d9d}
+.ct-mgr{display:flex;flex-direction:column;gap:12px}
+.ct-mgrbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ct-mgrbar input[type=search]{flex:1 1 280px;min-width:200px}
+.ct-mgrbar select{width:auto;min-width:150px}
+.ct-mgrgrid{display:grid;grid-template-columns:minmax(320px,0.9fr) minmax(0,1.4fr);gap:12px;align-items:start}
+@media (max-width:1100px){.ct-mgrgrid{grid-template-columns:1fr}}
+.ct-list{display:flex;flex-direction:column;gap:8px;padding:0;overflow:hidden}
+.ct-listhead{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.ct-rows{display:flex;flex-direction:column;max-height:calc(100vh - 290px);overflow:auto}
+.ct-item{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:start;padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer}
+.ct-item:hover{background:#151c16}
+.ct-item.on{background:#18200f;box-shadow:inset 3px 0 0 var(--lime)}
+.ct-item input{margin-top:3px;width:15px;height:15px;accent-color:var(--lime)}
+.ct-itembody{display:flex;flex-direction:column;gap:3px;min-width:0}
+.ct-itemtop{display:flex;align-items:center;gap:6px;min-width:0}
+.ct-itemtop b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ct-itembody p{margin:0;font-size:12px;color:#c9d2c6;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ct-itembody small{font-size:11px}
+.ct-chip{flex:none;padding:1px 7px;border-radius:99px;font-size:10.5px;font-weight:700;border:1px solid var(--line2);white-space:nowrap}
+.ct-chip.ok{color:#8fe3a2;border-color:#2f6f3c}
+.ct-chip.warn{color:#ffb35c;border-color:#7a5d1d}
+.ct-chip.edited{color:#7fb2ff;border-color:#2c4a7a}
+.ct-empty2{display:flex;flex-direction:column;align-items:center;gap:4px;padding:40px 16px;text-align:center;color:var(--muted)}
+.ct-empty2 b{color:var(--text)}
+.ct-detail{display:flex;flex-direction:column;gap:6px;max-height:calc(100vh - 230px);overflow:auto}
+.ct-dhead{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap}
+.ct-dhead>div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.ct-dhead b{font-size:15px}
+.ct-facts{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}
+.ct-facts span{display:inline-flex;flex-direction:column;padding:4px 10px;border-radius:8px;background:#0f1410;border:1px solid var(--line);font-size:12px}
+.ct-facts small{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}

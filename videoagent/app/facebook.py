@@ -5,7 +5,9 @@ Luồng: người dùng lấy User Access Token trên Graph API Explorer → dá
 danh sách page kèm page token tương ứng. Dữ liệu lưu cục bộ ở DATA_DIR/facebook.json.
 """
 import json
+import re
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -23,6 +25,87 @@ IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 
 class FacebookError(RuntimeError):
     pass
+
+
+class FacebookRateLimit(FacebookError):
+    """Meta đang giới hạn số lượt gọi API (App / tài khoản quảng cáo) — app tạm ngừng gọi tới khi hết hạn."""
+
+
+# Mã lỗi giới hạn lượt gọi của Meta: 4 = App, 17 = người dùng (2 mã này chặn cả app) · 32 = page, 613 = theo phút,
+# 80000–80014 = tài khoản quảng cáo (chỉ chặn đúng đối tượng đó)
+APP_CODES = {4, 17}
+RATE_CODES = APP_CODES | {32, 613} | set(range(80000, 80015))
+RATE_COOLDOWN = 5 * 60  # giây tạm ngừng TỰ ĐỘNG khi Meta không nói rõ thời gian
+RATE_SOFT = 90  # % hạn mức App (header X-App-Usage) — vượt mức này thì các lệnh gọi tự động nghỉ 2 phút
+
+
+class _RateGuard:
+    """Dùng chung cho mọi lệnh gọi Graph API. Bị Meta giới hạn → các lệnh gọi TỰ ĐỘNG (tải nền, đối chiếu, Zalo…) tạm
+    ngừng để Meta không khoá lâu hơn. Thao tác người dùng tự bấm (kết nối token, tải page, làm mới) luôn được gọi thật
+    (force) — gọi thành công là mở khoá ngay. Giới hạn của 1 tài khoản QC / page chỉ chặn đúng đối tượng đó."""
+
+    def __init__(self) -> None:
+        self.until: dict[str, float] = {}  # "app" hoặc id đối tượng (act_…, id page) → hết tạm ngừng lúc
+        self.usage = 0  # % cao nhất của App (call_count / total_time / total_cputime)
+
+    @staticmethod
+    def key(path: str) -> str:
+        """Đối tượng của lệnh gọi: act_… / id số ở đầu đường dẫn; còn lại (me/…, search…) tính cho cả app."""
+        parts = [x for x in str(path).split("?")[0].split("/") if x]
+        if "graph.facebook.com" in parts:
+            parts = parts[parts.index("graph.facebook.com") + 1:]
+        if parts and re.fullmatch(r"v\d+\.\d+", parts[0]):
+            parts = parts[1:]
+        head = parts[0] if parts else ""
+        return head if head.startswith("act_") or head.isdigit() else "app"
+
+    def check(self, path: str = "", force: bool = False) -> None:
+        if force:
+            return
+        now = time.time()
+        for k in ("app", self.key(path)):
+            left = self.until.get(k, 0) - now
+            if left > 0:
+                who = "App" if k == "app" else f"đối tượng {k}"
+                raise FacebookRateLimit(
+                    f"Facebook đang tạm giới hạn lượt gọi API của {who} (gọi quá nhiều) — app tạm ngừng tự gọi khoảng "
+                    f"{max(1, round(left / 60))} phút để Meta không khoá lâu hơn. Bấm làm mới / kết nối lại để thử ngay; "
+                    f"dữ liệu đã lưu vẫn dùng được.")
+
+    def observe(self, resp, path: str = "") -> None:
+        if resp.status_code == 200:  # Meta vừa trả lời bình thường → mở khoá đối tượng này (và cả app)
+            self.until.pop("app", None)
+            self.until.pop(self.key(path), None)
+        try:
+            app = json.loads(resp.headers.get("x-app-usage") or "{}")
+            if app:
+                self.usage = max(int(v or 0) for v in app.values())
+            buc = json.loads(resp.headers.get("x-business-use-case-usage") or "{}")
+            wait = max((int(u.get("estimated_time_to_regain_access") or 0) for rows in buc.values() for u in rows),
+                       default=0)
+        except (ValueError, TypeError, AttributeError):
+            return
+        if wait:  # giới hạn theo tài khoản QC / doanh nghiệp → chỉ chặn đối tượng của lệnh gọi này
+            k = self.key(path)
+            self.until[k] = max(self.until.get(k, 0), time.time() + wait * 60)
+        if self.usage >= RATE_SOFT:
+            self.until["app"] = max(self.until.get("app", 0), time.time() + 120)
+
+    def fail(self, resp, data: dict, path: str = ""):
+        """Lỗi từ Meta → FacebookRateLimit (kèm tạm ngừng) nếu là lỗi giới hạn lượt gọi, không thì FacebookError."""
+        err = (data or {}).get("error") or {}
+        msg = err.get("error_user_msg") or err.get("message") or resp.text[:200]
+        code, sub = err.get("code"), err.get("error_subcode")
+        if code in RATE_CODES or sub in RATE_CODES:
+            k = "app" if code in APP_CODES or self.key(path) == "app" else self.key(path)
+            self.until[k] = max(self.until.get(k, 0), time.time() + RATE_COOLDOWN)
+            who = "của App" if k == "app" else f"của {k}"
+            raise FacebookRateLimit(f"Facebook báo lỗi: {msg} — Meta đang giới hạn lượt gọi API {who}; app tạm ngừng "
+                                    f"tự gọi 5 phút (hạn mức tính theo 1 giờ gần nhất). Dữ liệu đã lưu vẫn dùng được.")
+        raise FacebookError(f"Facebook báo lỗi: {msg}")
+
+
+RATE = _RateGuard()
 
 
 class FacebookManager:
@@ -62,14 +145,20 @@ class FacebookManager:
     def _graph(self) -> str:
         return f"https://graph.facebook.com/{self._data.get('graph_version') or DEFAULT_VERSION}"
 
-    def _get(self, path: str, **params) -> dict:
+    def _get(self, path: str, _force: bool = False, **params) -> dict:
+        """_force=True: thao tác người dùng tự bấm — gọi thật kể cả khi đang tạm ngừng vì bị Meta giới hạn."""
+        RATE.check(path, _force)  # đang bị Meta giới hạn → lệnh gọi tự động không gọi thêm
         try:
             resp = requests.get(f"{self._graph}/{path}", params=params, timeout=30)
         except requests.RequestException as exc:
             raise FacebookError(f"Không kết nối được Facebook: {exc}") from exc
-        data = resp.json() if resp.content else {}
+        RATE.observe(resp, path)
+        try:
+            data = resp.json() if resp.content else {}
+        except ValueError:
+            data = {}
         if resp.status_code != 200 or "error" in data:
-            raise FacebookError(f"Facebook báo lỗi: {data.get('error', {}).get('message', resp.text[:200])}")
+            RATE.fail(resp, data, path)
         return data
 
     # ------------------------------------------------------------------ App Meta
@@ -84,7 +173,7 @@ class FacebookManager:
         old = (self._data["app_id"], self._data["app_secret"], self._data.get("graph_version"))
         self._data.update(app_id=app_id, app_secret=secret, graph_version=version)
         try:  # kiểm tra App ID/Secret bằng app access token
-            info = self._get(app_id, fields="name", access_token=f"{app_id}|{secret}")
+            info = self._get(app_id, _force=True, fields="name", access_token=f"{app_id}|{secret}")
         except FacebookError:
             self._data.update(app_id=old[0], app_secret=old[1], graph_version=old[2])
             raise
@@ -100,13 +189,13 @@ class FacebookManager:
         token = "".join((token or "").split())  # bỏ khoảng trắng/xuống dòng khi dán
         if len(token) < 20:
             raise FacebookError("Hãy dán User Access Token (chuỗi bắt đầu bằng EAA…) lấy từ Graph API Explorer")
-        me = self._get("me", fields="id,name,picture{url}", access_token=token)  # token sai/hết hạn → lỗi rõ ràng
+        me = self._get("me", _force=True, fields="id,name,picture{url}", access_token=token)  # token sai/hết hạn → lỗi rõ ràng
         long_lived, expires_in = False, 0
         if self._data["app_id"] and self._data["app_secret"]:
             token, expires_in, long_lived = self._long_lived(token)
         if not expires_in:
             expires_in = self._expires_in(token)
-        perms = self._get("me/permissions", access_token=token).get("data", [])
+        perms = self._get("me/permissions", _force=True, access_token=token).get("data", [])
         self._data.update(
             user={"id": me["id"], "name": me.get("name", ""),
                   "picture": ((me.get("picture") or {}).get("data") or {}).get("url", "")},
@@ -121,7 +210,7 @@ class FacebookManager:
     def _long_lived(self, token: str) -> tuple[str, int, bool]:
         """Đổi sang token dài hạn — chỉ được khi App ID/Secret là đúng app đã chọn trong Graph API Explorer."""
         try:
-            data = self._get("oauth/access_token", grant_type="fb_exchange_token", client_id=self._data["app_id"],
+            data = self._get("oauth/access_token", _force=True, grant_type="fb_exchange_token", client_id=self._data["app_id"],
                              client_secret=self._data["app_secret"], fb_exchange_token=token)
             return data["access_token"], int(data.get("expires_in") or 60 * 24 * 3600), True
         except (FacebookError, KeyError):
@@ -132,7 +221,7 @@ class FacebookManager:
         if not (self._data["app_id"] and self._data["app_secret"]):
             return 0
         try:
-            info = self._get("debug_token", input_token=token,
+            info = self._get("debug_token", _force=True, input_token=token,
                              access_token=f"{self._data['app_id']}|{self._data['app_secret']}").get("data", {})
             expires_at = int(info.get("expires_at") or 0)
             return max(0, expires_at - int(datetime.now().timestamp())) if expires_at else 0
@@ -156,7 +245,7 @@ class FacebookManager:
                       "access_token": token}
             if after:
                 params["after"] = after
-            data = self._get("me/accounts", **params)
+            data = self._get("me/accounts", _force=True, **params)
             for p in data.get("data", []):
                 pages.append({"id": p["id"], "name": p.get("name", ""), "category": p.get("category", ""),
                               "picture": ((p.get("picture") or {}).get("data") or {}).get("url", ""),
@@ -250,17 +339,18 @@ class FacebookManager:
         return page, token
 
     def _call(self, method: str, url: str, timeout: int = 60, **kwargs) -> dict:
+        RATE.check(url)
         try:
             resp = requests.request(method, url, timeout=timeout, **kwargs)
         except requests.RequestException as exc:
             raise FacebookError(f"Không kết nối được Facebook: {exc}") from exc
+        RATE.observe(resp, url)
         try:
             data = resp.json() if resp.content else {}
         except ValueError:
             data = {}
         if resp.status_code != 200 or "error" in data:
-            err = data.get("error") or {}
-            raise FacebookError(f"Facebook báo lỗi: {err.get('error_user_msg') or err.get('message') or resp.text[:200]}")
+            RATE.fail(resp, data, url)
         return data
 
     def _upload_video(self, page_id: str, token: str, edge: str, path: Path) -> str:

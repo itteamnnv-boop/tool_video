@@ -4,11 +4,13 @@ Cần thêm quyền ads_read (xem) và ads_management (bật/tắt, đổi ngân
 Mọi quảng cáo tạo từ app đều ở trạng thái PAUSED — người dùng tự bật khi đã kiểm tra, tránh tiêu tiền ngoài ý muốn.
 """
 import json
+import re
+import time
 from datetime import datetime, timedelta
 
 import requests
 
-from .facebook import FacebookError, FacebookManager
+from .facebook import RATE, FacebookError, FacebookManager
 
 ADS_PERMISSIONS = ("ads_read", "ads_management")
 DATE_PRESETS = ("today", "yesterday", "last_7d", "last_30d", "this_month", "last_month", "maximum")
@@ -40,12 +42,14 @@ OBJECTIVES = {
 # Tiền tệ không có đơn vị lẻ — ngân sách gửi lên Meta giữ nguyên (các tiền tệ khác nhân 100)
 NO_MINOR_UNIT = {"VND", "JPY", "KRW", "IDR", "CLP", "COP", "CRC", "HUF", "ISK", "PYG", "TWD"}
 STATUSES = ("ACTIVE", "PAUSED")
+ACCOUNTS_TTL = 600  # giây — danh sách tài khoản QC dùng chung cho mọi màn (đỡ tốn lượt gọi API của App)
 
 
 class AdsManager:
     def __init__(self, fb: FacebookManager) -> None:
         self._fb = fb
         self._currency: dict[str, str] = {}  # act_id → tiền tệ (để đổi ngân sách)
+        self._accounts: tuple[float, list] | None = None  # (lúc lấy, danh sách) — đệm ACCOUNTS_TTL giây
 
     # ------------------------------------------------------------------ tiện ích
     @property
@@ -60,10 +64,11 @@ class AdsManager:
 
     def _all(self, path: str, **params) -> list:
         items, after = [], None
+        params.setdefault("limit", 100)  # nơi gọi có thể đặt limit riêng (VD 200 khi tải cả tài khoản)
         for _ in range(20):  # tối đa 20 trang × limit
             if after:
                 params["after"] = after
-            data = self._get(path, limit=100, **params)
+            data = self._get(path, **params)
             items += data.get("data", [])
             paging = data.get("paging") or {}
             after = (paging.get("cursors") or {}).get("after")
@@ -74,14 +79,18 @@ class AdsManager:
     def _post(self, path: str, **data) -> dict:
         payload = {k: json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in data.items()}
         payload["access_token"] = self._token
+        RATE.check(path)
         try:
             resp = requests.post(f"{self._fb._graph}/{path}", data=payload, timeout=60)
         except requests.RequestException as exc:
             raise FacebookError(f"Không kết nối được Facebook: {exc}") from exc
-        body = resp.json() if resp.content else {}
+        RATE.observe(resp, path)
+        try:
+            body = resp.json() if resp.content else {}
+        except ValueError:
+            body = {}
         if resp.status_code != 200 or "error" in body:
-            err = body.get("error", {})
-            raise FacebookError(f"Facebook báo lỗi: {err.get('error_user_msg') or err.get('message') or resp.text[:200]}")
+            RATE.fail(resp, body, path)
         return body
 
     @staticmethod
@@ -123,8 +132,22 @@ class AdsManager:
                 "objectives": {k: v["name"] for k, v in OBJECTIVES.items()},
                 "pages": [{"id": p["id"], "name": p.get("name", "")} for p in self._fb._data.get("pages", [])]}
 
-    def accounts(self) -> list:
-        rows = self._all("me/adaccounts", fields="id,account_id,name,account_status,currency,timezone_name,"
+    def accounts(self, refresh: bool = False) -> list:
+        """Tài khoản quảng cáo của người dùng — đệm 10 phút; lỗi (VD bị Meta giới hạn) mà có bản cũ thì dùng bản cũ."""
+        hit = self._accounts
+        if hit and not refresh and time.time() - hit[0] < ACCOUNTS_TTL:
+            return [dict(a) for a in hit[1]]
+        try:
+            out = self._load_accounts(force=refresh)  # bấm làm mới = thao tác tay → gọi thật
+        except FacebookError:
+            if hit:
+                return [dict(a) for a in hit[1]]
+            raise
+        self._accounts = (time.time(), out)
+        return [dict(a) for a in out]
+
+    def _load_accounts(self, force: bool = False) -> list:
+        rows = self._all("me/adaccounts", _force=force, fields="id,account_id,name,account_status,currency,timezone_name,"
                                                  "amount_spent,balance,spend_cap,business{name}")
         out = []
         for a in rows:
@@ -237,6 +260,25 @@ class AdsManager:
         return [{"id": str(r["id"]), "name": r.get("name", ""), "path": " › ".join(r.get("path") or []),
                  "size": r.get("audience_size_upper_bound") or r.get("audience_size") or 0}
                 for r in data.get("data", []) if r.get("id")]
+
+    def create_ad_in_adset(self, account_id: str, adset_id: str, post_id: str, status: str = "PAUSED",
+                           confirmed_by: str = "", name: str = "") -> dict:
+        """Thêm 1 quảng cáo (bài viết có sẵn của page) vào NHÓM QUẢNG CÁO CÓ SẴN. Mặc định PAUSED;
+        ACTIVE (chạy ngay, tiêu tiền) BẮT BUỘC có confirmed_by — người dùng đã duyệt trong app."""
+        status = str(status or "PAUSED").upper()
+        if status not in STATUSES:
+            raise FacebookError("Trạng thái chỉ được ACTIVE hoặc PAUSED")
+        if status == "ACTIVE" and not str(confirmed_by or "").strip():
+            raise FacebookError("Chạy quảng cáo cần người dùng xác nhận duyệt — chưa có xác nhận nên không tạo")
+        act = self._act(account_id)
+        adset_id = self._check_id(adset_id)
+        story = str(post_id or "").strip()
+        if not re.fullmatch(r"\d+_\d+", story):
+            raise FacebookError("Thiếu id bài viết dạng <page>_<bài> — kiểm tra lại link bài")
+        name = (name or "").strip() or f"VideoAgent {datetime.now():%d/%m %H:%M} · {story.split('_')[1]}"
+        creative = self._post(f"{act}/adcreatives", name=f"{name} — creative", object_story_id=story)
+        ad = self._post(f"{act}/ads", name=name, adset_id=adset_id, creative={"creative_id": creative["id"]}, status=status)
+        return {"ad_id": ad["id"], "creative_id": creative["id"], "adset_id": adset_id, "post_id": story, "status": status}
 
     def create_boost(self, form: dict) -> dict:
         """Tạo chiến dịch → nhóm quảng cáo → quảng cáo từ 1 bài viết có sẵn.

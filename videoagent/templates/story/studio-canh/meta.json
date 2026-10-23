@@ -15,16 +15,28 @@
   },
   "variables": [
     {
+      "key": "ThongSo",
+      "label": "Thông số: tỉ lệ, số giây, chất lượng, 1 shot liên tục",
+      "required": false,
+      "max": 600
+    },
+    {
       "key": "KhoaNhanVat",
       "label": "Khoá nhân vật (khuôn mặt luôn giữ; trang phục theo lựa chọn)",
       "required": false,
       "max": 1500
     },
     {
+      "key": "KhoaBoiCanh",
+      "label": "Khoá bối cảnh + sản phẩm",
+      "required": false,
+      "max": 800
+    },
+    {
       "key": "MoTa",
-      "label": "Mô tả cảnh & chuyển động",
+      "label": "Hành động theo mốc giây + máy quay",
       "required": true,
-      "max": 700
+      "max": 1000
     },
     {
       "key": "LoiThoai",
@@ -33,10 +45,16 @@
       "max": 1500
     },
     {
-      "key": "CamKy",
-      "label": "Những thứ không được có trong hình (Studio → Ràng buộc prompt)",
+      "key": "AmThanh",
+      "label": "Âm thanh (nhạc nền / tiếng môi trường)",
       "required": false,
-      "max": 400
+      "max": 300
+    },
+    {
+      "key": "CamKy",
+      "label": "Phần cấm (negative) cuối prompt",
+      "required": false,
+      "max": 800
     }
   ],
   "attachments": [
@@ -63,13 +81,13 @@
     }
   ],
   "prompt": [
-    "Cinematic shot for one scene of a longer story video. Animate the attached first frame (image-to-video) — do not create a new image.",
+    "{ThongSo}",
     "{KhoaNhanVat}",
-    "{MoTa}",
+    "{KhoaBoiCanh}",
+    "Action (follow the timeline): {MoTa}",
     "Dialogue: {LoiThoai}",
-    "Keep the product, the background and the visual style exactly as in the frame.",
-    "Smooth natural motion, realistic physics, stable camera unless the scene asks for a move; sharp and well lit.",
-    "{CamKy}",
-    "No cuts — one continuous shot."
+    "Audio: {AmThanh}",
+    "Smooth natural motion, realistic physics, natural hands; sharp and well lit.",
+    "NEGATIVE: {CamKy}"
   ]
 }

@@ -5,6 +5,8 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pad2 = n => String(n).padStart(2, '0');
 const api = (name, ...args) => window.pywebview.api[name](...args);
+// ảnh / video → ảnh thu nhỏ do server tạo + cache (?thumb=<px>): lưới không giải mã ảnh gốc vài MB, video không cần thẻ <video>
+const thumbUrl = (url, px = 320) => (url ? `${url}${url.includes('?') ? '&' : '?'}thumb=${px}` : url);
 
 const STAGES = [['prepare', 'Chuẩn bị'], ['script', 'Kịch bản'], ['voice', 'Lời thoại'], ['visual', 'Dựng hình'], ['post', 'Hậu kỳ'], ['finish', 'Hoàn thiện']];
 const FRAME_SIZE = { '9:16': [540, 960], '16:9': [960, 540], '1:1': [540, 540], '4:5': [540, 675] };
@@ -28,9 +30,41 @@ const state = {
 };
 
 window.addEventListener('pywebviewready', init);
+// link ngoài (http/https) bấm ở bất kỳ đâu → mở cửa sổ popup (api open_url), không để trang web thay chỗ cửa sổ app
+document.addEventListener('click', e => {
+  const a = e.target.closest && e.target.closest('a[href^="http"]');
+  if (!a || e.defaultPrevented) return;
+  e.preventDefault();
+  api('open_url', a.href);
+});
+
+// màn Loading (index.html): cập nhật bước đang làm, gỡ khi giao diện sẵn sàng — hiện tối thiểu theo Cài đặt → Giao diện
+// (splash_seconds, tính từ lúc mở app; app tải lâu hơn thì vẫn hiện tới khi xong)
+const splashStep = text => { const el = $('#splashStep'); if (el) el.textContent = text; };
+function hideSplash() {
+  const el = $('#splash');
+  if (!el) return;
+  const sec = Number(state.boot && state.boot.settings ? state.boot.settings.splash_seconds : 1);
+  const minMs = Math.min(30, Math.max(0, Number.isFinite(sec) ? sec : 1)) * 1000;
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 500); }, Math.max(0, minMs - performance.now()));
+}
 
 async function init() {
+  try {
+    await boot();
+  } catch (err) {
+    console.error(err);
+    setTimeout(() => toast(`Khởi động gặp lỗi: ${err && err.message ? err.message : err}`, 'error'), 600);
+  } finally {
+    hideSplash();
+  }
+}
+
+async function boot() {
+  splashStep('Đang tải cấu hình…');
   state.boot = await api('bootstrap');
+  if ($('#splashVer')) $('#splashVer').textContent = `v${state.boot.version}`;
+  splashStep('Đang chuẩn bị giao diện…');
   fillSelects();
   buildStepper();
   restoreForm();
@@ -41,12 +75,14 @@ async function init() {
   initFacebook();
   initAds();
   initProfiles();
+  splashStep('Đang tải Studio…');
   await window.SeedanceStudio.init();
   state.vt = makeTaskUI('video', 'v', { setProgress, setPill: setStatusPill, logEl: $('#log') });
   state.it = makeTaskUI('image', 'img', { setProgress: setImageProgress, setPill: setImagePill, logEl: $('#imgLog') });
   state.vt.update(state.boot.tasks || []);
   state.it.update(state.boot.image_tasks || []);
   setRunning(state.boot.running);
+  splashStep('Đang tải thư viện…');
   await refreshVideos();
 }
 
@@ -131,6 +167,8 @@ function imgTemplate() {
 function initImages() {
   const b = state.boot;
   state.img = { ...IMG_DEFAULT, engine: b.default_image_engine, ...(b.settings.last_image_form || {}) };
+  // mỗi lần mở app: mặc định theo Cài đặt → Model AI (vẫn đổi được từng lần ở trang này)
+  if (b.settings.model_image) Object.assign(state.img, { engine: b.settings.model_image, browser_profile: b.settings.model_image_profile || '' });
   if (!b.image_engines[state.img.engine]) state.img.engine = b.default_image_engine;
   state.img.vars = state.img.vars || {};
   $('#imgEngine').innerHTML = Object.entries(b.image_engines)
@@ -395,15 +433,38 @@ async function refreshImages() {
   $('#imgTabCount').textContent = state.images.length;
   $('#imgTotal').textContent = `${state.images.length} bộ ảnh`;
   // lưới ảnh: mỗi ô 1 ảnh (bộ nhiều ảnh có nhãn 1/3…); thông tin chi tiết chỉ hiện khi bấm xem
+  const sig = state.images.map(s => `${s.id}:${s.files.map(f => f.url).join(',')}`).join('|');
+  if (sig === state.imgSig && $('#imgGallery .img-grid')) return;  // không đổi → giữ nguyên lưới (khỏi tải lại ảnh)
+  state.imgSig = sig;
   state.imgTiles = state.images.flatMap(set => set.files.map((f, i) => ({ set, file: f, i })));
-  $('#imgGallery').innerHTML = state.imgTiles.length ? `<div class="img-grid">${state.imgTiles.map((t, k) => `
-    <div class="img-tile" data-k="${k}" title="${esc(t.set.title)}">
-      <img src="${esc(t.file.url)}" alt="" loading="lazy">
+  if (state.imgMore) state.imgMore.disconnect();
+  if (!state.imgTiles.length) {
+    $('#imgGallery').innerHTML = '<div class="empty">Chưa có ảnh nào. Nhập mô tả hoặc chọn template rồi bấm “Tạo ảnh”.</div>';
+    return;
+  }
+  $('#imgGallery').innerHTML = '<div class="img-grid"></div><div class="img-more" aria-hidden="true"></div>';
+  state.imgShown = 0;
+  appendImageTiles();
+  // vẽ dần: cuộn gần cuối lưới mới thêm đợt ô tiếp theo (vài trăm ảnh không dựng DOM cùng lúc)
+  state.imgMore = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) appendImageTiles(); }, { rootMargin: '600px' });
+  state.imgMore.observe($('#imgGallery .img-more'));
+}
+
+const IMG_CHUNK = 60;
+function appendImageTiles() {
+  const grid = $('#imgGallery .img-grid');
+  if (!grid || state.imgShown >= state.imgTiles.length) return;
+  const from = state.imgShown, to = Math.min(from + IMG_CHUNK, state.imgTiles.length);
+  grid.insertAdjacentHTML('beforeend', state.imgTiles.slice(from, to).map((t, j) => `
+    <div class="img-tile" data-k="${from + j}" title="${esc(t.set.title)}">
+      <img src="${esc(thumbUrl(t.file.url, 360))}" alt="" loading="lazy" decoding="async">
       ${t.set.files.length > 1 ? `<i class="img-count">${t.i + 1}/${t.set.files.length}</i>` : ''}
       <div class="img-tile-bar"><small>${esc(fmtTime(t.set.created_at).slice(0, 5))} ${esc(fmtDate(t.set.created_at))}</small>
         <button class="img-tile-btn" data-act="folder" title="Mở thư mục, chọn sẵn file ảnh" type="button">📂</button>
         <button class="img-tile-btn danger" data-act="delete" title="Xoá bộ ảnh" type="button">🗑</button></div>
-    </div>`).join('')}</div>` : '<div class="empty">Chưa có ảnh nào. Nhập mô tả hoặc chọn template rồi bấm “Tạo ảnh”.</div>';
+    </div>`).join(''));
+  state.imgShown = to;
+  if (to >= state.imgTiles.length && state.imgMore) state.imgMore.disconnect();
 }
 
 async function deleteImageSet(id) {
@@ -469,6 +530,8 @@ function initFacebook() {
   $('#fbOpenSettings').onclick = () => openSettings();
   $('#fbLoadPages').onclick = () => fbAction($('#fbLoadPages'), 'Đang tải…', 'fb_load_pages', [], 'Đã tải danh sách Fanpage');
   $('#fbPages').onclick = onFbPageClick;
+  $('#fbSearch').oninput = renderFbPages;
+  $('#fbFilters').onclick = e => { const b = e.target.closest('[data-fbf]'); if (b) { state.fbFilter = b.dataset.fbf; renderFbPages(); } };
   refreshFacebook();
 }
 
@@ -533,17 +596,40 @@ function renderFacebook(fb) {
   const connected = pages.filter(p => p.connected).length;
   $('#sbFbCount').textContent = connected;
   $('#fbPagesTotal').textContent = pages.length ? `③ ${pages.length} Fanpage · đã kết nối ${connected}` : '③ Chưa có fanpage';
-  $('#fbPages').innerHTML = pages.length ? pages.map(p => `
+  $('.fb-tools').classList.toggle('hidden', pages.length < 2);
+  renderFbPages();
+}
+
+// lưới Fanpage: lọc (tất cả / đã kết nối / chưa) + tìm theo tên, lĩnh vực, ID — đã kết nối xếp trước
+function renderFbPages() {
+  const fb = state.fb || {};
+  const pages = fb.pages || [];
+  const f = state.fbFilter || 'all', q = ($('#fbSearch') ? $('#fbSearch').value : '').trim().toLowerCase();
+  const counts = { all: pages.length, on: pages.filter(p => p.connected).length };
+  counts.off = counts.all - counts.on;
+  $$('#fbFilters [data-fbf]').forEach(b => { b.classList.toggle('on', b.dataset.fbf === f); b.querySelector('b').textContent = counts[b.dataset.fbf]; });
+  const list = pages.filter(p => (f === 'all' || (f === 'on') === !!p.connected)
+      && (!q || `${p.name} ${p.category || ''} ${p.id}`.toLowerCase().includes(q)))
+    .sort((a, b) => (b.connected ? 1 : 0) - (a.connected ? 1 : 0));
+  const fans = p => (p.fan_count != null ? Number(p.fan_count).toLocaleString('vi-VN') : '—');
+  $('#fbPages').innerHTML = !pages.length
+    ? `<div class="empty">${fb.logged_in ? 'Không có Fanpage nào — kiểm tra quyền pages_show_list và các page đã chọn khi tạo token.'
+      : 'Nhập User Access Token ở Cài đặt → API & kết nối để tải các Fanpage bạn quản lý.'}</div>`
+    : !list.length ? '<div class="empty">Không có Fanpage nào khớp bộ lọc.</div>'
+    : list.map(p => `
     <div class="fb-page ${p.connected ? 'on' : ''}" data-id="${esc(p.id)}">
-      ${p.picture ? `<img src="${esc(p.picture)}" alt="">` : '<img alt="">'}
-      <div class="info"><b>${esc(p.name)}</b>
-        <small>${esc(p.category || '')}${p.fan_count != null ? ` · ${Number(p.fan_count).toLocaleString('vi-VN')} người theo dõi` : ''} · ID ${esc(p.id)}</small></div>
-      <label class="check"><input type="checkbox" data-act="connect" ${p.connected ? 'checked' : ''}> Kết nối</label>
-      <button class="btn ghost sm" data-act="post" ${p.connected ? '' : 'disabled'}>Đăng bài</button>
-      ${p.link ? `<button class="btn ghost sq" data-act="open" title="Mở page">↗</button>` : ''}
-    </div>`).join('')
-    : `<div class="empty">${fb.logged_in ? 'Không có Fanpage nào — kiểm tra quyền pages_show_list và các page đã chọn khi tạo token.'
-      : 'Nhập User Access Token ở Cài đặt → API & kết nối để tải các Fanpage bạn quản lý.'}</div>`;
+      <div class="fb-ptop">
+        ${p.picture ? `<img src="${esc(p.picture)}" alt="" loading="lazy">` : '<span class="fb-noavatar">👤</span>'}
+        <div class="info"><b title="${esc(p.name)}">${esc(p.name)}</b><small title="${esc(p.category || '')}">${esc(p.category || 'Fanpage')}</small></div>
+        ${p.link ? '<button class="fb-open" data-act="open" type="button" title="Mở page trên Facebook">↗</button>' : ''}
+      </div>
+      <div class="fb-stats"><span><b>${fans(p)}</b> người theo dõi</span><span class="mono" title="ID Fanpage">ID ${esc(p.id)}</span></div>
+      <div class="fb-pfoot">
+        <label class="mh-switch fb-switch" title="${p.connected ? 'Đang kết nối — dùng được để đăng bài' : 'Bật để dùng Fanpage này đăng bài'}">
+          <input type="checkbox" data-act="connect" ${p.connected ? 'checked' : ''}><i></i><span>${p.connected ? 'Đã kết nối' : 'Kết nối'}</span></label>
+        <button class="btn ${p.connected ? 'primary' : 'ghost'} sm" data-act="post" type="button" ${p.connected ? '' : 'disabled title="Bật Kết nối trước"'}>📣 Đăng bài</button>
+      </div>
+    </div>`).join('');
 }
 
 async function onFbPageClick(e) {
@@ -555,7 +641,7 @@ async function onFbPageClick(e) {
     const res = await api('fb_set_connected', page.id, e.target.checked);
     if (res.ok) renderFacebook(res.fb); else toast(res.error, 'error');
   } else if (act === 'open') {
-    window.open(page.link, '_blank');
+    api('open_url', page.link);
   } else if (act === 'post') {
     openFbPost(page);
   }
@@ -882,7 +968,7 @@ async function refreshAds(force = false) {
   if (!st.ads.logged_in) { renderAdsEmpty('Kết nối Facebook để xem tài khoản quảng cáo.'); return; }
   if (state.ads.loaded && !force) return;
   renderAdsEmpty('Đang tải tài khoản quảng cáo…');
-  const res = await api('ads_accounts');
+  const res = await api('ads_accounts', !!force);
   if (!res.ok) { renderAdsEmpty(res.error); return toast(res.error, 'error'); }
   state.ads.accounts = res.accounts;
   state.ads.loaded = true;
@@ -1174,6 +1260,7 @@ function fillSelects() {
 function restoreForm() {
   const s = state.boot.settings;
   state.form = { ...FORM_DEFAULT, provider: s.provider || FORM_DEFAULT.provider, ...(s.last_form || {}) };
+  if (s.model_video) Object.assign(state.form, { provider: s.model_video, browser_profile: s.model_video_profile || '' });  // mặc định theo Model AI
   const f = state.form;
   $('#topic').value = f.topic;
   $('#provider').value = f.provider;
@@ -1880,6 +1967,10 @@ window.__onBackend = ({ event, data }) => {
     case 'studio_tasks':
       window.StudioPage.update(event, data); break;
     case 'offer_request': OfferForm.add(data); break;
+    case 'zalo_status': if (window.ZaloSettings) window.ZaloSettings.update(data); if (window.AdReqPage) window.AdReqPage.zalo(data); break;
+    case 'adreq_changed': if (window.AdReqPage) window.AdReqPage.reload(data); break;  // yêu cầu mới từ nhóm Zalo
+    case 'adchat_status': if (window.AdReqPage) window.AdReqPage.status(data); break;  // Claude đang trả lời / chờ quyền công cụ
+    case 'posts_changed': if (window.PostsPage) window.PostsPage.reload(); break;  // bài lên lịch vừa đăng / lỡ lịch
     case 'offer_closed': OfferForm.close(data.id); break;
     case 'cast_update': case 'cast_done': case 'cast_error': case 'cast_log': case 'cast_progress': case 'cast_tasks':
       window.CastPage.update(event, data); break;
@@ -1986,7 +2077,7 @@ function renderVideoList() {
   }
   list.innerHTML = state.videos.map(v => `
     <div class="vitem ${state.selected === v.id ? 'active' : ''}" data-id="${esc(v.id)}">
-      <div class="vthumb ${aspectClass(v.aspect)}">${v.thumb_url ? `<img src="${esc(v.thumb_url)}" alt="">` : ''}</div>
+      <div class="vthumb ${aspectClass(v.aspect)}">${v.thumb_url ? `<img src="${esc(thumbUrl(v.thumb_url, 240))}" alt="" loading="lazy" decoding="async">` : ''}</div>
       <div class="vinfo">
         <b title="${esc(v.title)}">${esc(v.title)}</b>
         <small class="mono">${esc(v.aspect)} · ${v.duration}s · ${v.scene_count} khung</small>
@@ -2066,7 +2157,7 @@ function showFinal() {
   state.scene = null;
   const v = state.detail;
   $('#stage').innerHTML = v.final_url
-    ? `<video src="${esc(v.final_url)}" controls autoplay></video>`
+    ? `<video src="${esc(v.final_url)}" controls></video>`
     : '<div class="empty">Video chưa xuất xong</div>';
   $('#sceneLabel').textContent = 'FINAL — chọn một cảnh để sửa HTML';
   renderFilmstrip();
@@ -2078,7 +2169,7 @@ function selectScene(scene) {
   $('#htmlEditor').value = '';
   if (scene.html_url) showSceneFrame({ src: scene.html_url });
   else $('#stage').innerHTML = scene.video_url  // video AI: không có HTML cảnh
-    ? `<video src="${esc(scene.video_url)}" controls autoplay></video>` : '<div class="empty">Cảnh này không có HTML</div>';
+    ? `<video src="${esc(scene.video_url)}" controls></video>` : '<div class="empty">Cảnh này không có HTML</div>';
   renderFilmstrip();
 }
 
@@ -2310,7 +2401,91 @@ function renderTemplateGrid(root, filter) {
   });
 }
 
-function openSettings() {
+/* ------------------------------------------------------------------ model AI dùng chung */
+// Cài 1 lần ở Cài đặt → Model AI; Studio, Nhân vật & Layout, Viết content, Chiến dịch, Trợ lý quảng cáo dùng chung.
+// Trang đặc thù (Studio Muse AI, Seedance, Workflow từng nút) giữ lựa chọn riêng.
+const MODEL_ROWS = [
+  ['text', 'Model viết — storyboard, phân tích & viết lại ý tưởng, mô tả nhân vật, content, chiến dịch, trợ lý QC', 'text'],
+  ['image', 'Model ảnh — khung đầu, ảnh tổng hợp, ảnh nhân vật, ảnh chiến dịch', 'image'],
+  ['video', 'Model video — clip từng cảnh (Studio)', 'video'],
+  ['post', 'Model hậu kỳ AI — từ khoá phụ đề, hiệu ứng âm thanh, hook', 'text'],
+  ['vision', 'Model phân tích video tham khảo (👁 = xem được hình)', 'text'],
+];
+
+function sharedModels(src) {
+  const s = src || state.boot.settings || {};
+  return { text: s.model_text || 'chatgpt_browser', text_profile: s.model_text_profile || '',
+    image: s.model_image || (s.last_image_form || {}).engine || 'openai_api', image_profile: s.model_image_profile || '',
+    video: s.model_video || 'grok_browser', video_profile: s.model_video_profile || '',
+    post: s.model_post || 'claude_browser', post_profile: s.model_post_profile || '',
+    vision: s.model_vision || 'gemini_browser' };
+}
+
+/** Tên hiển thị của model dùng chung (cần danh sách model — tải 1 lần từ studio_meta). */
+function sharedModelName(kind, id) {
+  const m = state.modelMeta;
+  if (!m) return id;
+  if (kind === 'image') return (m.image_engines[id] || {}).name || id;
+  if (kind === 'video') return (m.video_engines[id] || {}).name || id;
+  return (m.text_models.find(x => x.id === id) || {}).name || id;
+}
+
+async function loadModelMeta() {
+  if (state.modelMeta) return state.modelMeta;
+  const r = await api('studio_meta');
+  if (r.ok) state.modelMeta = r.meta;
+  return state.modelMeta;
+}
+
+/** Ô thay cho ô chọn model ở các màn hình: tên model dùng chung + bấm để mở Cài đặt → Model AI. */
+function sharedModelField(label, kind, key) {
+  const id = sharedModels()[key || kind];
+  return `<div class="field"><span>${label}</span><button type="button" class="shared-model" data-shared-models
+    title="Model dùng chung cho mọi màn hình — đổi ở Cài đặt → Model AI">🤖 ${esc(sharedModelName(kind, id))}<small>⚙ đổi ở Cài đặt</small></button></div>`;
+}
+document.addEventListener('click', e => {
+  if (e.target.closest && e.target.closest('[data-shared-models]')) { e.preventDefault(); e.stopPropagation(); openSettings('models'); }
+}, true);
+
+function modelSettingsHtml(m, cur) {
+  const list = kind => kind === 'text' ? m.text_models.map(x => [x.id, x.name + (x.ready ? '' : ' — chưa có khoá')])
+    : kind === 'image' ? Object.entries(m.image_engines).map(([k, v]) => [k, v.name])
+      : Object.entries(m.video_engines).map(([k, v]) => [k, `${v.name} · ${v.durations.join('/')}`]);
+  return MODEL_ROWS.map(([key, label, kind]) => {
+    const id = cur[key];
+    const site = kind === 'text' ? (m.text_models.find(x => x.id === id) || {}).site : siteOf(id);
+    const prof = key !== 'vision' && String(id).endsWith('_browser') && site && state.profiles && state.profileSites[site]
+      ? `<select data-model-profile="${key}" title="Profile trình duyệt (tài khoản đã đăng nhập)">${profileOptions(site, cur[key + '_profile'])}</select>` : '';
+    const vis = kind === 'text' && key === 'vision' ? x => (x === 'gemini_browser' || x === 'gemini_api' || x.startsWith('api:') ? '👁 ' : '') : () => '';
+    return `<label class="field"><span>${label}</span><div class="inline set-model-row"><select data-model="${key}">${list(kind)
+      .map(([v, l]) => `<option value="${esc(v)}" ${v === id ? 'selected' : ''}>${vis(v)}${esc(l)}</option>`).join('')}</select>${prof}</div></label>`;
+  }).join('');
+}
+
+function readModelSettings() {
+  const out = {};
+  $$('#setModels [data-model]').forEach(el => {
+    out['model_' + el.dataset.model] = el.value;
+    if (el.dataset.model !== 'vision') out[`model_${el.dataset.model}_profile`] = '';
+  });
+  $$('#setModels [data-model-profile]').forEach(el => { out[`model_${el.dataset.modelProfile}_profile`] = el.value; });
+  return out;
+}
+
+async function renderModelSettings(scroll) {
+  const box = $('#setModels');
+  if (!box) return;
+  const m = await loadModelMeta();
+  if (!m) { box.innerHTML = '<p class="hint">Không tải được danh sách model.</p>'; return; }
+  box.innerHTML = modelSettingsHtml(m, sharedModels());
+  box.onchange = e => {
+    if (e.target.dataset.model === undefined) return;
+    box.innerHTML = modelSettingsHtml(m, sharedModels({ ...state.boot.settings, ...readModelSettings() }));
+  };
+  if (scroll) box.previousElementSibling.scrollIntoView({ block: 'start' });
+}
+
+function openSettings(section) {
   const s = state.boot.settings;
   const lic = state.boot.license;
   const opt = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${String(cur) === String(v) ? 'selected' : ''}>${l}</option>`).join('');
@@ -2320,6 +2495,17 @@ function openSettings() {
       <div class="field"><span>Thư mục lưu video</span>
         <div class="inline"><input id="setOut" value="${esc(s.output_dir)}" readonly><button class="btn ghost" id="setOutPick">Chọn…</button></div></div>
       <label class="check"><input type="checkbox" id="setCleanup" ${s.cleanup_temp ? 'checked' : ''}> Dọn file tạm sau khi render</label>
+      <div class="sec">🤖 MODEL AI (DÙNG CHUNG)</div>
+      <div id="setModels"><p class="hint">Đang tải danh sách model…</p></div>
+      <p class="hint">Cài 1 lần — Studio, Nhân vật &amp; Layout, Viết content, Chiến dịch, Trợ lý quảng cáo dùng chung bộ model này (dự án Studio cũ cũng theo).
+        Trang đặc thù giữ lựa chọn riêng: Studio Muse AI (luôn Muse), Seedance, Workflow (từng nút). Tạo hình ảnh / Tạo video mặc định theo bộ này, vẫn đổi được từng lần.</p>
+      <div class="sec">GIAO DIỆN</div>
+      <label class="field"><span>Thời gian màn Loading khi mở app</span><select id="setSplash">
+        ${[[0, 'Tắt — vào app ngay khi tải xong'], [1, '1 giây (mặc định)'], [2, '2 giây'], [3, '3 giây'], [5, '5 giây'], [8, '8 giây']]
+          .map(([v, l]) => `<option value="${v}" ${Number(s.splash_seconds ?? 1) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <small class="muted">Thời gian tối thiểu tính từ lúc mở app — nếu app tải lâu hơn, màn Loading vẫn hiện tới khi tải xong. Áp dụng từ lần mở sau.</small></label>
+      <div class="sec">ZALO — NHẬN YÊU CẦU QUẢNG CÁO</div>
+      <div id="zaloBox" class="zl-box"></div>
       <div class="sec">TRÌNH DUYỆT</div>
       <label class="field"><span>Cách điều khiển Chrome</span><select id="setBrowserEngine">
         <option value="cdp" ${(s.browser_engine || 'cdp') === 'cdp' ? 'selected' : ''}>Chrome thật (CDP) — Chrome của máy, ít cờ tự động hoá, không chạy headless (khuyên dùng)</option>
@@ -2396,11 +2582,18 @@ function openSettings() {
   $('#licLogout').onclick = async () => { const r = await api('license_logout'); renderLicense(r.license); };
   $('#setSave').onclick = () => saveSettings(true);
   bindFbSettings();
+  if (window.ZaloSettings) window.ZaloSettings.mount();  // mục Zalo (áp dụng ngay, không cần bấm Lưu)
+  renderModelSettings(section === 'models');
 }
 
 async function saveSettings(close) {
+  // khoá API dán dính khoảng trắng / chữ thừa (VD dán 2 lần) → backend chỉ giữ phần sk-… / AIza… đầu tiên; báo để người dùng biết
+  const messy = [['#setOpenAIKey', 'OpenAI'], ['#setAnthropicKey', 'Anthropic'], ['#setKey', 'Gemini']]
+    .filter(([id]) => $(id) && /\s/.test($(id).value.trim())).map(([, name]) => name);
+  if (messy.length) toast(`Khoá ${messy.join(', ')} có khoảng trắng / chữ thừa — đã tự lấy phần khoá đầu tiên. Kiểm tra lại nếu vẫn báo sai khoá.`, 'warn');
   const values = {
     cleanup_temp: $('#setCleanup').checked,
+    splash_seconds: Number($('#setSplash').value),
     show_browser: $('#setShowBrowser').checked,
     browser_engine: $('#setBrowserEngine').value,
     browser_keepalive: $('#setKeepAlive').checked,
@@ -2419,13 +2612,26 @@ async function saveSettings(close) {
     bgm_volume: Math.max(0, Math.min(1, parseFloat($('#setBgmVol').value) || 0)),
     music_dir: $('#setMusic').value,
     license_server: $('#setServer').value.trim(),
+    ...readModelSettings(),
   };
+  const before = sharedModels();
   state.boot.settings = await api('save_settings', values);
   $('#geminiModel').value = values.gemini_model;
   const r = await api('license_refresh');
   renderLicense(r.license);
   renderHeader();
   if (close) { closeModal(); toast('Đã lưu cài đặt', 'ok'); }
+  document.dispatchEvent(new CustomEvent('va:settings'));  // các màn hình vẽ lại nhãn model dùng chung
+  // Tạo hình ảnh / Tạo video: đổi model dùng chung → chọn luôn model đó (vẫn đổi được từng lần)
+  const g = sharedModels();
+  if (g.image !== before.image && $('#imgEngine') && state.boot.image_engines[g.image]) {
+    $('#imgEngine').value = g.image;
+    $('#imgEngine').dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  if (g.video !== before.video && $(`#provider option[value="${g.video}"]`)) {
+    $('#provider').value = g.video;
+    $('#provider').dispatchEvent(new Event('change', { bubbles: true }));
+  }
 }
 
 /* ------------------------------------------------------------------ actions */
@@ -2560,6 +2766,6 @@ function bindEvents() {
   new ResizeObserver(fitFrame).observe($('#stage'));
 
   $('#modalClose').onclick = closeModal;
-  $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+  // bấm ra nền tối KHÔNG đóng hộp thoại (tránh mất dữ liệu đang nhập) — đóng bằng nút ✕ hoặc Esc
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 }

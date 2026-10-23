@@ -15,7 +15,7 @@
   };
   const TASK_STATUS = { queued: 'Đang chờ', running: 'Đang chạy', done: 'Hoàn tất', error: 'Lỗi', cancelled: 'Đã dừng' };
   const KIND_LABEL = { character: 'Nhân vật', layout: 'Layout', combo: 'Kết hợp' };
-  const KINDS = ['character', 'layout', 'combo'];
+  const KINDS = ['character', 'layout'];  // đã bỏ "Kết hợp" — ảnh tổng hợp ⓪ của Studio thay vai trò này
   const NEW_LABEL = { character: 'Nhân vật mới', layout: 'Layout mới', combo: 'Kết hợp mới' };
   const ICON = { character: '🧑', layout: '🏞', combo: '🎬' };
   const INTRO = {
@@ -31,11 +31,14 @@
       if (!res.ok) return toast(res.error, 'error');
       C.meta = res;
     }
+    await loadModelMeta();  // tên model dùng chung
     await loadList();
     const res = await api('cast_tasks');
     if (res.ok) C.tasks = res.tasks;
     render();
   }
+
+  document.addEventListener('va:settings', () => { const b = $('#castBody'); if (C.meta && b && b.offsetParent) render(); });
 
   async function loadList() {
     for (const kind of KINDS) {
@@ -50,6 +53,10 @@
 
   // ------------------------------------------------------------ khung trang
   function render() {
+    // model viết mô tả + model tạo ảnh: dùng chung (Cài đặt → Model AI)
+    const g = sharedModels();
+    Object.assign(C.text, { model: g.text, profile: g.text_profile });
+    Object.assign(C.gen, { engine: g.image, profile: g.image_profile });
     const list = C.items[C.tab];
     $('#castBody').innerHTML = `<div class="cs-layout">
       <aside class="card cs-list">
@@ -142,17 +149,13 @@
 
   // ------------------------------------------------------------ trình sửa
   function textModelSelect() {
-    const models = C.meta.text_models;
-    const m = models.find(x => x.id === C.text.model) || models[0];
-    return `<label class="field"><span>Model viết mô tả</span><select data-text="model">${models.map(x => `<option value="${esc(x.id)}" ${x.id === C.text.model ? 'selected' : ''}>${esc(x.name)}${x.ready ? '' : ' — chưa có khoá'}</option>`).join('')}</select></label>
-      ${m && m.site && state.profiles && (state.profileSites || {})[m.site] ? `<label class="field"><span>Profile</span><select data-text="profile">${profileOptions(m.site, C.text.profile)}</select></label>` : ''}`;
+    return sharedModelField('Model viết mô tả', 'text');
   }
 
   function engineRow(layout) {
     const eng = C.meta.image_engines[C.gen.engine] || {};
     return `<div class="cs-gen-row">
-      <label class="field"><span>Model tạo ảnh</span><select data-gen="engine">${Object.entries(C.meta.image_engines).map(([k, v]) => `<option value="${esc(k)}" ${k === C.gen.engine ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}</select></label>
-      ${eng.browser && state.profiles && (state.profileSites || {})[siteOf(C.gen.engine)] ? `<label class="field"><span>Profile</span><select data-gen="profile">${profileOptions(siteOf(C.gen.engine), C.gen.profile)}</select></label>` : ''}
+      ${sharedModelField('Model tạo ảnh', 'image')}
       ${layout ? `<label class="field"><span>Tỉ lệ</span><select data-gen="aspect">${(eng.aspects || ['9:16']).map(a => `<option ${a === C.gen.aspect ? 'selected' : ''}>${a}</option>`).join('')}</select></label>
         <label class="field"><span>Số phương án</span><select data-gen="count">${(eng.counts || [1]).map(n => `<option ${String(n) === String(C.gen.count) ? 'selected' : ''}>${n}</option>`).join('')}</select></label>` : ''}
 </div>`;
@@ -192,16 +195,29 @@
     </div>`;
   }
 
+  // 📎 File đính kèm cho AI viết mô tả: ảnh tham khảo (gửi kèm model) + ghi chú .txt / .md (ghép vào prompt)
+  function refsHtml(x, char) {
+    const refs = x.refs || [], max = C.meta.max_refs || 6;
+    const isImg = r => /\.(png|jpe?g|webp)$/i.test(r.name);
+    return `<div class="field"><span>📎 File đính kèm ${char ? 'nhân vật' : 'bối cảnh'} <small class="muted">— AI đọc khi viết mô tả (ảnh tham khảo ngoại hình, hồ sơ / ghi chú .txt .md) · tối đa ${max} file · không dùng làm ảnh cho Studio</small></span>
+      <div class="cs-products cs-refs">${refs.map(r => `<div class="cs-prod" data-img="${esc(r.name)}" title="${esc(r.orig || r.label || r.name)}">
+          ${isImg(r) ? `<button class="cs-img" data-view="${esc(r.url)}" type="button" title="Xem lớn"><img src="${esc(r.url)}" alt="" loading="lazy"></button>`
+            : `<span class="cs-ref-doc">📄<small>${esc(r.orig || r.label || r.name)}</small></span>`}
+          <button class="cs-prod-del" data-del-img type="button" title="Bỏ file đính kèm">✕</button></div>`).join('')}
+        ${refs.length < max ? '<button class="cs-prod cs-prod-add" data-act="upload-ref" type="button"><b>+</b><small>Đính kèm ảnh / ghi chú</small></button>' : ''}</div></div>`;
+  }
+
   function editorHtml() {
     const d = C.draft, x = C.cur, char = x.kind === 'character', combo = x.kind === 'combo';
     if (combo) return comboHtml(d, x);
     const base = x.images.filter(i => i.kind === 'base');
-    const others = x.images.filter(i => i.kind !== 'base');
+    const others = x.images.filter(i => i.kind !== 'base' && i.kind !== 'ref');
     return `${heroHtml(d, x)}<div class="cs-work"><div class="cs-col">
       <div class="card cs-step"><div class="card-title"><span class="cs-n">1</span> Ý TƯỞNG &amp; MÔ TẢ CỐ ĐỊNH</div>
         <label class="field"><span>Ý tưởng (tiếng Việt, viết tự nhiên)</span><textarea data-d="idea" rows="3" placeholder="${char
           ? 'VD: Cô giáo tiếng Anh trẻ 27 tuổi, dễ thương, tóc dài đen buộc nửa đầu, hay mặc áo len pastel…'
           : 'VD: Lớp học mầm non tươi sáng, tường pastel, bảng trắng ở giữa, kệ thú bông bên phải, ánh sáng sáng sớm…'}">${esc(d.idea || '')}</textarea></label>
+        ${refsHtml(x, char)}
         <div class="cs-gen-row">${textModelSelect()}
           <button class="btn primary" data-act="describe" type="button" ${x.pending.some(p => p.label.startsWith('AI')) ? 'disabled' : ''}>✨ AI viết mô tả</button></div>
         <label class="field"><span>Mô tả cố định (tiếng Anh) — Studio chép nguyên vào storyboard và prompt ảnh</span><textarea data-d="description" rows="5" placeholder="Bấm ✨ AI viết mô tả hoặc tự viết">${esc(d.description || '')}</textarea></label>
@@ -231,14 +247,15 @@
   }
 
   function heroHtml(d, x) {
-    const thumb = (x.starred[0] || x.images.find(i => i.exists && i.kind !== 'product') || {}).url;
+    const thumb = (x.starred[0] || x.images.find(i => i.exists && i.kind !== 'product' && i.kind !== 'ref') || {}).url;
     const chip = (icon, text) => `<span class="cs-chip">${icon} ${text}</span>`;
     return `<div class="card cs-hero">
         <div class="cs-hero-top">
           <span class="cs-hero-thumb">${thumb ? `<img src="${esc(thumb)}" alt="">` : ICON[x.kind]}</span>
           <div class="cs-hero-name"><input id="csName" value="${esc(d.name)}" aria-label="Tên">
             <div class="cs-chips"><span class="tag">${KIND_LABEL[x.kind]}</span>
-              ${chip('⭐', `${x.starred.length} ảnh dùng cho Studio`)}${chip('🖼', `${x.images.filter(i => i.kind !== 'product').length} ảnh`)}
+              ${chip('⭐', `${x.starred.length} ảnh dùng cho Studio`)}${chip('🖼', `${x.images.filter(i => i.kind !== 'product' && i.kind !== 'ref').length} ảnh`)}
+              ${(x.refs || []).length ? chip('📎', `${x.refs.length} file đính kèm`) : ''}
               ${x.kind === 'combo' ? chip('📦', `${(x.products || []).length} sản phẩm`) : ''}
               ${x.pending.length ? `<span class="cs-chip run">⏳ ${x.pending.length} đang chạy <button class="link" data-act="cancel-all" type="button">Dừng</button></span>` : ''}</div></div>
           <div class="cs-hero-act">
@@ -262,7 +279,7 @@
         ${engineRow(true)}${layoutPromptHtml('combo')}
         <button class="btn primary" data-gen-preset="combo" type="button">✨ Tạo ảnh kết hợp</button></div>
       </div>${sideHtml(x)}</div>
-      ${galleryHtml(x.images.filter(i => i.kind !== 'product'), 4)}`;
+      ${galleryHtml(x.images.filter(i => i.kind !== 'product' && i.kind !== 'ref'), 4)}`;
   }
 
   function presetsHtml() {
@@ -450,8 +467,9 @@
         if (!confirm(`Xoá ${KIND_LABEL[C.cur.kind].toLowerCase()} “${C.cur.name}” và toàn bộ ảnh? Dự án Studio đang dùng sẽ bỏ qua mục này.`)) return;
         await api('cast_delete', C.cur.kind, C.cur.id); C.cur = null; C.dirty = false; await loadList(); return render();
       }
-      if (act === 'upload' || act === 'upload-product') {
-        const res = await api('cast_add_photos', C.cur.kind, C.cur.id, null, act === 'upload-product' ? 'product' : '');
+      if (act === 'upload' || act === 'upload-product' || act === 'upload-ref') {
+        const role = { 'upload-product': 'product', 'upload-ref': 'ref' }[act] || '';
+        const res = await api('cast_add_photos', C.cur.kind, C.cur.id, null, role);
         if (!res.ok) return toast(res.error, 'error');
         if (res.item) applyItem(res.item, true);
         return;

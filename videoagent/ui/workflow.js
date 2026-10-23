@@ -364,7 +364,8 @@
       case 'output': return `Thư mục: <b>${esc(c.name)}</b>`;
       case 'fb_post': case 'fb_schedule': {
         const page = FB && FB.pages.find(p => p.id === c.page_id);
-        const when = n.type === 'fb_schedule' ? (c.mode === 'at' ? `lúc ${esc(String(c.publish_at || '?').replace('T', ' '))}` : `sau ${esc(c.delay_hours)} giờ`) : 'đăng ngay';
+        const sched = n.type === 'fb_schedule' || c.timing === 'app';
+        const when = sched ? `${n.type === 'fb_schedule' && c.via !== 'app' ? '🗓 FB hẹn ' : '⏰ lên lịch '}${c.mode === 'at' ? `lúc ${esc(String(c.publish_at || '?').replace('T', ' '))}` : `sau ${esc(c.delay_hours)} giờ`}` : 'đăng ngay';
         const pt = (m.types[n.type].fields.find(f => f.key === 'post_type') || { options: [] }).options.find(o => o.value === (c.post_type || 'feed'));
         const srcs = (c.sources || []).filter(s => nodeById(s.node)).length;
         return `<b>${esc(page ? page.name : c.page_id ? `Page ${c.page_id}` : 'Chưa chọn Fanpage')}</b><br>${esc(pt ? pt.label : '')}<br>${when}${c.confirm ? ' · cần duyệt' : ' · <span class="warn-text">tự đăng</span>'}${srcs ? ` · 📎 ${srcs} tài nguyên` : ''}`;
@@ -1463,7 +1464,7 @@
       }
       if (o.kind === 'file') return `<figure class="wf-out file"><span>📄</span><figcaption>${esc(o.name)}</figcaption></figure>`;
       if (o.kind === 'text') return `<div class="wf-out-text">${esc(String(o.text).slice(0, 1200))}</div>`;
-      if (o.kind === 'post') return `<div class="wf-out-post"><b>${o.scheduled ? `🗓 Đã hẹn giờ ${esc(o.when)}` : '📣 Đã đăng'}</b> · ${esc(o.page)}
+      if (o.kind === 'post') return `<div class="wf-out-post"><b>${o.queued ? `⏰ Đã lên lịch ${esc(o.when)} — sửa / đăng ngay ở Quản lý bài đăng` : o.scheduled ? `🗓 Đã hẹn giờ ${esc(o.when)}` : '📣 Đã đăng'}</b> · ${esc(o.page)}
         ${o.url ? `<a href="${esc(o.url)}" data-ext>${esc(o.url)}</a>` : `<span class="mono">${esc(o.post_id)}</span>`}<small>${esc(o.caption || '')}</small></div>`;
       return '';
     }).join('')}</div>`;

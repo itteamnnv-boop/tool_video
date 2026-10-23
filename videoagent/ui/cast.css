@@ -76,6 +76,14 @@
 .st-slot-imgs>*+*{margin-left:-8px}
 .st-slot-n{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .st-slot:not(.on) .st-slot-n{color:var(--muted);font-weight:500}
+/* ô = vùng chọn (bấm → kho chung) + hàng nút: 📚 Kho chung · ⬆ Tải từ máy */
+.st-slot-main{display:flex;flex-direction:column;gap:5px;width:100%;min-width:0;padding:0;border:0;background:none;color:inherit;text-align:left;cursor:pointer}
+.st-slot-act{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+.st-slot-act .btn{padding:3px 9px;font-size:11.5px}
+/* ảnh tham chiếu / sản phẩm của dự án — ô thứ 4 trong thẻ Nhân vật, layout & sản phẩm (không bấm cả ô) */
+.st-slot-refs{cursor:default}
+.st-slot-refs:hover{background:transparent}
+.st-slot-refs .st-refs{align-items:center;gap:6px}
 
 /* hộp chọn (lớp phủ riêng, nằm trên cả hộp Cài đặt dự án) */
 .cp-overlay{position:fixed;inset:0;z-index:200;display:grid;place-items:center;padding:19px;background:#000a;backdrop-filter:blur(2px)}
@@ -155,5 +163,9 @@
 .cs-prod-add b{font-size:24px;line-height:1;color:var(--lime)}
 .cs-prod-add small{font-size:10px}
 .cs-prod-add:hover{border-color:var(--lime);color:inherit}
+/* 📎 file đính kèm cho AI viết mô tả (bước 1) — ô nhỏ hơn ảnh sản phẩm */
+.cs-refs .cs-prod{width:76px;height:76px}
+.cs-ref-doc{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;height:100%;padding:4px;font-size:22px;text-align:center}
+.cs-ref-doc small{font-size:9.5px;line-height:1.2;color:var(--muted);word-break:break-all;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 @media (max-width:1400px){.cs-work{grid-template-columns:minmax(0,1fr) 300px}}
 @media (max-width:1200px){.cs-work{grid-template-columns:1fr}.cs-side{position:static}}

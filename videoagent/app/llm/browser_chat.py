@@ -35,6 +35,26 @@ class ChatSite:
     prompt_suffix: str = ""  # dặn thêm cuối mỗi prompt (vd. Claude: trả lời ngay trong chat, không mở artifact)
     # Phần câu trả lời thật bên trong response_selector (bỏ khối suy nghĩ, nhãn đọc màn hình); "" = cả phần tử
     answer_selector: str = ""
+    # trang mở cuộc trò chuyện MỚI cho mỗi lượt hỏi ("" = url); đăng nhập vẫn dùng url
+    chat_url: str = ""
+
+
+def _image_files(images: list) -> list[Path]:
+    """Ảnh gửi kèm → đường dẫn file: nhận đường dẫn, hoặc (bytes, mime) như ảnh sản phẩm của màn Tạo video (ghi ra file
+    tạm để nạp vào ô đính kèm của trang chat)."""
+    import tempfile
+
+    out, tmp = [], None
+    for item in images or []:
+        if isinstance(item, (tuple, list)) and item and isinstance(item[0], (bytes, bytearray)):
+            tmp = tmp or Path(tempfile.mkdtemp(prefix="va_chat_img_"))
+            mime = str(item[1] if len(item) > 1 else "image/png")
+            path = tmp / f"img_{len(out) + 1}.{ {'image/jpeg': 'jpg', 'image/webp': 'webp'}.get(mime, 'png') }"
+            path.write_bytes(item[0])
+            out.append(path)
+        elif Path(str(item)).is_file():
+            out.append(Path(str(item)))
+    return out
 
 
 SITES = {
@@ -104,6 +124,7 @@ SITES = {
     "muse": ChatSite(
         name="Muse",
         url="https://muse.ai/",
+        chat_url="https://muse.ai/thread/new",  # cuộc trò chuyện mới (side chat) — không dùng "Main chat" có lịch sử cũ
         input_selectors=(
             "textarea[aria-label='Message']",  # ô nhập "Main chat" (kiểm chứng 10/2026 khi làm Muse Image/Video)
             "div[contenteditable='true'][role='textbox']",
@@ -385,10 +406,16 @@ class BrowserChatProvider(LLMProvider):
         self.channel = channel or "chrome"
         self.show_browser = show_browser
         self.timeout_s = timeout_s
+        # tiếp tục 1 cuộc trò chuyện có sẵn (VD claude.ai/chat/<id>) thay vì mở chat mới; last_url = link chat sau khi trả lời
+        self.start_url = ""
+        self.last_url = ""
+        self.last_attached = 0  # số ảnh đã đính kèm ở lượt gửi gần nhất
 
     @property
-    def supports_images(self) -> bool:  # Gemini trình duyệt gửi kèm được ảnh (menu tải lên); trang khác chỉ gửi chữ
-        return self.site is SITES["gemini"]
+    def supports_images(self) -> bool:
+        """Trang chat đính kèm được ảnh: Gemini (menu tải lên riêng), ChatGPT / Claude / Grok (ô đính kèm của khung soạn).
+        Trước đây chỉ Gemini → ảnh sản phẩm gửi cho ChatGPT bị bỏ lặng lẽ."""
+        return self.site in (SITES["gemini"], SITES["chatgpt"], SITES["claude"], SITES["grok"])
 
     def generate(self, prompt: str, images: list | None = None, complete=None) -> str:
         """complete(text) -> bool (tuỳ chọn): câu trả lời coi là XONG chỉ khi điều kiện đúng (vd. JSON đọc được, đủ phần).
@@ -402,24 +429,41 @@ class BrowserChatProvider(LLMProvider):
                 raise LLMError(f"Không mở được trình duyệt '{self.channel}': {exc}") from exc
             try:
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
-                page.goto(site.url, wait_until="domcontentloaded", timeout=60_000)
+                page.goto(self.start_url or site.chat_url or site.url, wait_until="domcontentloaded", timeout=60_000)
                 try:
                     page.wait_for_load_state("networkidle", timeout=15_000)
                 except PWError:
                     pass
+                if self.start_url:  # nhắn tiếp thread cũ: chờ các tin cũ hiện đủ rồi mới đếm (tránh lấy nhầm trả lời cũ)
+                    self._settle_count(page, site.response_selector)
                 before = page.locator(site.response_selector).count()
                 self._focus_input(page)
+                self.last_attached = 0
                 if images and self.supports_images:
-                    from .gemini_veo import _upload_images
+                    say = lambda msg, level="info": log.warning(msg) if level == "warn" else log.info(msg)  # noqa: E731
+                    files = _image_files(images)[:10]
+                    if site is SITES["gemini"]:
+                        from .gemini_veo import _upload_images
 
-                    _upload_images(page, [Path(p) for p in images][:10],
-                                   lambda msg, level="info": log.warning(msg) if level == "warn" else log.info(msg))
+                        self.last_attached = _upload_images(page, files, say)
+                    else:  # ChatGPT / Claude / Grok: nạp vào ô đính kèm của khung soạn + xác minh ảnh đã hiện
+                        from .uploads import attach_files
+
+                        self.last_attached = attach_files(page, files, say)
+                        if not self.last_attached:
+                            raise LLMError(f"Không đính kèm được ảnh lên {site.name} (ảnh không hiện trong ô soạn) — "
+                                           "chưa gửi prompt. Bật “Hiện cửa sổ Chrome” để xem rồi thử lại, hoặc đổi sang Gemini.")
+                        say(f"Đã đính kèm {self.last_attached} ảnh lên {site.name}")
                     self._focus_input(page)
+                elif images:
+                    log.warning("%s không đính kèm được ảnh — chỉ gửi chữ", site.name)
                 page.keyboard.insert_text(prompt)
                 page.wait_for_timeout(300)
                 page.keyboard.press("Enter")
                 self._ensure_sent(page, prompt)
-                return self._wait_answer(page, before, prompt, complete)
+                answer = self._wait_answer(page, before, prompt, complete)
+                self.last_url = page.url
+                return answer
             finally:
                 ctx.close()
 
@@ -490,10 +534,37 @@ class BrowserChatProvider(LLMProvider):
             answer = re.split(junk, answer, flags=re.I)[0]
         return ANSWER_PREFIX.sub("", answer).strip()  # nhãn đọc màn hình "ChatGPT said:" đứng trước câu trả lời
 
+    def _waiting_permission(self, page) -> bool:
+        """Claude đang chờ người dùng cho phép dùng công cụ MCP? (chỉ đọc giao diện, không bấm gì)"""
+        if self.site.name != "Claude":
+            return False
+        try:
+            return bool(page.evaluate(PERMISSION_JS))
+        except PWError:
+            return False
+
+    def _hold_for_permission(self, page, state: dict) -> bool:
+        """Đang chờ quyền → gia hạn thời gian chờ + nhắc 1 lần trong log tác vụ. True = đang chờ (đừng coi là xong)."""
+        if not self._waiting_permission(page):
+            return False
+        now = time.time()
+        if not state.get("since"):
+            state["since"] = now
+            from ..browser_profiles import _ctx
+
+            msg = (f"{self.site.name} đang chờ bạn cho phép dùng công cụ (MCP) — mở cửa sổ {self.site.name} để bấm cho phép "
+                   "(nên chọn “Always allow” cho các công cụ CHỈ ĐỌC; app không tự bấm)")
+            log.warning(msg)
+            if _ctx().get("log"):
+                _ctx()["log"](msg, "warn")
+        if now - state["since"] < PERMISSION_WAIT_MAX:
+            state["deadline"] = max(state["deadline"], now + 120)
+        return True
+
     def _wait_answer(self, page, before: int, prompt: str, complete=None) -> str:
         site = self.site
         started = time.time()
-        deadline = started + self.timeout_s
+        hold = {"deadline": started + self.timeout_s}
         ok = (lambda text: True) if complete is None else (lambda text: _safe_complete(complete, text))
         responses = page.locator(site.response_selector)
         echo = prompt.strip()[:60]
@@ -501,13 +572,14 @@ class BrowserChatProvider(LLMProvider):
         while responses.count() < before + site.bubbles_per_turn:
             if self._needs_login(page):
                 raise self._login_error()
-            if time.time() > deadline:
+            waiting = self._hold_for_permission(page, hold)
+            if time.time() > hold["deadline"]:
                 if fallback and last_fb:
                     return last_fb
                 sent = self._page_answer(page, prompt) or self._prompt_on_page(page, prompt)
                 raise LLMError(f"{site.name} không phản hồi (hết thời gian chờ)" if sent else
                                f"Chưa gửi được tin nhắn tới {site.name} — ô soạn thảo/nút gửi của trang có thể đã đổi")
-            if time.time() - started > 25:  # selector không thấy câu trả lời → đọc chữ mới trên trang
+            if time.time() - started > 25 and not waiting:  # selector không thấy câu trả lời → đọc chữ mới trên trang
                 fallback = True
                 text = self._page_answer(page, prompt)
                 stop = page.locator(site.stop_selector)
@@ -520,7 +592,7 @@ class BrowserChatProvider(LLMProvider):
                     return text  # trả lời xong nhưng không đúng yêu cầu (vd. hỏi lại) → để bên gọi thử lại, khỏi chờ hết giờ
             page.wait_for_timeout(700)
         last, stable_since = "", time.time()
-        while time.time() < deadline:
+        while time.time() < hold["deadline"]:
             try:  # chỉ phần trả lời thật (bỏ khối suy nghĩ, nhãn ẩn đọc màn hình)
                 text = responses.last.evaluate(ANSWER_TEXT_JS, site.answer_selector)
             except PWError:  # phần tử bị vẽ lại giữa chừng → đọc lại vòng sau
@@ -529,16 +601,44 @@ class BrowserChatProvider(LLMProvider):
                 text = ""
             stop = page.locator(site.stop_selector)
             generating = stop.count() > 0 and stop.first.is_visible()
+            if self._hold_for_permission(page, hold):  # chờ người dùng cho phép công cụ → chưa xong
+                stable_since = time.time()
+                page.wait_for_timeout(700)
+                continue
+            # trang báo tin đã viết xong (claude.ai: data-is-streaming="false") → nhận ngay khi đủ nội dung, khỏi chờ đứng yên
+            try:
+                finished = responses.last.get_attribute("data-is-streaming") == "false"
+            except PWError:
+                finished = False
             if text != last:
                 last, stable_since = text, time.time()
-            elif text.strip() and not generating and time.time() - stable_since > 2.5 and ok(text):
+            if text.strip() and not generating and finished and time.time() - stable_since > 0.4 and ok(text):
                 return text
-            elif complete is not None and text.strip() and not generating and time.time() - stable_since > GIVE_UP_STABLE:
-                return text  # trả lời xong nhưng không đúng yêu cầu (vd. hỏi lại) → để bên gọi thử lại
-            page.wait_for_timeout(700)
+            if text.strip() and not generating and time.time() - stable_since > 2.5 and ok(text):
+                return text
+            if complete is not None and text.strip() and not generating and time.time() - stable_since > (
+                    8 if finished else GIVE_UP_STABLE):
+                return text  # đã xong nhưng không đúng yêu cầu (vd. hỏi lại) → để bên gọi xử lý, khỏi chờ lâu
+            page.wait_for_timeout(400)
         if last.strip():
             return last
         raise LLMError(f"{site.name} không trả về nội dung")
+
+    @staticmethod
+    def _settle_count(page, selector: str, quiet: float = 1.2, limit: float = 15.0) -> None:
+        """Chờ số tin trên trang ngừng tăng (thread cũ đang tải dần các tin) — tối đa `limit` giây."""
+        start = time.time()
+        last, since = -1, time.time()
+        while time.time() - start < limit:
+            try:
+                n = page.locator(selector).count()
+            except PWError:
+                n = last
+            if n != last:
+                last, since = n, time.time()
+            elif n > 0 and time.time() - since >= quiet:
+                return
+            page.wait_for_timeout(250)
 
     @staticmethod
     def _prompt_on_page(page, prompt: str) -> bool:
@@ -548,6 +648,12 @@ class BrowserChatProvider(LLMProvider):
             return False
         return " ".join(prompt.split())[-40:] in flat
 
+
+# Claude (claude.ai) gọi công cụ MCP (VD connector quảng cáo) có thể dừng hỏi quyền "Allow once / Always allow".
+# App KHÔNG tự bấm cho phép (có thể là công cụ thay đổi dữ liệu) — chỉ nhận ra để chờ người dùng bấm, không bỏ cuộc.
+PERMISSION_JS = r"""() => [...document.querySelectorAll('button')].some(b => b.offsetParent !== null &&
+  /^(allow once|always allow|allow for this chat|cho phép( một lần)?|luôn cho phép)$/i.test((b.innerText || '').trim()))"""
+PERMISSION_WAIT_MAX = 15 * 60  # chờ người dùng cho phép tối đa 15 phút
 
 GIVE_UP_STABLE = 60  # giây: câu trả lời đứng yên lâu mà vẫn chưa "xong" theo điều kiện → coi như model đã trả lời xong
 

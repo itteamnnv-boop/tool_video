@@ -4,6 +4,10 @@
 - Người dùng tạo / sửa bài nháp, rồi đăng (lại) lên một hoặc nhiều Fanpage — có thể hẹn giờ.
 - Mỗi lần đăng ghi lại: Fanpage, thời điểm, ai xác nhận, link bài / lỗi. Không bao giờ tự đăng: publish() chỉ chạy
   khi giao diện gửi confirmed=True (người dùng bấm xác nhận).
+- Lên lịch (app tự đăng): người dùng xác nhận lịch (giờ + Fanpage) → bài ở trạng thái "queued"; bộ hẹn giờ (PostScheduler)
+  đăng đúng giờ khi app đang mở. Bài lên lịch vẫn sửa được nội dung / đổi giờ / huỷ lịch / đăng ngay. Mở app trễ quá
+  GRACE giây so với giờ hẹn → KHÔNG tự đăng, chuyển "missed" (lỡ lịch) chờ người dùng quyết định.
+  Khác "scheduled" = hẹn giờ trên chính Facebook (Facebook tự đăng, 10 phút → 30 ngày, không sửa được từ app).
 
 Dữ liệu: DATA_DIR/posts/posts.json; file: DATA_DIR/posts/media/<id>/ (phục vụ qua /post-media/, chỉ ảnh/video).
 """
@@ -32,6 +36,8 @@ POST_TYPES = {  # cùng danh sách với block Đăng bài Facebook (workflow)
 }
 SCHEDULABLE = ("feed", "text", "media", "reel")
 SCHEDULE_MIN, SCHEDULE_MAX = 10 * 60, 30 * 24 * 3600  # Facebook: hẹn giờ 10 phút → 30 ngày
+APP_SCHEDULE_MIN, APP_SCHEDULE_MAX = 60, 365 * 24 * 3600  # lên lịch app tự đăng: 1 phút → 1 năm
+GRACE = 15 * 60  # mở app trễ hơn giờ hẹn quá 15 phút → không tự đăng (lỡ lịch), chờ người dùng
 SOURCES = {"manual": "Tạo tay", "quick": "Đăng nhanh (Fanpage)", "library": "Thư viện video", "workflow": "Workflow",
            "campaign": "Chiến dịch"}
 MAX_POSTS = 3000
@@ -107,7 +113,10 @@ class PostStore:
                  for n in post.get("files") or []]
         pubs = post.get("publishes") or []
         ok = [p for p in pubs if p.get("post_id") or p.get("url")]
-        return {**post, "media": files, "type_label": POST_TYPES.get(post.get("kind"), post.get("kind", "")),
+        sch = post.get("schedule")
+        if sch:
+            sch = {**sch, "when": datetime.fromtimestamp(sch["at"]).strftime("%H:%M %d/%m/%Y")}
+        return {**post, "schedule": sch, "media": files, "type_label": POST_TYPES.get(post.get("kind"), post.get("kind", "")),
                 "source_label": SOURCES.get(post.get("source"), post.get("source", "")),
                 "posted_count": len(ok), "last_publish": pubs[-1] if pubs else None}
 
@@ -224,11 +233,135 @@ class PostStore:
             p["publishes"] = (p.get("publishes") or []) + results
             if any(r["post_id"] or r["url"] for r in results):
                 p["status"] = "scheduled" if scheduled_at else "posted"
-            elif p.get("status") == "draft":
+            elif p.get("status") in ("draft", "queued", "missed"):
                 p["status"] = "error"
 
         post = self._update(pid, apply)
         return {"post": self.public(post), "results": results}
+
+    # ------------------------------------------------------------------ lên lịch (app tự đăng)
+    def schedule(self, pid: str, page_ids: list, at: int, confirmed: bool, by: str = "") -> dict:
+        """Lên lịch app tự đăng bài lúc `at` (Unix) lên các Fanpage. confirmed phải True — người dùng đã xác nhận lịch
+        (giờ + Fanpage) trên giao diện / duyệt trong Workflow. Gọi lại = đổi giờ / Fanpage."""
+        if confirmed is not True:
+            raise PostError("Cần xác nhận lịch đăng trên giao diện")
+        page_ids = [str(p) for p in page_ids or [] if p]
+        if not page_ids:
+            raise PostError("Chọn ít nhất 1 Fanpage")
+        try:
+            at = int(at)
+        except (TypeError, ValueError):
+            raise PostError("Chọn ngày giờ đăng") from None
+        if not APP_SCHEDULE_MIN <= at - time.time() <= APP_SCHEDULE_MAX:
+            raise PostError("Giờ đăng phải sau bây giờ ít nhất 1 phút (tối đa 1 năm)")
+        pages = {p["id"]: p for p in self.facebook.state().get("pages", [])} if self.facebook else {}
+        names = [(pages.get(i) or {}).get("name", i) for i in page_ids]
+
+        def apply(p):
+            if (p.get("schedule") or {}).get("running"):
+                raise PostError("Bài đang được đăng — chờ xong rồi đổi lịch")
+            files = [MEDIA_DIR / p["id"] / n for n in p.get("files") or []]
+            missing = [f.name for f in files if not f.is_file()]
+            if missing:
+                raise PostError(f"Thiếu file của bài: {', '.join(missing)} — sửa bài và chọn lại ảnh / video")
+            p["schedule"] = {"at": at, "page_ids": page_ids, "pages": names, "by": by or who(), "set_at": now()}
+            p["status"] = "queued"
+            p.pop("auto", None)
+
+        return self.public(self._update(pid, apply))
+
+    def unschedule(self, pid: str) -> dict:
+        """Huỷ lịch đăng: bài về Nháp (hoặc Đã đăng nếu từng đăng thành công)."""
+        def apply(p):
+            if (p.get("schedule") or {}).get("running"):
+                raise PostError("Bài đang được đăng — không huỷ được nữa")
+            p.pop("schedule", None)
+            p.pop("auto", None)
+            ok = any(x.get("post_id") or x.get("url") for x in p.get("publishes") or [])
+            p["status"] = "posted" if ok else "draft"
+
+        return self.public(self._update(pid, apply))
+
+    def _claim(self, pid: str) -> dict | None:
+        """Giữ chỗ bài lên lịch để đăng (trong khoá) — chặn đăng trùng giữa bộ hẹn giờ và nút Đăng ngay."""
+        with self._lock:
+            posts = self._load()
+            post = next((p for p in posts if p["id"] == pid), None)
+            sch = (post or {}).get("schedule")
+            if not sch or sch.get("running"):
+                return None
+            sch["running"] = True
+            self._save(posts)
+            return dict(sch)
+
+    def _run_schedule(self, pid: str, sch: dict, label: str) -> dict:
+        """Đăng bài đã giữ chỗ lên các Fanpage của lịch, rồi xoá lịch + ghi kết quả (auto) cho thông báo."""
+        try:
+            res = self.publish(pid, sch["page_ids"], True)
+            results = res["results"]
+            ok = [r for r in results if not r["error"]]
+            auto = {"at": int(time.time() * 1000), "ok": bool(ok), "how": label,
+                    "url": next((r["url"] for r in ok if r["url"]), ""),
+                    "error": "; ".join(f"{r['page']}: {r['error']}" for r in results if r["error"])[:500]}
+        except Exception as exc:  # lỗi chung (thiếu file, Facebook chưa nối…) → ghi lại, không làm chết bộ hẹn giờ
+            res, auto = None, {"at": int(time.time() * 1000), "ok": False, "how": label, "url": "", "error": str(exc)[:500]}
+
+        def apply(p):
+            p.pop("schedule", None)
+            p["auto"] = auto
+            if not auto["ok"] and p.get("status") in ("queued", "missed"):
+                p["status"] = "error"
+
+        post = self._update(pid, apply)
+        return {"post": self.public(post), "results": res["results"] if res else [], "error": auto["error"]}
+
+    def publish_now(self, pid: str, confirmed: bool) -> dict:
+        """Đăng ngay bài đang lên lịch / lỡ lịch (lên các Fanpage của lịch) — người dùng bấm xác nhận."""
+        if confirmed is not True:
+            raise PostError("Cần xác nhận đăng bài trên giao diện")
+        sch = self._claim(pid)
+        if sch is None:
+            raise PostError("Bài không còn trong lịch đăng (đã đăng hoặc đang đăng)")
+        return self._run_schedule(pid, sch, "Đăng ngay (bài lên lịch)")
+
+    def run_due(self, grace: int = GRACE) -> int:
+        """Bộ hẹn giờ gọi định kỳ: đăng các bài tới giờ. Trễ quá `grace` giây (app tắt lúc tới giờ) → lỡ lịch, không
+        tự đăng. Trả về số bài đã xử lý (đăng / chuyển lỡ lịch)."""
+        t = time.time()
+        with self._lock:
+            posts = self._load()
+            due = [p for p in posts if p.get("status") == "queued" and (p.get("schedule") or {}).get("at", 1e18) <= t
+                   and not p["schedule"].get("running")]
+            late = {p["id"] for p in due if t - p["schedule"]["at"] > grace}
+            for p in due:
+                if p["id"] in late:
+                    p["status"] = "missed"
+                    p["auto"] = {"at": int(t * 1000), "ok": False, "how": "Lỡ lịch", "url": "",
+                                 "error": "App không mở lúc tới giờ — chưa đăng. Bấm Đăng ngay hoặc đổi lịch."}
+            if late:
+                self._save(posts)
+        for p in due:
+            if p["id"] in late:
+                continue
+            sch = self._claim(p["id"])
+            if sch is not None:
+                self._run_schedule(p["id"], sch, f"Đăng theo lịch · {sch.get('by', '')}")
+        return len(due)
+
+    def queue_new(self, *, source: str, source_name: str, kind: str, caption: str, files: list, page_id: str,
+                  at: int, by: str) -> dict:
+        """Tạo bài mới + lên lịch app tự đăng (Workflow: block Đăng bài chọn “Lên lịch”, sau khi bạn duyệt)."""
+        pid = f"p{datetime.now():%Y%m%d%H%M%S}{uuid.uuid4().hex[:4]}"
+        kind = kind if kind in POST_TYPES else ("text" if not files else "feed")
+        with self._lock:
+            names = self._copy_media(pid, [f for f in files if Path(str(f)).is_file()]) if kind != "text" else []
+            posts = self._load()
+            posts.append({"id": pid, "created_at": now(), "updated_at": now(),
+                          "source": source if source in SOURCES else "manual", "source_name": source_name[:120],
+                          "title": (caption or source_name or "Bài đăng")[:60], "caption": caption or "", "kind": kind,
+                          "files": names, "publishes": [], "status": "draft"})
+            self._save(posts)
+        return self.schedule(pid, [page_id], at, True, by=by)
 
     def _send(self, kind: str, page_id: str, caption: str, images: list, videos: list, scheduled_at: int | None) -> dict:
         fb = self.facebook
@@ -253,3 +386,31 @@ class PostStore:
         if not caption:
             raise PostError("Bài không có nội dung")
         return fb.post(page_id, caption, "", scheduled_at)
+
+
+class PostScheduler:
+    """Thread nền: mỗi `every` giây đăng các bài lên lịch đã tới giờ (PostStore.run_due). on_change() khi có bài vừa
+    xử lý — giao diện tải lại danh sách."""
+
+    def __init__(self, store: PostStore, on_change=None, every: float = 20.0) -> None:
+        self.store, self.on_change, self.every = store, on_change, every
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="post-scheduler")
+
+    def start(self) -> "PostScheduler":
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _loop(self) -> None:
+        import logging
+
+        while not self._stop.is_set():
+            try:
+                if self.store.run_due() and self.on_change:
+                    self.on_change()
+            except Exception:  # bộ hẹn giờ không được chết vì 1 bài lỗi
+                logging.getLogger(__name__).exception("Lỗi bộ hẹn giờ đăng bài")
+            self._stop.wait(self.every)

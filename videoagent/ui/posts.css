@@ -62,3 +62,26 @@
 .ps-card{position:relative}
 .ps-icons{position:absolute;top:10px;right:10px;margin:0}
 .ps-tags{padding-right:51px}
+
+/* lên lịch (app tự đăng) */
+.ps-status.queued{background:#2a5f9e;color:#eef5ff}
+.ps-status.missed{background:#d98a2b;color:#1b1206}
+.ps-sched{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;padding:7px 9px;border-radius:9px;background:#14223a;border:1px solid #2c4b78;font-size:12px}
+.ps-sched b{color:#cfe2ff}
+.ps-sched span{color:#9fc3ff;font-weight:600}
+.ps-sched small{flex-basis:100%;color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ps-sched.missed{background:#2b1d0e;border-color:#7a5320}
+.ps-sched.missed b,.ps-sched.missed span{color:#f2b968}
+.ps-sched.inline{margin-bottom:4px}
+.ps-sched.inline small{white-space:normal}
+.ps-autoerr{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:11px}
+.ps-whens{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.ps-wopt{position:relative;display:flex;flex-direction:column;gap:3px;padding:10px 11px 10px 34px;border-radius:10px;border:1px solid var(--line2);background:#121812;cursor:pointer}
+.ps-wopt input{position:absolute;left:11px;top:11px;width:16px;height:16px;margin:0}
+.ps-wopt b{font-size:12.5px}
+.ps-wopt small{font-size:11px;color:var(--muted);line-height:1.35}
+.ps-wopt.on{border-color:var(--lime);background:#18200f}
+.ps-wopt.disabled{opacity:.45;cursor:not-allowed}
+.ps-at{display:flex;align-items:center;gap:10px;margin-top:8px}
+.ps-at input{width:auto;padding:6px 8px}
+@media (max-width:720px){.ps-whens{grid-template-columns:1fr}}

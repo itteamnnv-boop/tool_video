@@ -575,8 +575,10 @@
   function renderMediaOptions(f) {
     const boot = (typeof state !== 'undefined' && state.boot) || {};
     const engines = boot.image_engines || {};
-    const engine = engines[f.image_engine] ? f.image_engine : (engines[C.imageEngine] ? C.imageEngine : Object.keys(engines)[0] || '');
+    const g = sharedModels();  // model ảnh: dùng chung (Cài đặt → Model AI)
+    const engine = engines[g.image] ? g.image : (engines[C.imageEngine] ? C.imageEngine : Object.keys(engines)[0] || '');
     f.image_engine = engine;
+    f.image_profile = g.image_profile;
     const spec = engines[engine] || {};
     const textOk = TEXT_ENGINES.includes(engine);
     const kind = VIDEO_KINDS[f.video_kind] ? f.video_kind : 'auto';
@@ -587,11 +589,9 @@
     const boost = f.boost || {};
     const accounts = C.adsAccounts || [];
     return `<div id="cfMedia">
-      <label class="field fb-gap"><span>Model tạo ảnh <small class="muted">(trang Tạo hình ảnh)</small></span><select id="cfImageEngine">
-        ${Object.entries(engines).map(([id, e]) => `<option value="${esc(id)}" ${id === engine ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></label>
+      ${sharedModelField('Model tạo ảnh', 'image')}
       <p class="hint">${textOk ? 'Model này vẽ được chữ tiếng Việt — tiêu đề và giá được vẽ luôn trên ảnh; có thêm poster khi hợp ngành hàng.' : 'Model này vẽ chữ tiếng Việt chưa chuẩn — ảnh không có chữ quảng cáo, không làm poster.'}
         Mỗi ảnh quảng cáo tạo 2 phương án để trưởng phòng chọn, kèm 1 ảnh sản phẩm studio. ${esc(spec.note || '')}</p>
-      ${spec.browser ? profileSel('cfImageProfile', siteOf(engine), f.image_profile, 'Profile tạo ảnh') : '<input type="hidden" id="cfImageProfile" value="">'}
       <div class="${f.video ? '' : 'hidden'}">
         <label class="field fb-gap"><span>Loại video <small class="muted">(trang Tạo video · tối đa 2 video)</small></span><select id="cfVideoKind">
           ${Object.entries(VIDEO_KINDS).map(([v, l]) => `<option value="${v}" ${v === kind ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -646,8 +646,9 @@
     f.self_pick = $('#cfSelfPick').checked;
     f.no_post = $('#cfNoPost').checked;
     f.video = $('#cfVideo').checked;
-    f.image_engine = $('#cfImageEngine').value;
-    f.image_profile = $('#cfImageProfile').value;
+    const g = sharedModels();
+    f.image_engine = g.image;
+    f.image_profile = g.image_profile;
     f.video_kind = $('#cfVideoKind').value;
     f.video_style = $('#cfVideoStyle').value;
     f.video_profile = $('#cfVideoProfile').value;
@@ -668,7 +669,7 @@
         if (p) { C.form.product = Object.fromEntries(['name', 'code', 'spec', 'price', 'sale_price', 'promo', 'hotline'].map(k => [k, p[k] || ''])); C.form.links = p.links || []; renderForm(); }
       }
       if (e.target.id === 'cfStyle') $('#cfStyleCustom').classList.toggle('hidden', e.target.value !== '__custom');
-      if (['cfVideo', 'cfImageEngine', 'cfVideoKind', 'cfSchedule', 'cfBoost'].includes(e.target.id)) $('#cfMedia').outerHTML = renderMediaOptions(C.form);
+      if (['cfVideo', 'cfVideoKind', 'cfSchedule', 'cfBoost'].includes(e.target.id)) $('#cfMedia').outerHTML = renderMediaOptions(C.form);
       if (e.target.id === 'cfBoost' && e.target.checked && !C.adsAccounts) loadAdAccounts();
     };
     root.onclick = async e => {

@@ -27,7 +27,7 @@ CLOSENESS = {"close": "Bám sát — cùng cấu trúc từng đoạn, thời l�
 
 
 def _store() -> Path:
-    from .muse_hub import STORE
+    from .muse_hub.common import STORE
 
     return STORE / "samples"
 
@@ -189,7 +189,7 @@ def build_prompt(sample: dict, form: dict, extra_images: int) -> str:
 
 def _own_images(paths: list) -> list[Path]:
     """Ảnh người dùng đã nhập vào kho uploads của Studio Muse AI (không nhận đường dẫn ngoài kho)."""
-    from .muse_hub import STORE
+    from .muse_hub.common import STORE
 
     root = (STORE / "uploads").resolve()
     out = []

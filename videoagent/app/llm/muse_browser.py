@@ -20,7 +20,7 @@ from playwright.sync_api import sync_playwright
 
 from .base import LLMError
 from ..browser_profiles import profile_session
-from .browser_chat import SITES, BrowserChatProvider, _launch
+from .browser_chat import BrowserChatProvider, _launch
 from .browser_images import _download as download_image
 from .grok_imagine import _ensure_submitted, type_multiline
 from .grok_imagine import _download as download_video
@@ -65,13 +65,65 @@ LOGIN_ERROR = "Chưa đăng nhập Muse — vào 'Profile trình duyệt', gán 
 CLOSED_ERROR = "Cửa sổ Muse đã bị đóng trong lúc chờ kết quả — chạy lại (video Muse đã tạo vẫn tải tay được trên muse.ai)"
 
 
-def _open_chat(pw, channel: str, show_browser: bool, prof):
+# Mỗi yêu cầu mở CUỘC TRÒ CHUYỆN MỚI — "Main chat" dùng chung kéo dài mãi, lịch sử cũ (nhân vật, ảnh, yêu cầu trước)
+# dễ đè lên yêu cầu mới. Không mở được cuộc mới → gửi kèm câu dặn tách biệt (ISOLATE) + cảnh báo nhật ký.
+NEW_CHAT = re.compile(r"new (side )?(chat|conversation|thread)|start (a )?new|cuộc trò chuyện mới|đoạn chat mới|"
+                      r"trò chuyện mới|chat mới|tạo mới", re.I)
+# muse.ai (kiểm chứng 10/2026): "Main chat" ở https://muse.ai/ giữ toàn bộ lịch sử; cuộc mới = side chat ở /thread/new
+# (nút "New side chat", data-testid=hatch-chat-compose). Gửi tin đầu tiên → URL thành /thread/<id>.
+NEW_URL = "https://muse.ai/thread/new"
+COMPOSE = "[data-testid='hatch-chat-compose']"
+LOG_LEN_JS = """() => { const l = document.querySelector("[role='log']"); return l ? l.innerText.trim().length : 0; }"""
+ISOLATE = ("[YÊU CẦU MỚI, ĐỘC LẬP] Bỏ qua mọi yêu cầu, nhân vật, ảnh và nội dung trước đó trong cuộc trò chuyện này — "
+           "chỉ làm đúng yêu cầu dưới đây.\n")
+
+
+def _is_new(page) -> bool:
+    # phải đúng trang cuộc mới: ở Main chat, lịch sử tải chậm nên khung chat lúc đầu cũng trống (không tin được)
+    return "/thread/new" in page.url and page.evaluate(LOG_LEN_JS) < 5
+
+
+def _new_chat(page, log) -> bool:
+    """Đảm bảo đang ở cuộc trò chuyện Muse MỚI (side chat trống). True = đã xác minh URL /thread/new + khung chat trống."""
+    if _is_new(page):
+        log("Đang ở cuộc trò chuyện Muse mới (không dùng lịch sử Main chat)")
+        return True
+    for loc in (page.locator(COMPOSE), page.get_by_role("button", name=NEW_CHAT), page.get_by_role("link", name=NEW_CHAT)):
+        try:
+            target = next((loc.nth(i) for i in range(min(loc.count(), 5)) if loc.nth(i).is_visible()), None)
+            if target is None:
+                continue
+            target.click()
+        except PWError:
+            continue
+        for _ in range(16):  # chờ trang chuyển sang cuộc mới
+            page.wait_for_timeout(500)
+            if _is_new(page):
+                log("Đã mở cuộc trò chuyện Muse mới (không dùng lịch sử Main chat)")
+                return True
+    try:  # cuối cùng: mở thẳng trang cuộc mới
+        page.goto(NEW_URL, wait_until="domcontentloaded", timeout=60_000)
+        page.locator(BOX).first.wait_for(state="visible", timeout=30_000)
+        page.wait_for_timeout(1500)
+        if _is_new(page):
+            log("Đã mở cuộc trò chuyện Muse mới (không dùng lịch sử Main chat)")
+            return True
+    except PWError:
+        pass
+    log("Không mở được cuộc trò chuyện Muse mới (giao diện Muse có thể đã đổi) — vẫn gửi trong cuộc cũ, kèm lời dặn "
+        "bỏ qua lịch sử; app chỉ nhận kết quả của đúng lần gửi này", "warn")
+    return False
+
+
+def _open_chat(pw, channel: str, show_browser: bool, prof, log=None):
+    log = log or (lambda m, level="info": logging.getLogger(__name__).warning(m) if level == "warn"
+                  else logging.getLogger(__name__).info(m))
     try:
         ctx = _launch(pw, channel, visible=show_browser, offscreen=not show_browser, profile=prof)
     except PWError as exc:
         raise LLMError(f"Không mở được trình duyệt '{channel}': {exc}") from exc
     page = ctx.pages[0] if ctx.pages else ctx.new_page()
-    page.goto(SITES[SITE].url, wait_until="domcontentloaded", timeout=60_000)
+    page.goto(NEW_URL, wait_until="domcontentloaded", timeout=60_000)  # mở thẳng cuộc mới, không vào Main chat
     box = page.locator(BOX).first
     try:  # đã đăng nhập thì ô nhập hiện sau ~1 giây; trang chào (chưa đăng nhập) không có ô này
         box.wait_for(state="visible", timeout=30_000)
@@ -79,6 +131,9 @@ def _open_chat(pw, channel: str, show_browser: bool, prof):
         ctx.close()
         raise LLMError(LOGIN_ERROR) from None
     page.wait_for_timeout(1500)
+    page._va_fresh = _new_chat(page, log)  # cuộc trò chuyện mới cho mỗi yêu cầu
+    box = page.locator(BOX).first
+    box.wait_for(state="visible", timeout=30_000)
     return ctx, page, box
 
 
@@ -99,6 +154,8 @@ def _attach(page, images: list[Path], log) -> None:
 def _send(page, box, message: str) -> str:
     """Gửi tin nhắn kèm mã yêu cầu ở dòng cuối; trả về mã để tìm đúng kết quả của lần gửi này."""
     marker = f"[VA-{uuid.uuid4().hex[:8]}]"
+    if not getattr(page, "_va_fresh", True):  # không mở được cuộc trò chuyện mới → dặn bỏ qua lịch sử cũ
+        message = ISOLATE + message
     box.click()
     type_multiline(page, f"{message}\n{marker}")
     page.wait_for_timeout(400)
@@ -170,7 +227,7 @@ def _watch(page, marker: str, done, timeout_s: int, check_cancel, log, on_progre
 def muse_images(prompt: str, *, aspect: str, count: int, images: list[Path], channel: str, show_browser: bool,
                 log, check_cancel, timeout_s: int = 600) -> list[bytes]:
     with profile_session(SITE) as prof, sync_playwright() as pw:
-        ctx, page, box = _open_chat(pw, channel, show_browser, prof)
+        ctx, page, box = _open_chat(pw, channel, show_browser, prof, log)
         try:
             _attach(page, images, log)
             baseline = _activity_now(page)
@@ -196,7 +253,7 @@ def muse_video(prompt: str, out_path: Path, *, channel: str = "chrome", show_bro
                timeout_s: int = 900, refs_note: str | None = None) -> None:
     """refs_note: câu mô tả ảnh đính kèm thay cho mặc định (vd. ảnh 1 là storyboard, không phải khung mở đầu)."""
     with profile_session(SITE) as prof, sync_playwright() as pw:
-        ctx, page, box = _open_chat(pw, channel, show_browser, prof)
+        ctx, page, box = _open_chat(pw, channel, show_browser, prof, log)
         try:
             _attach(page, images or [], log)
             baseline = _activity_now(page)

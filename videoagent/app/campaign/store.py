@@ -11,11 +11,14 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ..paths import DATA_DIR
+from ..paths import ASSETS_DIR, DATA_DIR
 from ..util import slugify, unique_dir
 
 LIB = DATA_DIR / "campaign"
-AGENTS_DIR = Path(r"D:\00_DuAnTest\maketing\.claude")  # nguồn system prompt gốc (.claude/agents/*.md)
+# nguồn system prompt gốc (.claude/agents/*.md): thư mục dự án marketing trên máy dev; bản cài (máy khác) dùng bản chép
+# đóng gói kèm ở assets/campaign_agents
+_DEV_AGENTS = Path(r"D:\00_DuAnTest\maketing\.claude")
+AGENTS_DIR = _DEV_AGENTS if (_DEV_AGENTS / "agents").is_dir() else ASSETS_DIR / "campaign_agents"
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 
 STAGES = [  # (key, tên, vai trò, file bàn giao)

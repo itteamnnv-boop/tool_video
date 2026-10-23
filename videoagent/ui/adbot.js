@@ -24,13 +24,14 @@
       const res = await api('adbot_meta');
       if (!res.ok) return toast(res.error, 'error');
       A.meta = res;
-      if (!res.models.some(m => m.id === A.model)) A.model = (res.models.find(m => m.ready) || res.models[0] || {}).id || '';
     }
     await loadPlans();
     if (A.cur) await open(A.cur.id);
     render();
     if (A.accounts === null) loadAccounts();
   }
+
+  document.addEventListener('va:settings', () => { const b = $('#adbotBody'); if (A.meta && b && b.offsetParent) render(); });
 
   async function loadPlans() {
     const res = await api('adbot_list');
@@ -76,8 +77,6 @@
     const box = $('#adbotBody');
     if (!box || !A.meta) return;
     const draft = ($('#abMsg') || {}).value || '';
-    const head = $('#page-adbot .page-head');
-    if (head) head.classList.toggle('hidden', !!A.cur);  // bàn làm việc: nhường chỗ cho chat + form
     box.innerHTML = A.cur ? workHtml() : listHtml();
     const input = $('#abMsg');
     if (input && draft) input.value = draft;
@@ -171,14 +170,12 @@
   }
 
   function chatHtml() {
-    const models = A.meta.models;
-    const m = models.find(x => x.id === A.model) || {};
-    const profiles = m.site && state.profiles && (state.profileSites || {})[m.site]
-      ? `<select data-ab-profile title="Profile trình duyệt">${profileOptions(m.site, A.profile)}</select>` : '';
+    const g = sharedModels();  // model phân tích: dùng chung (Cài đặt → Model AI)
+    A.model = g.text; A.profile = g.text_profile;
+    const m = A.meta.models.find(x => x.id === A.model) || {};
     return `<section class="card ab-chat">
       <div class="ab-chat-head"><b>💬 Trợ lý AI</b>
-        <select data-ab-model title="Model phân tích">${models.map(x => `<option value="${esc(x.id)}" ${x.id === A.model ? 'selected' : ''}>${esc(x.name)}${x.ready ? '' : ' — chưa sẵn sàng'}</option>`).join('')}</select>
-        ${profiles}</div>
+        <button type="button" class="shared-model sm" data-shared-models title="Model dùng chung — đổi ở Cài đặt → Model AI">🤖 ${esc(m.name || A.model)}${m.id && !m.ready ? ' — chưa sẵn sàng' : ''}<small>⚙</small></button></div>
       <div class="ab-msgs">${A.cur.chat.length ? A.cur.chat.map(msg => `<div class="ab-msg ${msg.role === 'user' ? 'user' : 'assistant'}">
           <div class="ab-bubble">${esc(msg.text)}</div>
           ${msg.role !== 'user' && (msg.changed || []).length ? `<small class="ab-changed">✓ Đã điền: ${msg.changed.map(k => esc(FIELD[k] || k)).join(', ')}</small>` : ''}</div>`).join('')
@@ -288,7 +285,8 @@
     const input = $('#abMsg');
     if (input) input.value = '';
     render();
-    const res = await api('adbot_chat', id, text, A.model, A.profile, A.showBrowser);
+    const g = sharedModels();
+    const res = await api('adbot_chat', id, text, g.text, g.text_profile, A.showBrowser);
     A.busy = false;
     if (!res.ok) toast(res.error, 'error');
     await loadPlans();
@@ -400,8 +398,6 @@
     });
     box.addEventListener('change', async e => {
       const t = e.target;
-      if (t.dataset.abModel !== undefined) { A.model = t.value; A.profile = ''; return render(); }
-      if (t.dataset.abProfile !== undefined) { A.profile = t.value; return; }
       if (t.dataset.abShow !== undefined) { A.showBrowser = t.checked; return; }
       if (!A.cur) return;
       if (t.id === 'abName') {

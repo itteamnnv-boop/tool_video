@@ -265,8 +265,6 @@ NODE_TYPES = {
             {"key": "length", "label": "Độ dài video", "type": "select", "default": "60", "when": {"preset": [""]},
              "options": [{"value": str(n), "label": f"~{n} giây"} for n in (30, 45, 60, 75, 90)]},
             {"key": "style", "label": "Phong cách hình ảnh (tuỳ chọn)", "type": "text", "default": "", "when": {"preset": [""]}},
-            {"key": "prompt_polish", "label": "✨ Chuốt prompt từng cảnh bằng AI (thêm 1 lượt hỏi model)", "type": "check",
-             "default": False, "when": {"preset": [""]}},
             {"key": "aspect", "label": "Tỉ lệ khung hình", "type": "select", "default": "9:16", "when": {"preset": [""]},
              "options": [{"value": "9:16", "label": "Dọc 9:16 — TikTok, Reels"}, {"value": "16:9", "label": "Ngang 16:9 — YouTube"},
                          {"value": "1:1", "label": "Vuông 1:1"}]},
@@ -347,6 +345,15 @@ NODE_TYPES = {
             {"key": "page_id", "label": "Fanpage", "type": "fb_page", "default": ""},
             {"key": "post_type", "label": "Kiểu đăng", "type": "select", "default": "feed",
              "options": [{"value": k, "label": v} for k, v in POST_TYPES.items()]},
+            {"key": "timing", "label": "Thời điểm đăng", "type": "select", "default": "now",
+             "options": [{"value": "now", "label": "Đăng ngay"},
+                         {"value": "app", "label": "Lên lịch — app tự đăng (sửa / đăng ngay ở màn Bài đăng)"}]},
+            {"key": "mode", "label": "Lên lịch", "type": "select", "default": "delay", "when": {"timing": ["app"]},
+             "options": [{"value": "delay", "label": "Sau một khoảng thời gian"}, {"value": "at", "label": "Vào ngày giờ cụ thể"}]},
+            {"key": "delay_hours", "label": "Đăng sau (giờ)", "type": "number", "default": "2",
+             "when": {"timing": ["app"], "mode": ["delay"]}},
+            {"key": "publish_at", "label": "Ngày giờ đăng", "type": "datetime", "default": "",
+             "when": {"timing": ["app"], "mode": ["at"]}},
             {"key": "sources", "label": "Tài nguyên từ flow (tick để dùng — không cần nối dây)", "type": "flow_sources",
              "default": []},
             {"key": "caption", "label": "Caption (thêm sau caption đầu vào)", "type": "textarea", "default": "",
@@ -355,7 +362,8 @@ NODE_TYPES = {
         ],
     },
     "fb_schedule": {
-        "name": "Lên lịch đăng bài", "group": "output", "icon": "🗓", "desc": "Hẹn giờ Facebook tự đăng feed hoặc Reels",
+        "name": "Lên lịch đăng bài", "group": "output", "icon": "🗓",
+        "desc": "Lên lịch đăng feed / Reels: app tự đăng (sửa, đăng ngay ở màn Bài đăng) hoặc hẹn giờ trên Facebook",
         "inputs": [{"key": "caption", "type": "text", "label": "Caption", "multi": True},
                    {"key": "media", "type": "any", "label": "Ảnh / video", "multi": True}],
         "outputs": [{"key": "post", "type": "post", "label": "Bài hẹn giờ"}],
@@ -365,6 +373,9 @@ NODE_TYPES = {
              "options": [{"value": k, "label": v} for k, v in POST_TYPES.items() if k in SCHEDULABLE]},
             {"key": "sources", "label": "Tài nguyên từ flow (tick để dùng — không cần nối dây)", "type": "flow_sources",
              "default": []},
+            {"key": "via", "label": "Ai đăng khi tới giờ", "type": "select", "default": "facebook",
+             "options": [{"value": "app", "label": "App tự đăng — sửa / đổi lịch / đăng ngay ở màn Bài đăng (cần mở app)"},
+                         {"value": "facebook", "label": "Facebook tự đăng — 10 phút → 30 ngày, gửi rồi không sửa từ app"}]},
             {"key": "mode", "label": "Thời điểm đăng", "type": "select", "default": "delay",
              "options": [{"value": "delay", "label": "Sau một khoảng thời gian"}, {"value": "at", "label": "Vào ngày giờ cụ thể"}]},
             {"key": "delay_hours", "label": "Đăng sau (giờ)", "type": "number", "default": "2", "when": {"mode": ["delay"]}},
@@ -497,7 +508,7 @@ SCHEDULE_MIN, SCHEDULE_MAX = 10 * 60, 30 * 24 * 3600  # Facebook: hẹn giờ t�
 
 
 STUDIO_KEYS = ("length", "style", "aspect", "quality", "model", "image_engine", "scene_style", "video_engine", "dub", "voice", "rate", "subtitles", "bgm",
-               "transition", "transition_sound", "post_ai", "post_model", "post_style", "show_browser", "prompt_polish")
+               "transition", "transition_sound", "post_ai", "post_model", "post_style", "show_browser")
 
 
 def _studio_video(ctx, cfg, idea_in: str, refs: list) -> dict:
@@ -608,8 +619,9 @@ def _whiteboard_video(ctx, cfg, text_in: str) -> dict:
     return {"video": str(dest), "text": narration}
 
 
-def publish_time(cfg: dict) -> int:
-    """Thời điểm hẹn giờ (Unix) từ cấu hình block; báo lỗi nếu ngoài khoảng Facebook cho phép."""
+def publish_time(cfg: dict, app: bool = False) -> int:
+    """Thời điểm hẹn giờ (Unix) từ cấu hình block; báo lỗi nếu ngoài khoảng cho phép (Facebook: 10 phút → 30 ngày;
+    app tự đăng: 1 phút → 1 năm)."""
     import time
     from datetime import datetime
 
@@ -625,7 +637,12 @@ def publish_time(cfg: dict) -> int:
             when = now + float(cfg.get("delay_hours") or 0) * 3600
         except (TypeError, ValueError):
             raise ValueError("Số giờ hẹn đăng phải là số") from None
-    if not SCHEDULE_MIN <= when - now <= SCHEDULE_MAX:
+    if app:
+        from ..posts import APP_SCHEDULE_MAX, APP_SCHEDULE_MIN
+
+        if not APP_SCHEDULE_MIN <= when - now <= APP_SCHEDULE_MAX:
+            raise ValueError("Giờ lên lịch phải sau bây giờ ít nhất 1 phút (tối đa 1 năm)")
+    elif not SCHEDULE_MIN <= when - now <= SCHEDULE_MAX:
         raise ValueError("Facebook chỉ cho hẹn giờ từ 10 phút đến 30 ngày tính từ bây giờ")
     return int(when)
 
@@ -653,7 +670,9 @@ def _fb_post(ctx, cfg, caption_in: str, media_values: list, schedule: bool) -> d
     if not page.get("connected"):
         raise ValueError(f"Fanpage “{page['name']}” chưa bật Kết nối")
     kind = cfg.get("post_type") if cfg.get("post_type") in POST_TYPES else "feed"
-    if schedule and kind not in SCHEDULABLE:
+    # lên lịch app tự đăng: block Đăng bài chọn “Lên lịch”, hoặc block Lên lịch chọn “App tự đăng”
+    app_queue = (cfg.get("via") == "app") if schedule else (cfg.get("timing") == "app")
+    if schedule and not app_queue and kind not in SCHEDULABLE:
         raise ValueError("Facebook không cho hẹn giờ Story — dùng block Đăng bài Facebook")
     caption = _text([caption_in, cfg.get("caption")])
     images, videos = _media(media_values)
@@ -678,8 +697,10 @@ def _fb_post(ctx, cfg, caption_in: str, media_values: list, schedule: bool) -> d
         ctx.log("Story chỉ đăng 1 file — dùng file đầu tiên", "warn")
     if not caption and not images and not videos:
         raise ValueError("Không có gì để đăng — tick caption/ảnh/video trong Tài nguyên từ flow hoặc nối dây")
-    scheduled_at = publish_time(cfg) if schedule else None
-    when = datetime.fromtimestamp(scheduled_at).strftime("%H:%M %d/%m/%Y") if scheduled_at else ""
+    queue_at = publish_time(cfg, app=True) if app_queue else None
+    scheduled_at = publish_time(cfg) if schedule and not app_queue else None
+    when = datetime.fromtimestamp(scheduled_at or queue_at).strftime("%H:%M %d/%m/%Y") if (scheduled_at or queue_at) else ""
+    schedule = bool(scheduled_at or queue_at)
     files = videos[:1] or (images[:1] if kind == "story" else images)
     if cfg.get("confirm", True):
         ctx.log(f"Chờ bạn duyệt {'hẹn giờ ' + when if schedule else 'đăng bài'} lên “{page['name']}”…", "warn")
@@ -690,6 +711,18 @@ def _fb_post(ctx, cfg, caption_in: str, media_values: list, schedule: bool) -> d
             raise NodeSkipped("Bạn không duyệt đăng bài")
         caption = str(decision.get("caption", caption))
         ctx.log(f"Đã được duyệt bởi {decision.get('by', '')}")
+    if app_queue:  # không đăng bây giờ: lưu vào Quản lý bài đăng, app tự đăng đúng giờ (sửa / đăng ngay ở đó)
+        from ..posts import PostStore
+
+        post = PostStore(fb).queue_new(source="workflow", source_name=f"Workflow · {ctx.services.get('workflow_name', '')}",
+                                       kind=kind, caption=caption, files=files if kind != "text" else [],
+                                       page_id=page_id, at=queue_at, by=ctx.services.get("by", ""))
+        result = {"kind": "post", "post_id": "", "page_id": page_id, "page": page["name"], "url": "", "scheduled": True,
+                  "queued": True, "local_post": post["id"], "when": when,
+                  "media": "video" if videos else "images" if images else "text", "caption": caption[:300], "post_type": kind}
+        (ctx.dir / "bai-viet.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), "utf-8")
+        ctx.log(f"Đã lên lịch đăng lúc {when} lên “{page['name']}” — sửa / đổi lịch / đăng ngay ở màn Quản lý bài đăng", "ok")
+        return result
     ctx.log(f"Đang {'hẹn giờ' if schedule else 'đăng'} {POST_TYPES[kind]} lên “{page['name']}”"
             + (f" lúc {when}" if when else "") + "…")
     if kind == "reel":
