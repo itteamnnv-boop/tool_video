@@ -8,6 +8,7 @@ import json
 import shutil
 from pathlib import Path
 
+from ..osutil import open_path
 from ..content_writer import BROWSER_MODELS, CLAUDE_MODELS as CONTENT_CLAUDE, DEFAULT_TEMPLATE as CONTENT_TEMPLATE
 from ..content_writer import FIELDS as CONTENT_FIELDS, OPENAI_MODELS as CONTENT_OPENAI
 from ..llm.image_engines import ENGINES as IMAGE_ENGINES
@@ -1169,8 +1170,6 @@ def _concat(ctx, cfg, videos: list[Path]) -> str:
 
 def _collect(ctx, cfg, values: list) -> list:
     """Gom kết quả: file (ảnh/video) chép vào thư mục kết quả, văn bản ghi ra .txt."""
-    import os
-
     name = "".join(c for c in str(cfg.get("name") or "ket-qua") if c.isalnum() or c in "-_ ").strip() or "ket-qua"
     out_dir = ctx.dir.parent / name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1190,5 +1189,5 @@ def _collect(ctx, cfg, values: list) -> list:
     (out_dir / "ket-qua.json").write_text(json.dumps(items, ensure_ascii=False, indent=2), "utf-8")
     ctx.log(f"Đã gom {len(items)} kết quả vào {out_dir.name}/")
     if cfg.get("open_folder"):
-        os.startfile(out_dir)
+        open_path(out_dir)
     return items

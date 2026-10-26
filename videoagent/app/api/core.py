@@ -5,6 +5,7 @@ import os
 import threading
 import webview
 
+from ..osutil import open_path
 from .. import __version__, browser_profiles
 from ..config import settings
 from ..genres import GENRES
@@ -75,6 +76,9 @@ class CoreApi:
         from ..studio import StudioRunner
         self._studio = StudioRunner(settings, self._license, self._emit, images=self._images, videos=self._runner)
         self._studio.cast = self._cast  # Studio dùng nhân vật / layout cố định
+        from ..canvas import CanvasRunner
+        self._canvas = CanvasRunner(settings, self._emit, images=self._images, videos=self._runner,
+                                    facebook=self._facebook, ads=self._ads, studio=self._studio)  # Canvas
         # Studio Muse AI: cùng chức năng Studio, dự án riêng, mọi bước chỉ dùng Muse (sự kiện mstudio_*)
         self._studio_muse = StudioRunner(settings, self._license, self._emit, images=self._images, videos=self._runner,
                                          variant="muse")
@@ -234,7 +238,7 @@ class CoreApi:
         return list(result or [])
 
     def open_output_dir(self) -> dict:
-        os.startfile(settings.output_dir)
+        open_path(settings.output_dir)
         return _ok()
 
     def open_url(self, url: str) -> dict:

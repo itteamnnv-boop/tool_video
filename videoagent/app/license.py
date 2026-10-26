@@ -12,7 +12,10 @@ import json
 import logging
 import os
 import platform
+import re
 import secrets
+import subprocess
+import sys
 import threading
 import time
 import webbrowser
@@ -43,6 +46,15 @@ def machine_id() -> str:
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as key:
                 raw = winreg.QueryValueEx(key, "MachineGuid")[0] + raw
         except OSError:
+            pass
+    elif sys.platform == "darwin":  # macOS: UUID phần cứng (không đổi khi cài lại app / đổi tên máy)
+        try:
+            out = subprocess.run(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"], capture_output=True, text=True,
+                                 timeout=5).stdout
+            found = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', out)
+            if found:
+                raw = found.group(1) + raw
+        except (OSError, subprocess.SubprocessError):
             pass
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 

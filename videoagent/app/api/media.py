@@ -1,6 +1,6 @@
 """API · Tạo video / hình ảnh, hàng đợi tác vụ, thư viện video / ảnh, sửa khung cảnh HTML."""
-import os
 
+from ..osutil import open_path, reveal
 from .. import image_library, library
 from ..config import settings
 from ..pipeline import scene_dir_name
@@ -30,6 +30,8 @@ class MediaApi:
             return self._studio.pool
         if kind == "mstudio":
             return self._studio_muse.pool
+        if kind == "canvas":
+            return self._canvas.pool
         return self._images.pool if kind == "image" else self._runner.pool
 
     def list_tasks(self, kind: str = "video") -> list:
@@ -74,11 +76,9 @@ class MediaApi:
 
     def open_images_folder(self, job_id: str = "", name: str = "") -> dict:
         """Mở thư mục ảnh trong Explorer; có bộ ảnh → chọn sẵn đúng file ảnh (name, mặc định ảnh đầu tiên)."""
-        import subprocess
-
         try:
             if not job_id:
-                os.startfile(image_library.root(settings.output_dir))
+                open_path(image_library.root(settings.output_dir))
                 return _ok()
             folder = image_library.job_path(settings.output_dir, job_id)
         except image_library.ImageLibraryError as exc:
@@ -87,9 +87,9 @@ class MediaApi:
         if target is None or not target.is_file():
             target = next((p for p in sorted(folder.iterdir()) if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")), None)
         if target is not None and target.is_file():
-            subprocess.Popen(["explorer", "/select,", str(target)])
+            reveal(target)
         else:
-            os.startfile(folder)
+            open_path(folder)
         return _ok(path=str(target or folder))
 
     # ------------------------------------------------------------------ thư viện
@@ -113,23 +113,21 @@ class MediaApi:
     def open_video(self, job_id: str) -> dict:
         try:
             path = library.job_path(settings.output_dir, job_id) / "final.mp4"
-            os.startfile(path if path.exists() else path.parent)
+            open_path(path if path.exists() else path.parent)
             return _ok()
         except library.LibraryError as exc:
             return _fail(exc)
 
     def open_video_folder(self, job_id: str) -> dict:
         """Mở thư mục chứa video trong Explorer, chọn sẵn file final.mp4 (để copy / kéo thả đi nơi khác)."""
-        import subprocess
-
         try:
             path = library.job_path(settings.output_dir, job_id) / "final.mp4"
         except library.LibraryError as exc:
             return _fail(exc)
         if path.exists():
-            subprocess.Popen(["explorer", "/select,", str(path)])
+            reveal(path)
         else:
-            os.startfile(path.parent)
+            open_path(path.parent)
         return _ok(path=str(path))
 
     def _scene_html_path(self, job_id: str, index: int):

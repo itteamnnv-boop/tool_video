@@ -19,6 +19,7 @@ import time
 import unicodedata
 from pathlib import Path
 
+from ..osutil import kill_tree
 from ..paths import DATA_DIR
 from .subtitles import _lines, scene_words
 
@@ -97,7 +98,7 @@ def _run(args: list, cwd: Path, timeout: int = 600, check_cancel=None) -> subpro
     log_path = Path(cwd) / f".hf-{args[0]}.log"  # ghi ra file (không dùng PIPE → không kẹt khi CLI in nhiều)
     with open(log_path, "w", encoding="utf-8", errors="replace") as fh:
         proc = subprocess.Popen([str(_cli()), *args], cwd=cwd, stdout=fh, stderr=subprocess.STDOUT,
-                                env=_env(), creationflags=NO_WINDOW)
+                                env=_env(), creationflags=NO_WINDOW, start_new_session=os.name != "nt")
         deadline = time.time() + timeout
         try:
             while proc.poll() is None:
@@ -116,10 +117,7 @@ def _run(args: list, cwd: Path, timeout: int = 600, check_cancel=None) -> subpro
 def _kill(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
-    if os.name == "nt":  # .cmd → node → chrome: dừng cả cây tiến trình
-        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
-    else:
-        proc.kill()
+    kill_tree(proc)  # .cmd → node → chrome: dừng cả cây tiến trình
 
 
 # ---------------------------------------------------------------------------- font tiếng Việt

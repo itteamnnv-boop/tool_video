@@ -8,4 +8,5 @@ requests>=2.31
 pillow>=10.4
 anthropic>=1.15
 markdown>=3.6
-yt-dlp>=2026.8.19  # tải video tham khảo từ link (Studio → 🎬 Video tham khảo)
+yt-dlp>=2026.10.21  # tải video tham khảo từ link (Studio → 🎬 Video tham khảo)
+curl_cffi>=0.16  # yt-dlp giả lập trình duyệt Chrome — TikTok chặn yêu cầu thường ("Unexpected response from webpage")

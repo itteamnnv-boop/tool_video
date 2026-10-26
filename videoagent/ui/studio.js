@@ -4,6 +4,9 @@
 function createStudioPage(CFG) {
   'use strict';
   const MUSE = !!CFG.muse;
+  // Studio thường: CHỈ SINH PROMPT — Tầng 1 Bible khoá → Tầng 2 Storyboard → Tầng 3 Prompt (copy / xuất ra công cụ ngoài).
+  // Studio Muse AI: giữ quy trình tạo video bằng Muse trong app.
+  const PROMPT = !MUSE;
   const museField = label => `<div class="field"><span>${label}</span><div class="st-muse-lock" title="Studio Muse AI dùng Muse cho mọi bước">🔒 Meta · Muse AI</div></div>`;
   // Studio thường: model lấy từ Cài đặt → Model AI (dùng chung, backend cũng ghi đè); Studio Muse AI giữ khoá Muse
   const modelField = (label, kind, key) => (MUSE ? museField(label) : sharedModelField(label, kind, key));
@@ -24,8 +27,10 @@ function createStudioPage(CFG) {
   const S = { meta: null, projects: [], cur: null, draft: null, dirty: false, tasks: {}, logs: [], progress: null, refs: [],
     batch: false, pendingRender: false,
     grp: { content: true, video: true } };  // nhóm tuỳ chọn đang mở (form tạo / cài đặt dự án)
-  const STATUS = { draft: 'Nháp', running: 'Đang chạy', ready: 'Sẵn sàng làm video', done: 'Đã có video', error: 'Lỗi',
-    cancelled: 'Đã dừng', interrupted: 'Bị gián đoạn' };
+  const STATUS = PROMPT
+    ? { draft: 'Nháp', running: 'Đang viết', ready: 'Đã có storyboard', done: 'Đã có storyboard', error: 'Lỗi', cancelled: 'Đã dừng', interrupted: 'Bị gián đoạn' }
+    : { draft: 'Nháp', running: 'Đang chạy', ready: 'Sẵn sàng làm video', done: 'Đã có video', error: 'Lỗi', cancelled: 'Đã dừng', interrupted: 'Bị gián đoạn' };
+  const hasOut = p => (PROMPT ? Boolean(((p.prompts || {}).scenes || []).length) : Boolean(p.final_url));
   const ideaLines = text => String(text || '').split('\n').map(x => x.replace(/^[\s\-•]+/, '').trim()).filter(x => x.length >= 10);
   const SCENE_STATUS = { frame_running: 'Đang tạo ảnh…', frame: 'Có ảnh — chờ clip', clip_running: 'Đang tạo clip…', done: '✓ Xong', error: 'Lỗi' };
   const clone = o => JSON.parse(JSON.stringify(o));
@@ -68,12 +73,13 @@ function createStudioPage(CFG) {
   }
 
   // ------------------------------------------------------------ màn quản lý dự án
-  const LIST_FILTERS = [['all', 'Tất cả'], ['running', 'Đang chạy'], ['todo', 'Chưa có video'], ['done', 'Đã có video']];
+  const LIST_FILTERS = [['all', 'Tất cả'], ['running', 'Đang chạy'], ['todo', PROMPT ? 'Chưa có prompt' : 'Chưa có video'],
+    ['done', PROMPT ? 'Đã có prompt' : 'Đã có video']];
   function listedProjects() {
     const q = (S.q || '').trim().toLowerCase();
     const f = S.filter || 'all';
     return S.projects.filter(p => (!q || `${p.name} ${p.idea}`.toLowerCase().includes(q))
-      && (f === 'all' || (f === 'running' && p.running) || (f === 'todo' && !p.running && !p.final_url) || (f === 'done' && p.final_url)));
+      && (f === 'all' || (f === 'running' && p.running) || (f === 'todo' && !p.running && !hasOut(p)) || (f === 'done' && hasOut(p))));
   }
   function gridHtml() {
     const list = listedProjects();
@@ -89,11 +95,11 @@ function createStudioPage(CFG) {
         <button class="st-pthumb" data-open="${esc(p.id)}" type="button" title="Mở dự án">
           ${thumb ? `<img src="${esc(thumb)}" alt="" loading="lazy">` : '<span>🎬</span>'}
           <i class="st-pbadge ${esc(status)}">${esc(p.running ? 'Đang chạy' : STATUS[p.status] || p.status)}</i>
-          ${p.final_url ? '<i class="st-pfinal">🎞 Có video</i>' : ''}</button>
+          ${hasOut(p) ? `<i class="st-pfinal">${PROMPT ? '📋 Có prompt' : '🎞 Có video'}</i>` : ''}</button>
         <div class="st-pbody">
           <button class="st-pname" data-open="${esc(p.id)}" type="button" title="${esc(p.name)}">${esc(p.name)}</button>
           <p class="st-pidea">${esc(p.idea || '')}</p>
-          <div class="st-pmeta"><span>🎬 ${clips}/${scenes.length} cảnh</span>${secs ? `<span>⏱ ~${secs}s</span>` : ''}
+          <div class="st-pmeta"><span>🎬 ${PROMPT ? `${scenes.length} cảnh` : `${clips}/${scenes.length} cảnh`}</span>${secs ? `<span>⏱ ~${secs}s</span>` : ''}
             <span>▭ ${esc((p.options || {}).aspect || '9:16')}</span>${date ? `<span>📅 ${esc(date)}</span>` : ''}</div>
           <div class="st-pact"><button class="btn ghost sm" data-open="${esc(p.id)}" type="button">Mở</button>
             ${p.running ? '' : `<button class="btn ghost sm st-pdel" data-del-id="${esc(p.id)}" type="button" title="Xoá dự án">🗑</button>`}</div>
@@ -101,7 +107,7 @@ function createStudioPage(CFG) {
     }).join('');
   }
   function listHtml() {
-    const unfinished = S.projects.filter(p => !p.running && !p.final_url).length;
+    const unfinished = PROMPT ? 0 : S.projects.filter(p => !p.running && !p.final_url).length;
     const live = S.projects.filter(p => p.running).length;
     return `<div class="card st-lhead">
         <div class="st-lhead-top"><div><b class="st-ltitle">Dự án ${CFG.label}</b>${MUSE ? ' <span class="st-muse-badge">🔒 chỉ dùng Muse AI</span>' : ''} <span class="muted">${S.projects.length} dự án${live ? ` · <span class="st-live">●</span> ${live} đang chạy` : ''}</span></div>
@@ -168,7 +174,7 @@ function createStudioPage(CFG) {
   }
 
   // Ràng buộc prompt: dự án cũ chưa có "bans" = cấm đủ cả 4 (giống app/studio.py negative_line)
-  const bansOf = o => Array.isArray(o.bans) ? o.bans : (S.meta.bans || []).map(b => b.value);
+  const bansOf = o => Array.isArray(o.bans) ? o.bans : [];  // dự án mới: mặc định không cấm gì
   const BAN_EN = { text: 'no text', subtitles: 'no subtitles', logos: 'no logos', watermark: 'no watermark' };
   function negativeLine(o) {
     const parts = (S.meta.bans || []).map(b => b.value).filter(k => bansOf(o).includes(k)).map(k => BAN_EN[k]);
@@ -223,11 +229,25 @@ function createStudioPage(CFG) {
         ${slot('character', `Nhân vật · ${chars.length}/${MAX_CAST}`, chars, 'AI tự nghĩ')}
         ${slot('layout', 'Layout / bối cảnh', layout ? [layout] : [], 'Không dùng')}
       </div>
-      ${combo || chars.length || layout ? frameModeHtml(o, dis, Boolean(combo || layout)) : ''}
-      ${combo || chars.length || layout ? `<label class="check"><input type="checkbox" data-opt="master_on" ${o.master_on !== false ? 'checked' : ''} ${dis}>
-        🖼 Ghép thành 1 ảnh tổng hợp trước (layout + nhân vật + sản phẩm) — khuyên dùng</label>
-        <small class="muted">${o.master_on !== false ? 'Bước ⓪: model ảnh ghép các ảnh đầu vào thành 1 ảnh hoàn chỉnh để bạn duyệt; phân tích ý tưởng, storyboard và khung đầu các cảnh chỉ dùng ảnh này + ảnh sản phẩm (nhất quán hơn, ít lượt tạo ảnh hơn).' : 'Đang tắt: các bước gửi rời từng ảnh layout / nhân vật / sản phẩm.'}</small>` : ''}
+      ${!PROMPT && (combo || chars.length || layout) ? frameModeHtml(o, dis, Boolean(combo || layout)) : ''}
+      ${PROMPT && layout ? `<label class="check st-wide st-framelock ${o.frame_lock !== false ? 'on' : ''}"><input type="checkbox" class="st-switch" data-opt="frame_lock" ${o.frame_lock !== false ? 'checked' : ''} ${dis}>
+        <span><b>🔒 Khoá hoàn toàn khung hình</b> <span class="st-post-state">${o.frame_lock !== false ? 'BẬT' : 'TẮT'}</span><br><small class="muted">${o.frame_lock !== false
+          ? `Mọi cảnh dùng NGUYÊN ảnh layout “${esc(layout.name)}” làm khung đầu — giữ mọi chi tiết (sản phẩm, nhãn, chữ, logo, giao diện, bình luận), không tạo ảnh mới; máy quay đứng yên, chỉ chuyển động nhỏ.`
+          : 'Đang tắt: AI vẽ khung đầu mới mỗi cảnh theo bối cảnh layout (đổi được góc máy, nhưng chi tiết có thể khác ảnh gốc).'}</small></span></label>
+      ${o.frame_lock !== false ? `<label class="check st-wide"><input type="checkbox" data-opt="frame_host" ${o.frame_host ? 'checked' : ''} ${dis}>
+        <span><b>👤 Có người dẫn trên hình</b><br><small class="muted">${!o.frame_host
+          ? 'Không ai trên hình (ghế trống, điện thoại…): lời thoại là giọng người cầm máy ngoài khung, giữ nguyên mọi chi tiết.'
+          : (o.cast_characters || []).length
+            ? 'App ghép nhân vật đã chọn vào ảnh layout 1 lần (1 lượt tạo ảnh), giữ đúng điểm ảnh gốc ngoài vùng người — mọi cảnh dùng khung này.'
+            : 'Người có sẵn trong ảnh layout nói lời thoại (không thêm người mới). Muốn đặt nhân vật vào ghế trống: chọn nhân vật ở trên.'}</small></span></label>` : ''}` : ''}
+      ${PROMPT ? '<small class="muted">🔒 Mô tả nhân vật / bối cảnh trong thư viện được chèn NGUYÊN VĂN vào mọi prompt (IDENTITY / SETTING LOCK) — AI không viết lại.</small>' : ''}
       <small class="muted">Sửa nhân vật / layout ở màn <button class="link" data-goto-cast type="button">Nhân vật &amp; Layout</button> — dự án dùng bản mới nhất khi tạo ảnh.</small></div>`;
+  }
+
+  // 🔒 PRODUCT LOCK: mô tả bao bì do người dùng viết — chèn nguyên văn vào mọi prompt ảnh / video
+  function productLockHtml(o, dis) {
+    return `<label class="field st-wide st-plock"><span>🔒 Mô tả bao bì sản phẩm — PRODUCT LOCK <small class="muted">(nên viết tiếng Anh: hình dáng, màu, nắp, nhãn, chữ chính — chèn NGUYÊN VĂN vào mọi prompt)</small></span>
+      <textarea data-opt="product_lock" rows="2" placeholder="VD: white 10kg plastic bag, green MAX FRUIT label with a red apple logo" ${dis}>${esc(o.product_lock || '')}</textarea></label>`;
   }
 
   // Ảnh tham chiếu / sản phẩm của dự án mới — nằm chung thẻ Nhân vật & layout (dự án đã tạo: ảnh đã chép, không đổi ở đây)
@@ -252,6 +272,7 @@ function createStudioPage(CFG) {
       'Model video làm chuyển động từ ảnh ⭐ có sẵn (bộ kết hợp → nhân vật trong cảnh → layout). Không tốn lượt tạo ảnh.'],
     ['ai', '✨ AI tạo khung đầu mới mỗi cảnh', 'Model ảnh vẽ khung mới theo từng cảnh, gửi ảnh ⭐ làm tham chiếu (đa dạng góc / bối cảnh hơn).']];
   function frameMode(o) {
+    if (PROMPT) return o.frame_lock !== false && o.cast_layout ? 'direct' : 'ai';
     const hasLayout = Boolean(o.cast_layout || o.cast_combo);
     if (!(hasLayout || (o.cast_characters || []).length) || o.scene_style === 'whiteboard') return 'ai';
     let m = o.frame_mode || (o.cast_direct === false ? 'ai' : hasLayout ? 'keep' : 'direct');
@@ -538,14 +559,17 @@ function createStudioPage(CFG) {
   function planHtml(o) {
     const m = S.meta;
     const name = (list, id) => ((Array.isArray(list) ? list.find(x => x.id === id) : list[id]) || {}).name || id;
+    if (PROMPT) {
+      const steps = [o.kind === 'single' ? `AI viết 1 cảnh (${name(m.text_models, o.model)}) — không cần duyệt` : `Storyboard (${name(m.text_models, o.model)})`,
+        'Kiểm tra thoại / thời lượng', 'Sinh prompt ảnh + prompt video (LOCK chèn nguyên văn)', 'Xuất JSON / Excel · copy dán vào tool ngoài'];
+      return `<div class="st-plan"><b>Sẽ làm:</b> ${steps.map(x => `<span>${esc(x)}</span>`).join('<i>→</i>')}</div>`;
+    }
     const fm = frameMode(o);
     const frame = o.scene_style === 'whiteboard' ? `vẽ line-art (${name(m.image_engines, o.image_engine)})`
       : !(o.cast_layout || o.cast_combo || (o.cast_characters || []).length) ? `ảnh khung đầu (${name(m.image_engines, o.image_engine)})`
       : fm === 'keep' ? `giữ layout, thay sản phẩm + chữ (${name(m.image_engines, o.image_engine)})`
       : fm === 'direct' ? 'dùng ảnh ⭐ có sẵn (không tạo ảnh)' : `AI tạo khung đầu (${name(m.image_engines, o.image_engine)})`;
-    const steps = [...(needsMaster(o, S.cur ? (S.cur.refs || []).length : S.refs.length) ? [`Ảnh tổng hợp (${name(m.image_engines, o.image_engine)})`] : []),
-      ...(o.source_mode !== 'video' && o.idea_steps !== false ? ['Phân tích ý tưởng', 'AI viết lại ý tưởng'] : []),
-      noBoard(o) ? 'chia ý tưởng thành clip (không storyboard)'
+    const steps = [noBoard(o) ? 'chia ý tưởng thành clip (không storyboard)'
         : `${o.source_mode === 'video' ? 'Chuyển thể video phân tích' : 'Storyboard'} (${name(m.text_models, o.model)})`, frame,
       o.scene_style === 'whiteboard' ? 'tay vẽ theo lời dẫn' : `clip ${name(m.video_engines, o.video_engine)}`,
       ...((o.live || {}).on ? ['📱 giao diện livestream (app vẽ)'] : []),
@@ -577,9 +601,13 @@ function createStudioPage(CFG) {
     // khung video chỉ dùng khi nguồn kịch bản = video phân tích (nguồn ý tưởng: không cần video);
     // form Dự án mới đã đặt khung video ở đầu trang → ở đây chỉ hiện trong Cài đặt của dự án đang mở
     const rvHere = o.source_mode === 'video' && Boolean(S.cur);
-    return `${grp('content', '🎬 Nội dung &amp; nhân vật', esc(sums.content), `${rvHere ? refVideoHtml(o, dis) : ''}${castHtml(o, dis)}`)}
+    return `${grp('content', PROMPT ? '🔒 Bible — nhân vật, bối cảnh, sản phẩm' : '🎬 Nội dung &amp; nhân vật', esc(sums.content), `${rvHere ? refVideoHtml(o, dis) : ''}${castHtml(o, dis)}${PROMPT ? productLockHtml(o, dis) : ''}`)}
       ${grp('video', '🎥 Hình ảnh &amp; video', esc(sums.video), `<label class="field"><span>Độ dài video</span><select data-opt="length" ${dis}>${selectOptions(m.lengths.map(n => [n, noBoard(o) ? `~${n} giây (${Math.max(1, Math.min(10, Math.ceil(n / clipMax(o))))} clip)` : `~${n} giây (${(m.length_scenes || {})[n] || Math.max(m.scenes[0], Math.min(m.scenes[1], Math.round(n / 8)))} cảnh)`]), o.length)}</select></label>
-      ${boardToggleHtml(o, dis)}
+      ${PROMPT ? '' : boardToggleHtml(o, dis)}
+      <label class="check st-wide"><input type="checkbox" data-opt="natural_look" ${o.natural_look !== false ? 'checked' : ''} ${dis}>
+        <span><b>🌿 Hình ảnh tự nhiên, tươi sáng</b><br><small class="muted">${o.natural_look !== false
+          ? 'Màu tươi sáng nhưng thật, giữ kết cấu da (lỗ chân lông), không làm mịn / filter làm đẹp, chuyển động tự nhiên.'
+          : 'Đang tắt: model tự chọn kiểu hình (dễ bị da mịn, bóng như nhựa).'}</small></span></label>
       <label class="field"><span>Phong cách hình ảnh (tuỳ chọn)</span><input data-opt="style" value="${esc(o.style || '')}" placeholder="VD: điện ảnh, ánh sáng ấm, phim Hàn" ${dis}></label>
       <label class="field"><span>Tỉ lệ khung hình</span><select data-opt="aspect" ${dis} title="Áp dụng cho storyboard, ảnh khung đầu, clip và video ghép">${selectOptions((m.aspects || []).map(x => [x.value, x.label]), o.aspect || '9:16')}</select></label>
       <label class="field"><span>Chất lượng clip</span><select data-opt="quality" ${dis} title="Độ phân giải yêu cầu model video tạo — model không hỗ trợ thì tự dùng mức gần nhất">${selectOptions((m.qualities || []).map(x => [x.value, x.label]), o.quality || '720p')}</select></label>
@@ -588,7 +616,7 @@ function createStudioPage(CFG) {
       ${o.scene_style === 'whiteboard' ? '' : `<label class="field"><span>Cỡ cảnh (nhân vật trong khung)</span><select data-opt="shot_size" ${dis}>${selectOptions((m.shot_sizes || []).map(x => [x.value, x.label]), o.shot_size || 'auto')}</select></label>
       <label class="field"><span>Góc máy</span><select data-opt="camera_angle" ${dis}>${selectOptions((m.camera_angles || []).map(x => [x.value, x.label]), o.camera_angle || 'auto')}</select></label>
       ${frameMode(o) !== 'ai' && ((o.shot_size || 'auto') !== 'auto' || (o.camera_angle || 'auto') !== 'auto') ? '<small class="muted st-wide">Khung đầu đang giữ theo layout / ảnh ⭐ — cỡ cảnh, góc máy chỉ dùng khi viết storyboard (chọn “AI tạo khung đầu” để áp dụng cả vào ảnh).</small>' : ''}`}
-      <label class="field st-wide"><span>Kiểu dựng cảnh</span><select data-opt="scene_style" ${dis}>${selectOptions((m.scene_styles || []).map(x => [x.value, x.label]), o.scene_style || 'video')}</select></label>
+      ${PROMPT ? '' : `<label class="field st-wide"><span>Kiểu dựng cảnh</span><select data-opt="scene_style" ${dis}>${selectOptions((m.scene_styles || []).map(x => [x.value, x.label]), o.scene_style || 'video')}</select></label>`}
       ${o.scene_style === 'whiteboard' ? `
       <label class="field"><span>Chất lượng whiteboard</span><select data-opt="wb_quality" ${dis}>${selectOptions([['fast', 'Nhanh — cạnh dài 1080px'], ['hd', 'Nét — cạnh dài 1920px (~3 lần lâu hơn)']], o.wb_quality || 'fast')}</select></label>
       <label class="check"><input type="checkbox" data-opt="wb_hand" ${o.wb_hand !== false ? 'checked' : ''} ${dis}> Hiện bàn tay cầm bút</label>
@@ -597,9 +625,9 @@ function createStudioPage(CFG) {
       ${fm === 'ai' || !castNames.length ? `<label class="check st-wide"><input type="checkbox" data-opt="lock_outfit" ${o.lock_outfit !== false ? 'checked' : ''} ${dis}> Giữ nguyên trang phục nhân vật ở mọi cảnh
         <small>${o.lock_outfit !== false ? 'Khuôn mặt luôn được khoá. Tắt để trang phục đổi theo mô tả từng cảnh.' : 'Khuôn mặt vẫn khoá; trang phục đổi theo mô tả từng cảnh (làm lại ảnh khung đầu để áp dụng).'}</small></label>` : ''}
       ${vid.note ? `<p class="hint st-wide">${esc(vid.note)}</p>` : ''}`)}
-      ${grp('audio', '🔊 Giọng &amp; âm thanh', esc(sums.audio), audioHtml(o, dis, m))}
-      ${grp('live', '📱 Livestream TikTok', esc(sums.live), liveOptsHtml(o, dis))}
-      ${grp('post', '✨ Hậu kỳ &amp; chuyển cảnh', esc(sums.post), `${postHtml(o, dis)}
+      ${PROMPT ? '' : grp('audio', '🔊 Giọng &amp; âm thanh', esc(sums.audio), audioHtml(o, dis, m))}
+      ${PROMPT ? '' : grp('live', '📱 Livestream TikTok', esc(sums.live), liveOptsHtml(o, dis))}
+      ${PROMPT ? '' : grp('post', '✨ Hậu kỳ &amp; chuyển cảnh', esc(sums.post), `${postHtml(o, dis)}
       <div class="st-wide st-logo-grp"><b>🏷 Logo thương hiệu</b>${logoHtml(o, dis)}</div>
       <div class="st-wide st-trans ${o.transition_on === false ? 'off' : ''}"><div class="st-trans-head"><b>Chuyển cảnh khi ghép</b>
         <label class="mh-switch" title="Tắt = các cảnh nối thẳng, không hiệu ứng / âm chuyển cảnh (vẫn giữ lựa chọn bên dưới để bật lại)">
@@ -614,17 +642,18 @@ function createStudioPage(CFG) {
       <div class="st-wide st-rules"><b>Ràng buộc prompt <small>(ảnh khung đầu &amp; clip${fm === 'keep' && castNames.length ? ' · giữ layout: tự cho phép chữ + logo trên giao diện / bao bì' : ''})</small></b>
         <div class="st-bans">${(m.bans || []).map(b => `<label class="check"><input type="checkbox" data-ban="${esc(b.value)}" ${bansOf(o).includes(b.value) ? 'checked' : ''} ${dis}> ${esc(b.label)}</label>`).join('')}</div>
         <label class="field"><span>Cấm thêm (tiếng Anh, tuỳ chọn)</span><input data-opt="negative_extra" value="${esc(o.negative_extra || '')}" placeholder="VD: no extra fingers, no blurry faces" ${dis}></label>
-        <label class="check"><input type="checkbox" data-opt="ref_note" ${o.ref_note !== false ? 'checked' : ''} ${dis}> Thêm câu mô tả ảnh tham chiếu <small class="muted">(Reference images are attached in this order — …)</small></label>
-        ${o.ref_note !== false ? `<label class="field"><span>Vai trò ảnh tham chiếu (tiếng Anh)</span><input data-opt="ref_prompt" value="${esc(o.ref_prompt || m.ref_prompt_default || '')}" ${dis}></label>` : ''}
+        ${PROMPT ? '' : `<label class="check"><input type="checkbox" data-opt="ref_note" ${o.ref_note !== false ? 'checked' : ''} ${dis}> Thêm câu mô tả ảnh tham chiếu <small class="muted">(Reference images are attached in this order — …)</small></label>`}
+        ${!PROMPT && o.ref_note !== false ? `<label class="field"><span>Vai trò ảnh tham chiếu (tiếng Anh)</span><input data-opt="ref_prompt" value="${esc(o.ref_prompt || m.ref_prompt_default || '')}" ${dis}></label>` : ''}
         <small class="hint st-rules-preview">Câu cấm sẽ gửi: <code>${esc(negativeLine(o) || '(không có)')}</code></small>
       </div>`)}`;
   }
 
   function newHtml() {
-    const d = S.draft && !S.draft.id ? S.draft : (S.draft = { name: '', idea: '', options: {
+    const d = S.draft && !S.draft.id ? S.draft : (S.draft = { name: '', idea: '', form: { chu_de: '', thong_diep: '', thoai_mau: '' }, options: {
+      ...(PROMPT ? { kind: 'story', frame_mode: 'ai' } : {}),
       length: 60, style: '', model: MUSE ? 'muse_browser' : 'chatgpt_browser', text_profile: '', image_engine: MUSE ? 'muse_browser' : S.meta.default_image_engine,
       image_profile: '', video_engine: 'grok_browser', video_profile: '', voice: 'vi-VN-HoaiMyNeural', rate: '+0%',
-      subtitles: false, bgm: false, auto: false, flow: 'review', idea_steps: true, show_browser: false, dub: false } });  // âm thanh: mặc định tắt
+      subtitles: false, bgm: false, auto: false, flow: 'review', show_browser: false, dub: false } });  // âm thanh: mặc định tắt
     const n = ideaLines(d.idea).length;
     const fromVideo = d.options.source_mode === 'video';
     if (fromVideo) S.batch = false;  // hàng loạt cần mỗi dòng 1 ý tưởng → chỉ dùng với nguồn ý tưởng
@@ -634,8 +663,8 @@ function createStudioPage(CFG) {
     const step = Math.min(S.wiz || 0, WIZ.length - 1);
     const body = [wizSource(d, n, fromVideo), wizInputs(parts), wizGeneral(parts), wizReview(d, n, parts)][step];
     return `<div class="card st-wiz"><div class="card-title">DỰ ÁN MỚI
-        <button class="btn ghost sm st-sound-btn" data-sound-open type="button" title="Không thuộc các bước — mở chỉnh bất cứ lúc nào (không chỉnh thì dùng mặc định)">🎛 Giọng, livestream &amp; hậu kỳ
-          <small>${esc([(parts.audio || {}).sum, (o.live || {}).on ? 'livestream' : '', o.post_ai ? 'hậu kỳ AI' : ''].filter(Boolean).join(' · ') || 'mặc định')}</small></button>
+        ${PROMPT ? '' : `<button class="btn ghost sm st-sound-btn" data-sound-open type="button" title="Không thuộc các bước — mở chỉnh bất cứ lúc nào (không chỉnh thì dùng mặc định)">🎛 Giọng, livestream &amp; hậu kỳ
+          <small>${esc([(parts.audio || {}).sum, (o.live || {}).on ? 'livestream' : '', o.post_ai ? 'hậu kỳ AI' : ''].filter(Boolean).join(' · ') || 'mặc định')}</small></button>`}
         ${fromVideo ? '' : `<div class="st-mode"><button class="${S.batch ? '' : 'on'}" data-mode="one" type="button">Một video</button>
           <button class="${S.batch ? 'on' : ''}" data-mode="batch" type="button">Hàng loạt</button></div>`}</div>
       <ol class="st-wiz-steps">${WIZ.map(([title, hint], i) => {
@@ -649,12 +678,18 @@ function createStudioPage(CFG) {
         ${step ? '<button class="btn ghost" data-wiz-go="-1" type="button">← Quay lại</button>' : '<span></span>'}
         <small class="muted">Bước ${step + 1}/${WIZ.length}${step && step < WIZ.length - 1 ? ' · có thể bỏ qua — đã có giá trị mặc định' : ''}</small>
         ${step < WIZ.length - 1 ? '<button class="btn primary" data-wiz-go="1" type="button">Tiếp →</button>'
-          : `<button class="btn primary big st-go" data-create type="button">${S.batch ? `Tạo <span id="stGoN">${n}</span> video →` : (o.flow === 'auto' ? '⚡ Bắt đầu — chạy liên tục tới video →' : needsMaster(o, S.refs.length) ? '🖼 Bắt đầu — ⓪ Ghép ảnh tổng hợp →' : (o.source_mode !== 'video' && o.idea_steps !== false ? '🧠 Bắt đầu — ① Phân tích ý tưởng →' : '✍ Bắt đầu — ③ Viết storyboard →'))}</button>`}
+          : `<button class="btn primary big st-go" data-create type="button">${S.batch ? `Tạo <span id="stGoN">${n}</span> ${PROMPT ? 'dự án' : 'video'} →`
+            : PROMPT ? (o.kind === 'single' && o.source_mode !== 'video' ? '⚡ Tạo clip đơn →' : '✍ Bắt đầu — viết storyboard →')
+            : o.flow === 'auto' ? '⚡ Bắt đầu — chạy liên tục tới video →' : '✍ Bắt đầu — viết storyboard →'}</button>`}
       </div></div>`;
   }
 
   // ------------------------------------------------------------ wizard Dự án mới: nhập thông tin từng bước
-  const WIZ = [
+  const WIZ = PROMPT ? [
+    ['Mẫu & ý tưởng', 'Chọn mẫu dự án rồi điền form — nghĩ rõ trước khi AI viết'],
+    ['Bible — nhân vật, bối cảnh, sản phẩm', 'Hồ sơ khoá dùng cho mọi cảnh: nhân vật / bối cảnh từ thư viện, ảnh + mô tả bao bì sản phẩm'],
+    ['Cài đặt chung', 'Độ dài, tỉ lệ, phong cách, cỡ cảnh / góc máy, ràng buộc prompt'],
+    ['Xem lại & bắt đầu', 'Kiểm tra lại rồi để AI viết storyboard']] : [
     ['Nguồn, ý tưởng', 'Viết ý tưởng, hoặc chọn video để phân tích làm kịch bản'],
     ['Nhân vật, layout, sản phẩm đầu vào', 'Ảnh sản phẩm + nhân vật / layout cố định (tuỳ chọn — không chọn thì AI tự nghĩ)'],
     ['Cài đặt chung', 'Độ dài, tỉ lệ, chất lượng, model viết storyboard / tạo ảnh / tạo video, ràng buộc prompt'],
@@ -665,11 +700,121 @@ function createStudioPage(CFG) {
     const d = S.draft, o = d.options;
     if (step !== 0) return '';
     if (o.source_mode === 'video') return S.newRefVideo ? '' : 'Dán link / chọn file video rồi bấm 🔍 Phân tích trước';
-    if (S.batch) return ideaLines(d.idea).length ? '' : 'Nhập ít nhất 1 ý tưởng (mỗi dòng 1 video)';
+    if (S.batch) return ideaLines(d.idea).length ? '' : (PROMPT ? 'Nhập ít nhất 1 sản phẩm / chủ đề (mỗi dòng 1 dự án)' : 'Nhập ít nhất 1 ý tưởng (mỗi dòng 1 video)');
+    if (PROMPT) return ((d.form || {}).chu_de || '').trim().length >= 3 ? '' : 'Nhập “Sản phẩm / chủ đề”';
     return (d.idea || '').trim().length >= 10 ? '' : 'Hãy mô tả ý tưởng video (ít nhất 1 câu)';
   }
 
+  // Bước 0 — mẫu dự án + Bước 1 — form ý tưởng (thay ô chữ tự do)
+  const FORM_KEYS = [['chu_de', 'Sản phẩm / chủ đề *', 'VD: Phân bón MAX FRUIT cho sầu riêng'],
+    ['thong_diep', 'Người xem cần nhớ điều gì?', 'VD: Bón 2 lần mỗi vụ — trái to, cơm vàng'],
+    ['thoai_mau', 'Thoại mẫu (nếu có)', 'VD: Bà con ơi, sầu riêng trái nhỏ là do thiếu kali…']];
+  // mẫu dự án → điền sẵn vài lựa chọn hợp mẫu (vẫn đổi được ở bước 3)
+  const KIND_PRESET = { story: {}, single: { length: 10 }, live: { camera_angle: 'front', shot_size: 'medium_close' }, kids: {},
+    problem: { shot_size: 'mix' }, howto: { shot_size: 'mix', camera_angle: 'eye' }, before_after: { shot_size: 'medium', camera_angle: 'eye' },
+    review: { shot_size: 'mix' }, expert: { camera_angle: 'front', shot_size: 'medium_close' },
+    story_customer: { camera_angle: 'three_quarter', shot_size: 'medium' }, promo: { length: 15, shot_size: 'mix' }, drama: { shot_size: 'mix' } };
+  function kindsHtml(o) {
+    const card = k => `<button type="button" class="st-kind ${(o.kind || 'story') === k.value ? 'on' : ''}" data-kind="${esc(k.value)}">
+      <b>${esc(k.label)}</b><small>${esc(k.hint)}</small></button>`;
+    return `<div class="st-kinds" role="radiogroup" aria-label="Mẫu dự án"><span>Bước 0 · Mẫu dự án</span>
+      ${(S.meta.kinds || []).map(k => k.custom ? `<div class="st-kind-wrap">${card(k)}<span class="st-kind-tools">
+        <button type="button" data-kind-edit="${esc(k.value)}" title="Sửa mẫu">✎</button><button type="button" data-kind-del="${esc(k.value)}" title="Xoá mẫu">🗑</button></span></div>` : card(k)).join('')}
+      <button type="button" class="st-kind st-kind-add" data-kind-add><b>＋ Thêm mẫu</b><small>Tự đặt cấu trúc cảnh, giọng điệu, góc máy, độ dài</small></button>
+      <button type="button" class="st-kind st-kind-add trend" data-kind-trend><b>🔥 Mẫu từ video trending</b><small>Dán link video đang hot → app phân tích hook, cấu trúc, nhịp làm mẫu</small></button></div>`;
+  }
+
+  // Hộp soạn mẫu dự án (thêm / sửa / tạo từ video trending) — lưu ở %APPDATA%/VideoAgent/studio_kinds.json
+  function kindDialog(k = {}, trend = false) {
+    const m = S.meta, p = k.presets || {};
+    const sel = (id, list, cur) => `<select id="${id}">${selectOptions([['', 'Giữ nguyên'], ...list], cur || '')}</select>`;
+    openModal(k.value ? 'SỬA MẪU DỰ ÁN' : 'MẪU DỰ ÁN MỚI', k.value ? k.label : trend ? 'Mẫu từ video trending' : 'Mẫu của tôi', `<div id="stKindDlg" class="st-optdlg st-kinddlg">
+      ${trend ? `<div class="st-kind-trendbox"><b>🔥 Video trending</b><small class="muted">Dán link TikTok / YouTube / Facebook / Instagram hoặc chọn file → 🔍 Phân tích: app lấy hook, cấu trúc cảnh, nhịp, phong cách làm mẫu (1 lượt model phân tích video ở Cài đặt → Model AI). Mẫu chỉ giữ CẤU TRÚC — AI không chép lời thoại, thương hiệu, nhân vật của video gốc.</small>
+        <div class="row"><input id="stKindSrc" placeholder="https://www.tiktok.com/@…/video/…"><button class="btn ghost sm" data-kind-pick type="button">📁 File</button>
+          <button class="btn primary sm" data-kind-analyze type="button">🔍 Phân tích</button></div></div>` : ''}
+      <div class="grid2"><label class="field"><span>Tên mẫu *</span><input id="stKindLabel" value="${esc(k.label || '')}" placeholder="VD: 🌾 Mẹo nhà nông"></label>
+        <label class="field"><span>Mô tả ngắn (hiện trên thẻ)</span><input id="stKindHint" value="${esc(k.hint || '')}" placeholder="VD: 1 mẹo / video, nói nhanh, kết bằng sản phẩm"></label></div>
+      <label class="field"><span>Ghi chú cho AI viết storyboard * <small class="muted">(cấu trúc cảnh, giọng điệu, điều cần tránh)</small></span>
+        <textarea id="stKindNote" rows="9" placeholder="VD: DẠNG VIDEO: mẹo nhà nông — cảnh 1 nêu vấn đề bằng câu hỏi, cảnh 2–3 chỉ cách làm từng bước, cảnh cuối giới thiệu sản phẩm. Giọng gần gũi, xưng ‘bà con’. Không bịa liều lượng.">${esc(k.note || '')}</textarea></label>
+      <div class="grid2">
+        <label class="field"><span>Độ dài điền sẵn</span>${sel('stKindLen', m.lengths.map(n => [n, `~${n} giây`]), p.length)}</label>
+        <label class="field"><span>Tỉ lệ</span>${sel('stKindAspect', (m.aspects || []).map(x => [x.value, x.label]), p.aspect)}</label>
+        <label class="field"><span>Cỡ cảnh</span>${sel('stKindShot', (m.shot_sizes || []).map(x => [x.value, x.label]), p.shot_size)}</label>
+        <label class="field"><span>Góc máy</span>${sel('stKindAngle', (m.camera_angles || []).map(x => [x.value, x.label]), p.camera_angle)}</label></div>
+      <label class="field"><span>Phong cách hình ảnh điền sẵn</span><input id="stKindStyle" value="${esc(p.style || '')}" placeholder="VD: ánh sáng tự nhiên, quay cầm tay, màu ấm"></label>
+      <small class="muted" id="stKindSrcNote">${k.source && (k.source.title || k.source.url) ? `Nguồn: ${esc(k.source.title || k.source.url)}` : ''}</small>
+      <div class="modal-foot st-optfoot"><button class="btn ghost" data-kind-cancel type="button">Huỷ</button>
+        <button class="btn primary" data-kind-save type="button">💾 Lưu mẫu</button></div></div>`, true);
+    let source = k.source || null;
+    $('#stKindDlg').onclick = async e => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.kindCancel !== undefined) return closeModal();
+      if (b.dataset.kindPick !== undefined) {
+        const files = await api('pick_files', 'video');
+        if (files && files.length) $('#stKindSrc').value = files[0];
+        return;
+      }
+      if (b.dataset.kindAnalyze !== undefined) {
+        const src = ($('#stKindSrc').value || '').trim();
+        if (!src) return toast('Dán link video hoặc chọn file trước', 'warn');
+        const label = b.textContent;
+        b.disabled = true; b.textContent = '⏳ Đang phân tích… (1–3 phút)';
+        const res = await api(CFG.api + 'kind_from_video', src, sharedModels().vision, '', false);
+        b.disabled = false; b.textContent = label;
+        if (!res.ok) return toast(res.error, 'error');
+        const dr = res.draft, dp = dr.presets || {};
+        $('#stKindLabel').value = dr.label || ''; $('#stKindHint').value = dr.hint || ''; $('#stKindNote').value = dr.note || '';
+        if (dp.length) $('#stKindLen').value = String(dp.length);
+        if (dp.style) $('#stKindStyle').value = dp.style;
+        source = dr.source || null;
+        $('#stKindSrcNote').textContent = source ? `Nguồn: ${source.title || source.url}` : '';
+        return toast('Đã phân tích — xem / sửa ghi chú rồi bấm 💾 Lưu mẫu', 'ok');
+      }
+      if (b.dataset.kindSave === undefined) return;
+      const presets = { length: $('#stKindLen').value, aspect: $('#stKindAspect').value, shot_size: $('#stKindShot').value,
+        camera_angle: $('#stKindAngle').value, style: $('#stKindStyle').value.trim() };
+      b.disabled = true;
+      const res = await api(CFG.api + 'kinds_save', { key: k.value || '', label: $('#stKindLabel').value, hint: $('#stKindHint').value,
+        note: $('#stKindNote').value, presets, source });
+      b.disabled = false;
+      if (!res.ok) return toast(res.error, 'error');
+      S.meta.kinds = res.kinds;
+      closeModal();
+      if (S.draft) applyKind(res.key);  // chọn luôn mẫu vừa lưu
+      toast('Đã lưu mẫu dự án', 'ok');
+      render();
+    };
+  }
+
+  // chọn mẫu: điền sẵn các lựa chọn của mẫu (mẫu có sẵn: KIND_PRESET; mẫu tự thêm: presets đã lưu)
+  function applyKind(kind) {
+    const o = S.draft.options;
+    const custom = ((S.meta.kinds || []).find(x => x.value === kind) || {}).presets || {};
+    const preset = { ...(KIND_PRESET[kind] || {}), ...Object.fromEntries(Object.entries(custom).filter(([, v]) => v !== '' && v != null)) };
+    if (preset.length) preset.length = +preset.length;
+    S.draft.options = { ...o, kind, ...preset, ...(kind === 'kids' && !o.style ? { style: '3D cartoon, bright colours, child-friendly' } : {}) };
+    if (S.cur) markDirty();
+  }
+  function formHtml(f, attr = 'data-form', keys = FORM_KEYS) {
+    return `<div class="st-form">${keys.map(([k, label, ph]) => `<label class="field"><span>${label}</span>${k === 'thoai_mau'
+      ? `<textarea ${attr}="${k}" rows="2" placeholder="${esc(ph)}">${esc(f[k] || '')}</textarea>`
+      : `<input ${attr}="${k}" value="${esc(f[k] || '')}" placeholder="${esc(ph)}">`}</label>`).join('')}</div>`;
+  }
+
   function wizSource(d, n, fromVideo) {
+    if (PROMPT) {
+      return `${kindsHtml(d.options)}
+      <div class="st-source" role="radiogroup" aria-label="Nguồn kịch bản"><span>Nguồn</span>
+        <label class="${fromVideo ? '' : 'on'}"><input type="radio" name="stSource" data-opt="source_mode" value="idea" ${fromVideo ? '' : 'checked'}><b>✍ Form ý tưởng</b><small>Điền chủ đề, thông điệp, thoại mẫu</small></label>
+        <label class="${fromVideo ? 'on' : ''}"><input type="radio" name="stSource" data-opt="source_mode" value="video" ${fromVideo ? 'checked' : ''}><b>🎬 Từ video phân tích</b><small>Chuyển thể vật liệu phân tích từ 1 video</small></label></div>
+      ${fromVideo ? refVideoHtml(d.options, '') : S.batch ? `<label class="field"><span>Sản phẩm / chủ đề — <b>mỗi dòng 1 dự án</b> (tối đa 20) · <span id="stCount">${n} dự án</span></span>
+        <textarea id="stIdea" rows="6" placeholder="Mỗi dòng 1 chủ đề (ít nhất 10 ký tự)">${esc(d.idea)}</textarea></label>
+        ${formHtml(d.form || {}, 'data-form', FORM_KEYS.slice(1))}`
+        : formHtml(d.form || {})}
+      <small class="muted">Nhân vật chính chọn từ thư viện ở bước 2 · thời lượng ở bước 3.</small>
+      <label class="field"><span>${S.batch ? 'Tiền tố tên dự án (tuỳ chọn)' : 'Tên dự án (tuỳ chọn)'}</span><input id="stName" value="${esc(d.name)}"></label>`;
+    }
     return `<div class="st-source" role="radiogroup" aria-label="Nguồn kịch bản"><span>Nguồn kịch bản</span>
         <label class="${fromVideo ? '' : 'on'}"><input type="radio" name="stSource" data-opt="source_mode" value="idea" ${fromVideo ? '' : 'checked'}>
           <b>✍ Từ ý tưởng</b><small>Bạn viết ý tưởng + chọn nhân vật, layout, ảnh sản phẩm — không cần video</small></label>
@@ -691,6 +836,17 @@ function createStudioPage(CFG) {
   function wizReview(d, n, parts) {
     const o = d.options;
     const idea = (d.idea || '').trim();
+    if (PROMPT) {
+      const kind = ((S.meta.kinds || []).find(k => k.value === (o.kind || 'story')) || {}).label || '';
+      const f = d.form || {};
+      const rows = [
+        [0, 'Mẫu & ý tưởng', o.source_mode === 'video' ? `🎬 Video phân tích: ${esc((S.newRefVideo || {}).title || '—')}`
+          : `${esc(kind)} · ${S.batch ? `${n} chủ đề (hàng loạt)` : esc(f.chu_de || '—')}${f.thong_diep ? ` · nhớ: ${esc(f.thong_diep)}` : ''}`],
+        [1, 'Bible', `${S.refs.length ? `📦 ${S.refs.length} ảnh sản phẩm` : '📦 chưa có ảnh sản phẩm'}${o.product_lock ? ' · 🔒 có mô tả bao bì' : ''} · ${(parts.content || {}).sum || ''}`],
+        [2, 'Cài đặt chung', `${(parts.video || {}).sum || ''}${(parts.adv || {}).sum ? ` · ${parts.adv.sum}` : ''}`]];
+      return `<div class="st-wiz-review">${rows.map(([i, label, html]) => `<div class="st-wiz-row"><b>${i + 1}. ${label}</b><span>${html || '—'}</span>
+        <button class="link" data-wiz="${i}" type="button">Sửa</button></div>`).join('')}</div>${planHtml(o)}`;
+    }
     // dòng tóm tắt các nhóm (parts.*.sum) đã thoát ký tự HTML sẵn — chỉ thoát phần người dùng gõ
     const rows = [
       [0, 'Nguồn, ý tưởng', o.source_mode === 'video' ? `🎬 Video phân tích: ${esc((S.newRefVideo || {}).title || '—')}`
@@ -702,11 +858,11 @@ function createStudioPage(CFG) {
         <span>${html || '—'}</span>${i === 'sound' ? '<button class="link" data-sound-open type="button">Sửa</button>'
           : `<button class="link" data-wiz="${i}" type="button">Sửa</button>`}</div>`).join('')}</div>
       ${S.batch ? '<p class="hint">Hàng loạt luôn tự làm trọn: viết storyboard → tạo ảnh + clip từng cảnh → ghép. Các dự án xếp hàng chạy song song theo giới hạn trong Cài đặt; ảnh / clip chạy song song theo số profile trình duyệt của từng model.</p>'
-        : `<div class="st-runmode"><span>Các bước sẽ chạy: ${o.source_mode === 'video' ? '' : `${o.idea_steps !== false ? '① Phân tích ý tưởng › ② AI viết lại ý tưởng › ' : ''}`}③ Storyboard › ④ Video</span>
+        : `<div class="st-runmode"><span>Các bước sẽ chạy: ① Storyboard › ② Video</span>
           <div class="st-flow" role="radiogroup" aria-label="Chế độ chạy">
             <label class="${o.flow === 'auto' ? 'on' : ''}"><input type="radio" name="stFlow" data-opt="flow" value="auto" ${o.flow === 'auto' ? 'checked' : ''}> ⚡ Chạy liên tục <small>tự đi hết các bước tới video</small></label>
             <label class="${o.flow !== 'auto' ? 'on' : ''}"><input type="radio" name="stFlow" data-opt="flow" value="review" ${o.flow !== 'auto' ? 'checked' : ''}> 👁 Duyệt từng bước <small>dừng sau mỗi bước để xem / sửa rồi duyệt</small></label></div>
-          ${o.source_mode === 'video' ? '' : `<label class="check"><input type="checkbox" data-opt="idea_steps" ${o.idea_steps !== false ? 'checked' : ''}> 🧠 Phân tích &amp; để AI viết lại ý tưởng trước khi viết storyboard</label>`}</div>`}
+          </div>`}
       ${planHtml(o)}`;
   }
 
@@ -726,7 +882,163 @@ function createStudioPage(CFG) {
     </div>`;
   }
 
+  // ------------------------------------------------------------ Studio (chỉ sinh prompt): Bible → Storyboard → Kiểm tra → Prompt → Xuất
+  // Bước 3 — kiểm tra (giống studio.validate_project bên Python): đỏ = chặn sinh prompt, vàng = nhắc
+  const WORDS_HARD = 4.4, SPEAK_RATE = 3.8, SPEECH_PAD = 0.8;
+  function sceneWords(s) {
+    const texts = (s.lines || []).map(l => l.text || '').filter(t => t.trim());
+    if (!texts.length) texts.push(s.narration || '');
+    return texts.reduce((a, t) => a + (t.trim() ? t.trim().split(/\s+/).length : 0), 0);
+  }
+  function validate(d) {
+    const o = d.options, issues = [];
+    const add = (scene, level, msg) => issues.push({ scene, level, msg });
+    const total = d.scenes.reduce((a, s) => a + (+s.seconds || 0), 0), target = +o.length || 0;
+    if (!d.scenes.length) add(0, 'red', 'Chưa có cảnh nào — viết storyboard trước');
+    else if (o.kind !== 'single' && Math.abs(total - target) > 1) add(0, 'red', `Tổng thời lượng các cảnh ${total}s ≠ thời lượng dự án ${target}s — thêm / bớt cảnh, đổi số giây hoặc đổi độ dài ở ⚙`);
+    const roster = ((d.bible || {}).characters || []).map(c => c.name);
+    d.scenes.forEach((s, k) => {
+      const i = k + 1, secs = +s.seconds || 10, w = sceneWords(s);
+      const hard = Math.floor(secs * WORDS_HARD), soft = Math.floor((secs - SPEECH_PAD) * SPEAK_RATE);
+      if (w > hard) add(i, 'red', `Thoại ${w} chữ > ${hard} chữ cho cảnh ${secs}s — nói không kịp: rút gọn hoặc tách cảnh`);
+      else if (w > soft) add(i, 'yellow', `Thoại ${w} chữ hơi dài cho ${secs}s (nên ≤ ${soft}) — dễ nói vội`);
+      const speakers = [...new Set((s.lines || []).filter(l => (l.text || '').trim() && l.who).map(l => l.who))];
+      if (speakers.length > 1) add(i, 'red', `${speakers.length} người cùng nói trong 1 cảnh (${speakers.join(', ')}) — mỗi lượt nói tách 1 cảnh`);
+      const on = Array.isArray(s.cast) ? s.cast : roster;
+      if (!on.length && s.product === false) add(i, 'yellow', 'Cảnh chưa gán nhân vật / sản phẩm');
+      if (!(s.image_prompt || '').trim()) add(i, 'red', 'Thiếu mô tả hình ảnh (prompt ảnh)');
+      if (!(s.motion_prompt || '').trim()) add(i, 'red', 'Thiếu hành động / camera (prompt chuyển động)');
+    });
+    return { issues, total, target, ok: !issues.some(x => x.level === 'red') };
+  }
+  function checkHtml(v, d) {
+    if (!d.scenes.length) return '';
+    const reds = v.issues.filter(x => x.level === 'red'), yellows = v.issues.filter(x => x.level === 'yellow');
+    const row = x => `<li class="${x.level}">${x.scene ? `<b>Cảnh ${x.scene}</b> · ` : ''}${esc(x.msg)}</li>`;
+    return `<div class="st-check ${reds.length ? 'bad' : yellows.length ? 'warn' : 'ok'}"><b>③ Kiểm tra tự động</b>
+      ${reds.length || yellows.length ? `<ul>${[...reds, ...yellows].map(row).join('')}</ul>` : '<span>✓ Thoại vừa thời lượng · mỗi cảnh 1 người nói · tổng thời lượng khớp — sẵn sàng sinh prompt</span>'}</div>`;
+  }
+
+  // Tầng 3 — 2 prompt riêng mỗi cảnh: Prompt Ảnh (khung đầu) | Prompt Video (mốc giây + thoại + âm thanh + NEGATIVE)
+  function promptTabsHtml(made) {
+    const tab = (S.ptab || {})[made.index] || 'image';
+    return `<div class="st-prompts"><div class="st-ptabs">
+        <button class="${tab === 'image' ? 'on' : ''}" data-ptab="image" type="button">🖼 Prompt Ảnh</button>
+        <button class="${tab === 'video' ? 'on' : ''}" data-ptab="video" type="button">🎬 Prompt Video</button>
+        <span class="st-act-gap"></span><small class="muted">🔒 xám = phần khoá từ Bible (không sửa ở đây)</small>
+        <button class="btn ghost sm" data-copy="${tab}" type="button">⧉ Copy</button></div>
+      <div class="st-pbody">${(made[tab] || []).map(x => `<div class="st-pline ${x.lock ? 'lock' : ''}">${x.lock ? '<i>🔒</i>' : ''}${esc(x.text)}</div>`).join('')}</div>
+      ${(made.attach || []).length ? `<small class="muted st-attach">📎 Đính kèm khi tạo: ${made.attach.map(a => esc(`${String(a.role).split(' —')[0]} · ${String(a.path).split(/[\\/]/).pop()}`)).join(', ')}</small>` : ''}</div>`;
+  }
+
+  function promptSceneHtml(s, i, durations, run) {
+    const dis = run ? 'disabled' : '';
+    const lines = (s.lines || []).length;
+    const mine = (S.valid || { issues: [] }).issues.filter(x => x.scene === i + 1);
+    const red = mine.filter(x => x.level === 'red').length, yellow = mine.length - red;
+    const made = !S.dirty && ((S.cur.prompts || {}).scenes || []).find(x => x.index === s.index);
+    return `<div class="card st-scene st-pscene" data-i="${i}">
+      <div class="st-pnum"><em>${i + 1}</em>${s.clip_url ? `<video src="${esc(s.clip_url)}" controls muted playsinline poster="${esc(s.frame_url || '')}"></video>`
+        : s.frame_url ? `<img src="${esc(s.frame_url)}" alt="Khung đầu cảnh ${i + 1}">` : ''}${SCENE_STATUS[s.status] ? `<b class="st-badge ${esc(s.status)}">${esc(SCENE_STATUS[s.status])}</b>` : ''}${red ?`<b class="st-pbadge red" title="Lỗi phải sửa">${red}</b>` : ''}${yellow ? `<b class="st-pbadge yellow" title="Nên xem lại">${yellow}</b>` : ''}${!mine.length ? '<b class="st-pbadge ok">✓</b>' : ''}</div>
+      <div class="st-fields st-col-story">
+        <div class="st-scene-head"><input data-sf="title" value="${esc(s.title || '')}" ${dis} aria-label="Tiêu đề cảnh" title="${esc(s.title || '')}">
+          <select data-sf="seconds" ${dis} aria-label="Số giây">${durations.map(n => `<option value="${n}" ${n === +s.seconds ? 'selected' : ''}>${n}s</option>`).join('')}</select></div>
+        <div class="row st-sc-meta"><select data-sf="purpose" ${dis} aria-label="Mục đích cảnh">${selectOptions([['', '— Mục đích cảnh —'], ...(S.meta.purposes || []).map(x => [x.value, x.label])], s.purpose || '')}</select>
+          <label class="check"><input type="checkbox" data-sp ${s.product !== false ? 'checked' : ''} ${dis}> 📦 Có sản phẩm</label></div>
+        ${mine.length ? `<ul class="st-issues">${mine.map(x => `<li class="${x.level}">${esc(x.msg)}</li>`).join('')}</ul>` : ''}
+        ${sceneCastHtml(s, dis)}
+        ${lines ? linesHtml(s, dis) : `<label class="field"><span>Lời thoại (tiếng Việt)</span><textarea data-sf="narration" rows="2" ${dis}>${esc(s.narration || '')}</textarea></label>`}
+        <div class="st-voice"><span>${lines ? 'Giọng dẫn chuyện' : 'Giọng'}</span>
+          <select data-sf="speaker" ${dis} title="Kiểu giọng ghi vào prompt video (model video tạo tiếng)">${selectOptions((S.meta.speakers || []).map(x => [x.value, x.label]), s.speaker || '')}</select>
+          <span></span>
+          ${lines || dis ? '' : '<button class="btn ghost sm" data-line-add type="button" title="Chia lời thành các câu thoại, mỗi câu một nhân vật">+ Thoại theo nhân vật</button>'}</div>
+      </div>
+      <div class="st-fields st-col-prompt">
+        ${sceneShotHtml(s, dis)}
+        <label class="field"><span>Hình ảnh (khung đầu)</span><textarea data-sf="image_prompt" rows="3" ${dis}>${esc(s.image_prompt || '')}</textarea></label>
+        <label class="field"><span>Hành động theo mốc giây + camera</span><textarea data-sf="motion_prompt" rows="2" ${dis} placeholder="0-3s: … ; 3-7s: … ; 7-10s: …">${esc(s.motion_prompt || '')}</textarea></label>
+        ${run ? '' : `<div class="row st-scene-act">
+          ${made ? `<button class="btn ghost sm" data-scene="frame" type="button" title="Tạo lại ảnh khung đầu theo Prompt Ảnh">↻ Ảnh</button>
+          <button class="btn ghost sm" data-scene="clip" type="button" ${s.frame_url ? '' : 'disabled'} title="Tạo lại clip theo Prompt Video">↻ Clip</button>` : ''}
+          <span class="st-act-gap"></span>
+          <button class="btn ghost sm" data-move="-1" type="button" ${i ? '' : 'disabled'} title="Lên">↑</button>
+          <button class="btn ghost sm" data-move="1" type="button" title="Xuống">↓</button>
+          <button class="btn ghost sm st-pdel" data-del-scene type="button" title="Xoá cảnh">🗑</button></div>`}
+      </div>
+      ${made ? promptTabsHtml(made) : ''}</div>`;
+  }
+
+  function promptProjectHtml() {
+    const p = S.cur, d = S.draft, run = p.running, o = d.options;
+    const durations = (S.meta.video_engines[o.video_engine] || { durations: ['10s'] }).durations.map(x => parseInt(x, 10));
+    const v = S.valid = validate(d);
+    const made = ((p.prompts || {}).scenes || []).length && !S.dirty;
+    const single = o.kind === 'single';
+    const kind = ((S.meta.kinds || []).find(k => k.value === (o.kind || 'story')) || {}).label || '';
+    const steps = [['① Ý tưởng', true], ['② Storyboard', d.scenes.length > 0], ['③ Kiểm tra', d.scenes.length > 0 && v.ok],
+      ['④ Prompt', Boolean(made)], ['⑤ Video', Boolean(p.final_url)]];
+    const ready = d.scenes.length && d.scenes.every(s => s.clip_url);
+    const failed = p.scenes.filter(s => s.status === 'error').map(s => s.index);
+    const cur = steps.findIndex(([, done]) => !done);
+    const chip = (icon, text, title = '', cls = '') => `<span class="st-stat ${cls}" title="${esc(title)}">${icon} ${text}</span>`;
+    const lenBad = d.scenes.length && !single && Math.abs(v.total - v.target) > 1;
+    return `<div class="card st-hero">
+        <div class="st-hero-top">
+          <div class="st-title"><input id="stTitle" value="${esc(d.name)}" ${run ? 'disabled' : ''} aria-label="Tên dự án">
+            <span class="tag ${esc(p.status)}">${esc(run ? 'Đang viết' : made ? 'Đã có prompt' : STATUS[p.status] || p.status)}</span></div>
+          <div class="st-hero-tools">
+            ${run ? '' : '<button class="icon-btn" data-act="clone" type="button" title="Nhân bản dự án (dùng làm mẫu)" aria-label="Nhân bản dự án">⧉</button>'}
+            <button class="icon-btn st-gear" data-act="settings" type="button" title="Cài đặt dự án (Bible, độ dài, tỉ lệ, góc máy, ràng buộc prompt)" aria-label="Cài đặt dự án">⚙</button>
+            ${run ? '' : '<button class="icon-btn st-del" data-act="delete" type="button" title="Xoá dự án" aria-label="Xoá dự án">🗑</button>'}
+          </div>
+        </div>
+        ${ideaHtml(p, d, run)}
+        <div class="st-steps">${steps.map(([label, done], k) => `<span class="st-step ${done ? 'done' : k === cur ? 'cur' : ''}">${done ? '✓ ' : ''}${label}</span>`).join('<i>›</i>')}</div>
+        <div class="st-stats">${chip('', esc(kind))}
+          ${d.scenes.length ? chip('🎬', `${d.scenes.length} cảnh`) + chip('⏱', `${v.total}s / ${v.target}s`, 'Tổng thời lượng các cảnh / thời lượng dự án', lenBad ? 'bad' : '') : chip('📝', 'Chưa có storyboard')}
+          ${chip('▭', esc(`${o.aspect || '9:16'} · ${o.quality || '720p'}`), 'Tỉ lệ khung hình · chất lượng')}
+          ${chip('🎥', esc(((S.meta.video_engines[o.video_engine] || {}).name || o.video_engine) + ` · clip ${durations.join('/')}s`), 'Model video — quyết định số giây mỗi cảnh')}
+          ${p.cloned_from ? chip('⧉', 'Bản sao', 'Dự án được nhân bản') : ''}</div>
+        <div class="st-actions"><div class="st-actions-main">
+          ${run ? '<button class="btn danger" data-act="cancel" type="button">■ Dừng</button>' : `
+            ${single ? `<button class="btn ${d.scenes.length ? 'ghost' : 'primary'}" data-act="storyboard" type="button" title="AI viết lại cảnh từ form ý tưởng (thay cảnh hiện tại) — xong là tự sinh prompt">${d.scenes.length ? '↻ AI viết lại cảnh' : '✍ AI viết cảnh'}</button>`
+              : `<button class="btn ${d.scenes.length ? 'ghost' : 'primary'}" data-act="storyboard" type="button">${d.scenes.length ? '↻ Viết lại storyboard' : '✍ Viết storyboard'}</button>
+                <button class="btn ghost" data-act="paste-board" type="button" title="Model đã viết xong nhưng app chưa lấy được câu trả lời → copy JSON của model dán vào đây (không tốn thêm lượt)">📋 Dán JSON</button>`}
+            ${S.dirty ? '<button class="btn ghost st-save" data-act="save" type="button">💾 Lưu thay đổi</button>' : ''}
+            <button class="btn ${made ? 'ghost' : 'primary'}" data-act="prompts" type="button" ${d.scenes.length && v.ok ? '' : 'disabled'} title="${v.ok ? 'Sinh prompt ảnh + video cho mọi cảnh' : 'Sửa lỗi đỏ ở bước Kiểm tra trước'}">⚡ ${made ? 'Sinh lại prompt' : o.auto_video !== false ? 'Sinh prompt & tạo video' : 'Sinh prompt'}</button>
+            <button class="btn ${made && !p.final_url ? 'primary' : 'ghost'}" data-act="make" type="button" ${made ? '' : 'disabled'} title="${made ? 'Tạo ảnh khung đầu → clip từng cảnh theo đúng prompt → ghép video' : 'Sinh prompt trước'}">▶ ${p.final_url ? 'Tạo lại video' : 'Tạo video'}</button>
+            ${failed.length && made ? `<button class="btn ghost" data-act="retry" data-idx="${failed.join(',')}" type="button">↻ Làm lại ${failed.length} cảnh lỗi</button>` : ''}
+            ${ready && made ? '<button class="btn ghost" data-act="assemble" type="button" title="Ghép lại từ clip đã có">⧉ Ghép lại</button>' : ''}
+            <button class="btn ghost" data-act="export" data-fmt="json" type="button" ${made ? '' : 'disabled'}>⬇ JSON</button>
+            <button class="btn ghost" data-act="export" data-fmt="xlsx" type="button" ${made ? '' : 'disabled'}>⬇ Excel</button>
+            ${p.exported_at ? '<button class="btn ghost" data-act="open-export" type="button">📂 Thư mục xuất</button>' : ''}`}
+          </div>
+          ${run ? '' : `<div class="st-actions-side"><label class="check st-postchip ${o.auto_video !== false ? 'on' : ''}" title="Bật: bấm Sinh prompt xong là app tạo luôn ảnh khung đầu → clip → ghép video (dùng lượt model ảnh / video ở Cài đặt → Model AI)">
+            <input type="checkbox" data-opt="auto_video" ${o.auto_video !== false ? 'checked' : ''}> ▶ Có prompt là tạo video luôn: <b>${o.auto_video !== false ? 'Bật' : 'Tắt'}</b></label></div>`}
+        </div>
+        ${run ? '' : checkHtml(v, d)}
+        ${p.error ? `<div class="camp-banner bad">${esc(p.error)}</div>` : ''}
+      </div>
+      <div id="stLive">${liveHtml(run)}</div>
+      ${p.final_url ? `<div class="card st-final"><div class="card-title">VIDEO HOÀN CHỈNH <span class="tag">${Math.round((p.final || {}).duration || 0)} giây · có trong Thư viện video</span></div>
+        <div class="st-final-body"><video src="${esc(p.final_url)}" controls playsinline></video>
+          <div class="st-final-side"><div class="row st-final-act"><button class="btn ghost sm" data-act="open-folder" type="button">📂 Mở thư mục chứa video</button></div>
+            <small class="muted mono">${esc((p.final || {}).job_id || '')}/final.mp4</small></div></div></div>` : ''}
+      <div class="card"><div class="card-title">TẦNG 1 · HỒ SƠ KHOÁ (BIBLE) <small class="muted">— tạo 1 lần, chèn NGUYÊN VĂN vào mọi prompt</small></div>
+        ${ioHtml(p, d, run)}
+        ${productLockHtml(o, run ? 'disabled' : '')}
+        <div class="grid2"><label class="field"><span>Sản phẩm / đạo cụ chính (tiếng Anh)</span><textarea data-bible="nhan_vat" rows="2" ${run ? 'disabled' : ''}>${esc((d.bible || {}).nhan_vat || '')}</textarea></label>
+          <label class="field"><span>Phong cách hình ảnh</span><textarea data-bible="phong_cach" rows="2" ${run ? 'disabled' : ''}>${esc((d.bible || {}).phong_cach || '')}</textarea></label></div>
+        ${charactersHtml(d, run)}</div>
+      <div class="st-board-head"><b>TẦNG 2 · STORYBOARD · ${d.scenes.length} cảnh · <span class="${lenBad ? 'warn-text' : ''}">${v.total}s / ${v.target}s</span></b>
+        ${made ? '<small class="muted">Tầng 3 — prompt từng cảnh nằm ngay dưới mỗi cảnh</small>' : ''}
+        ${run ? '' : '<button class="btn ghost sm" data-act="add-scene" type="button">+ Thêm cảnh</button>'}</div>
+      <div class="st-board st-pboard">${d.scenes.map((s, i) => promptSceneHtml(s, i, durations, run)).join('')
+        || `<div class="empty">${run ? 'Đang viết storyboard…' : 'Chưa có storyboard — bấm ✍ Viết storyboard.'}</div>`}</div>`;
+  }
+
   function projectHtml() {
+    if (PROMPT) return promptProjectHtml();
     const p = S.cur, d = S.draft, run = p.running;
     const durations = (S.meta.video_engines[d.options.video_engine] || { durations: ['10s'] }).durations.map(x => parseInt(x, 10));
     const total = d.scenes.reduce((a, s) => a + (+s.seconds || 0), 0);
@@ -737,8 +1049,7 @@ function createStudioPage(CFG) {
     const vid = S.meta.video_engines[o.video_engine] || {};
     const img = S.meta.image_engines[o.image_engine] || {};
     const chip = (icon, text, title = '') => `<span class="st-stat" title="${esc(title)}">${icon} ${text}</span>`;
-    // nguồn ý tưởng + bật bước ① ② + chưa có storyboard → đang ở giai đoạn duyệt ý tưởng
-    const briefPending = o.source_mode !== 'video' && o.idea_steps !== false && !d.scenes.length;
+    const briefPending = false;
     return `<div class="card st-hero">
         <div class="st-hero-top">
           <div class="st-title"><input id="stTitle" value="${esc(d.name)}" ${run ? 'disabled' : ''} aria-label="Tên dự án">
@@ -797,81 +1108,43 @@ function createStudioPage(CFG) {
         || `<div class="empty">${run ? 'Đang viết storyboard…' : 'Chưa có storyboard — bấm ✍ Viết storyboard (hoặc sửa ý tưởng rồi “Lưu &amp; viết lại storyboard”).'}</div>`}</div>`;
   }
 
-  // ⓪ ảnh tổng hợp cần khi có ≥ 2 trong: layout / bộ kết hợp · nhân vật · ảnh sản phẩm (khớp studio.needs_master)
-  function needsMaster(o, refsCount) {
-    if (o.master_on === false || o.scene_style === 'whiteboard') return false;
-    return [Boolean(o.cast_layout || o.cast_combo), Boolean((o.cast_characters || []).length), refsCount > 0].filter(Boolean).length >= 2;
-  }
-
-  // ------------------------------------------------------------ các bước: ① phân tích ý tưởng → ② AI viết lại ý tưởng →
-  // ③ storyboard → ④ video. Chạy liên tục (flow=auto) hoặc duyệt từng bước (review): dừng sau mỗi bước, sửa rồi Duyệt.
+  // Các bước (Studio Muse AI): ① Storyboard → ② Video. Chạy liên tục (flow=auto) hoặc duyệt từng bước (review).
   function stepsHtml(p, d, run) {
-    const o = d.options, b = d.brief || {};
+    const o = d.options;
     const nb = noBoard(o);
-    const boardLabel = nb ? '③ Chia clip (không storyboard)' : '③ Storyboard';
-    const boardGo = nb ? '▶ Tạo video' : '③ Viết storyboard';
-    const ideaSteps = o.source_mode !== 'video' && o.idea_steps !== false;
     const stage = run && S.progress ? S.progress.stage : '';
-    const runStep = !run ? '' : stage === 'master' ? 'compose' : stage === 'brief' ? (/phân tích/i.test((S.progress || {}).status || '') ? 'analyze' : 'rewrite')
-      : stage === 'script' ? 'storyboard' : stage ? 'video' : '';
-    const master = needsMaster(o, (p.refs || []).length) || p.master_url;
-    const steps = [
-      ['compose', '⓪ Ảnh tổng hợp', master ? Boolean(p.master_url) : null],
-      ['analyze', '① Phân tích ý tưởng', ideaSteps ? Boolean(b.analysis_text) : null],
-      ['rewrite', '② AI viết lại ý tưởng', ideaSteps ? Boolean(b.idea_ai) : null],
-      ['storyboard', boardLabel, d.scenes.length > 0],
-      ['video', '④ Video', Boolean(p.final_url)]];
-    const pending = steps.find(([, , done]) => done === false);
+    const runStep = !run ? '' : stage === 'script' ? 'storyboard' : stage ? 'video' : '';
+    const steps = [['storyboard', nb ? '① Chia clip (không storyboard)' : '① Storyboard', d.scenes.length > 0], ['video', '② Video', Boolean(p.final_url)]];
+    const pending = steps.find(([, , done]) => !done);
     const cur = runStep || (pending ? pending[0] : 'video');
     const flow = o.flow || (o.auto ? 'auto' : 'review');
-    const bar = `<div class="st-steps">${steps.map(([k, label, done]) => `<span class="st-step ${done === null ? 'skip'
-        : k === runStep ? 'run' : done ? 'done' : k === cur ? 'cur' : ''}">${done === true && k !== runStep ? '✓ ' : k === runStep ? '⏳ ' : ''}${label}${done === null ? ' <small>(bỏ qua)</small>' : ''}</span>`).join('<i>›</i>')}
+    const bar = `<div class="st-steps">${steps.map(([k, label, done]) => `<span class="st-step ${k === runStep ? 'run' : done ? 'done' : k === cur ? 'cur' : ''}">${done && k !== runStep ? '✓ ' : k === runStep ? '⏳ ' : ''}${label}</span>`).join('<i>›</i>')}
       <span class="st-flow" role="group" aria-label="Chế độ chạy"><button class="${flow === 'auto' ? 'on' : ''}" data-flow="auto" type="button" ${run ? 'disabled' : ''} title="Các bước tự nối nhau tới video">⚡ Chạy liên tục</button><button class="${flow === 'review' ? 'on' : ''}" data-flow="review" type="button" ${run ? 'disabled' : ''} title="Dừng sau mỗi bước để xem / sửa rồi duyệt">👁 Duyệt từng bước</button></span></div>`;
     if (run) return bar;
-    const dis = '';
-    // ⓪ ảnh tổng hợp vừa tạo, chưa sang bước sau → duyệt ảnh (tạo lại / duyệt → bước kế)
-    const masterCard = next => `${bar}<div class="st-stepcard st-master"><b>⓪ Ảnh tổng hợp</b> <small class="muted">— layout + nhân vật + sản phẩm đã ghép; các bước sau (phân tích, storyboard, khung đầu) chỉ dùng ảnh này + ảnh sản phẩm</small>
-        <div class="st-master-body"><button class="st-master-img" data-view-master="${esc(p.master_url)}" type="button" title="Xem lớn"><img src="${esc(p.master_url)}" alt="Ảnh tổng hợp"></button>
-          <div class="st-master-side"><small class="muted">Kiểm tra: đúng người, đúng trang phục, đúng sản phẩm (bao bì, nhãn), đúng bối cảnh. Chưa ưng → tạo lại (đổi model ảnh ở ⚙ nếu cần).</small>
-            <div class="row st-step-act"><button class="btn ghost" data-act="compose" type="button">↻ Tạo lại ảnh tổng hợp</button>
-              <button class="btn primary" data-act="${next[0]}" type="button">✓ Duyệt ảnh → ${next[1]}</button></div></div></div></div>`;
-    if (cur === 'compose') {
-      return `${bar}<div class="st-stepcard"><b>⓪ Ảnh tổng hợp</b><small class="muted">Model ảnh ghép layout + nhân vật + sản phẩm thành 1 ảnh hoàn chỉnh — dùng cho mọi bước sau.</small>
-        <div class="row st-step-act"><button class="btn primary" data-act="compose" type="button">🖼 Tạo ảnh tổng hợp</button></div></div>`;
-    }
-    if (cur === 'analyze' && ideaSteps) {
-      if (p.master_url) return masterCard(['analyze', '① Phân tích ý tưởng']);
-      return `${bar}<div class="st-stepcard"><b>① Phân tích ý tưởng</b><small class="muted">AI phân tích mục tiêu, người xem, sản phẩm, thông điệp, hook… dựa trên ý tưởng + nhân vật / layout / ảnh sản phẩm.</small>
-        <div class="row st-step-act"><button class="btn primary" data-act="analyze" type="button">🧠 Phân tích ý tưởng</button></div></div>`;
-    }
-    if (cur === 'storyboard' && !ideaSteps && p.master_url) return masterCard(['storyboard', boardGo]);
-    if (cur === 'rewrite' && ideaSteps) {
-      return `${bar}<div class="st-stepcard"><b>① Kết quả phân tích</b> <small class="muted">— sửa / bổ sung (giá, ưu đãi, cách dùng…) rồi duyệt; bước ② dùng nguyên văn phần này</small>
-        <textarea data-brief="analysis_text" rows="9" ${dis}>${esc(b.analysis_text || '')}</textarea>
-        <div class="row st-step-act"><button class="btn ghost" data-act="analyze" type="button">↻ Phân tích lại</button>
-          <button class="btn primary" data-act="approve-analyze" type="button">✓ Duyệt → ② AI viết lại ý tưởng</button></div></div>`;
-    }
     if (cur === 'storyboard') {
-      return `${bar}<div class="st-stepcard">${ideaSteps ? `<b>② Ý tưởng AI viết lại</b> <small class="muted">— sửa nếu cần rồi duyệt để ${nb ? 'tạo video (không storyboard)' : 'viết storyboard'}</small>
-        <textarea data-brief="idea_ai" rows="6">${esc(b.idea_ai || '')}</textarea>
-        ${b.analysis_text ? `<details class="st-brief-more"><summary>Xem / sửa phân tích (bước ①)</summary><textarea data-brief="analysis_text" rows="7">${esc(b.analysis_text)}</textarea></details>` : ''}
-        <div class="row st-step-act"><button class="btn ghost" data-act="rewrite" type="button">↻ Viết lại ý tưởng</button>
-          <button class="btn primary" data-act="approve-rewrite" type="button">✓ Duyệt → ${boardGo}</button></div>`
-        : nb ? `<b>${boardLabel}</b><small class="muted">App chia ý tưởng thành các clip nối tiếp rồi làm video luôn — không viết storyboard.</small>
-        <div class="row st-step-act"><button class="btn primary" data-act="storyboard" type="button">▶ Tạo video ngay</button></div>`
-        : `<b>③ Storyboard</b><small class="muted">${o.source_mode === 'video' ? 'Chuyển thể vật liệu video phân tích thành các cảnh.' : 'Viết các cảnh từ ý tưởng.'}</small>
-        <div class="row st-step-act"><button class="btn primary" data-act="storyboard" type="button">✍ Viết storyboard</button></div>`}</div>`;
+      return `${bar}<div class="st-stepcard"><b>${nb ? '① Chia clip' : '① Storyboard'}</b><small class="muted">${nb ? 'App chia ý tưởng thành các clip nối tiếp rồi làm video luôn.' : o.source_mode === 'video' ? 'Chuyển thể vật liệu video phân tích thành các cảnh.' : 'Viết các cảnh từ ý tưởng.'}</small>
+        <div class="row st-step-act"><button class="btn primary" data-act="storyboard" type="button">${nb ? '▶ Tạo video ngay' : '✍ Viết storyboard'}</button></div></div>`;
     }
     if (cur === 'video' && !p.final_url && d.scenes.length) {
-      return `${bar}<div class="st-stepcard"><b>${nb ? `③ Đã chia ${d.scenes.length} clip` : `③ Storyboard đã xong — ${d.scenes.length} cảnh`}</b><small class="muted">Xem / sửa các cảnh bên dưới (lời thoại, prompt, bình luận…) rồi duyệt để tạo video.</small>
-        <div class="row st-step-act">${ideaSteps && b.idea_ai ? '<button class="btn ghost" data-act="approve-rewrite" type="button">↻ Viết lại storyboard</button>' : ''}
-          <button class="btn primary" data-act="approve-board" type="button">✓ Duyệt → ④ Tạo video</button></div></div>`;
+      return `${bar}<div class="st-stepcard"><b>${nb ? `① Đã chia ${d.scenes.length} clip` : `① Storyboard đã xong — ${d.scenes.length} cảnh`}</b><small class="muted">Xem / sửa các cảnh bên dưới rồi duyệt để tạo video.</small>
+        <div class="row st-step-act"><button class="btn primary" data-act="approve-board" type="button">✓ Duyệt → ② Tạo video</button></div></div>`;
     }
     return bar;
   }
 
   // Ý tưởng: xem / sửa ngay trên trang rồi lưu, hoặc lưu + viết lại storyboard
   function ideaHtml(p, d, run) {
+    if (PROMPT && d.form) {  // Studio: form ý tưởng (Bước 1)
+      if (!S.editIdea || run) {
+        return `<div class="st-idea-box st-formview">${FORM_KEYS.filter(([k]) => d.form[k]).map(([k, label]) => `<p><b>${label.replace(' *', '')}:</b> ${esc(d.form[k])}</p>`).join('')}
+          ${run ? '' : '<button class="link" data-act="edit-idea" type="button">✎ Sửa form ý tưởng</button>'}</div>`;
+      }
+      return `<div class="st-idea-box editing">${formHtml(S.formDraft || d.form, 'data-fe')}
+        <div class="row st-idea-act"><small class="muted">Viết lại storyboard sẽ thay các cảnh hiện tại — muốn giữ bản cũ thì ⧉ Nhân bản trước.</small>
+          <button class="btn ghost sm" data-act="idea-cancel" type="button">Huỷ</button>
+          <button class="btn ghost sm" data-act="idea-save" type="button">💾 Lưu</button>
+          <button class="btn primary sm" data-act="idea-rerun" type="button">↻ Lưu &amp; viết lại storyboard</button></div></div>`;
+    }
     if (!S.editIdea || run) {
       return `<div class="st-idea-box"><p class="st-idea">${esc(d.idea || p.idea)}</p>
         ${run ? '' : '<button class="link" data-act="edit-idea" type="button">✎ Sửa ý tưởng</button>'}</div>`;
@@ -888,14 +1161,12 @@ function createStudioPage(CFG) {
 
   // Tiến trình (giống trang Tạo video): các bước + thanh % + trạng thái + nhật ký.
   // Vẽ lại riêng phần này khi có log (không vẽ lại cả trang → video đang xem không bị tải lại)
-  const STAGES = [['master', 'Ảnh tổng hợp'], ['brief', 'Ý tưởng'], ['script', 'Storyboard'], ['frame', 'Ảnh khung đầu'], ['clip', 'Clip cảnh'], ['ai', 'Hậu kỳ AI'],
-    ['post', 'Ghép video'], ['finish', 'Hoàn tất']];
+  const STAGES = [['script', 'Storyboard'], ['frame', 'Ảnh khung đầu'], ['clip', 'Clip cảnh'], ['ai', 'Hậu kỳ AI'], ['post', 'Ghép video'], ['finish', 'Hoàn tất']];
   function liveHtml(run) {
     if (!run && !S.logs.length) return '';
     const pr = S.progress || { pct: 0, status: run ? 'Đang chờ tới lượt' : '', stage: '' };
     const pct = Math.round(+pr.pct || 0);
-    const stages = STAGES.filter(([id]) => (id !== 'ai' || (S.draft && S.draft.options.post_ai) || pr.stage === 'ai')
-      && (id !== 'master' || pr.stage === 'master'));  // ⓪ chỉ hiện khi đang ghép ảnh tổng hợp
+    const stages = STAGES.filter(([id]) => id !== 'ai' || (S.draft && S.draft.options.post_ai) || pr.stage === 'ai');
     const cur = stages.findIndex(([id]) => id === pr.stage);
     const finished = !run && pct >= 100;
     return `<div class="card st-prog ${run ? 'running' : ''}">
@@ -922,7 +1193,7 @@ function createStudioPage(CFG) {
     const texts = (s.lines || []).map(l => l.text || '').filter(t => t.trim());
     if (!texts.length && (s.narration || '').trim()) texts.push(s.narration);
     const words = texts.reduce((a, t) => a + t.trim().split(/\s+/).length, 0);
-    return words ? words / 2.6 + 0.35 * Math.max(0, texts.length - 1) + 1 : 0;
+    return words ? words / 3.8 + 0.35 * Math.max(0, texts.length - 1) + 0.8 : 0;
   }
 
   function speechWarn(s, durations) {
@@ -1013,9 +1284,11 @@ function createStudioPage(CFG) {
       ioTile(layout ? castUrl(layout) : '', layout ? `Layout · ${layout.name}` : 'Không dùng layout', '🏞', 'wide'),
       ...(prods.length ? prods.map((u, i) => ioTile(u, `Sản phẩm ${i + 1}`, '📦')) : [ioTile('', 'Chưa có ảnh sản phẩm', '📦')]),
       ...(p.logo_url ? [ioTile(p.logo_url, 'Logo', '🏷', 'logo')] : [])];
-    const master = needsMaster(o, prods.length) || p.master_url;
+    if (PROMPT) {
+      return `<div class="st-io st-io-in"><div class="st-io-col"><div class="st-io-h"><b>📥 Ảnh tham chiếu</b><small class="muted">đính kèm khi tạo ảnh / video ở công cụ ngoài</small>
+        ${run ? '' : '<button class="link" data-act="settings" type="button">✎ Đổi</button>'}</div><div class="st-io-row">${ins.join('')}</div></div></div>`;
+    }
     const outs = [
-      ...(master ? [ioTile(p.master_url, p.master_url ? '⓪ Ảnh tổng hợp' : '⓪ Ảnh tổng hợp — chưa tạo', '🧩', 'wide')] : []),
       ...frames.slice(0, 6).map(s => ioTile(s.frame_url, `Khung đầu cảnh ${s.index}`, '🖼')),
       ...(frames.length > 6 ? [`<div class="st-io-tile none more"><i>+${frames.length - 6}</i><small>khung đầu khác</small></div>`] : []),
       ...(!frames.length ? [ioTile('', d.scenes.length ? 'Khung đầu — chưa tạo' : 'Khung đầu — sau storyboard', '🖼')] : []),
@@ -1053,8 +1326,9 @@ function createStudioPage(CFG) {
           <select data-char="voice" ${dis} title="Giọng lồng tiếng của nhân vật">${selectOptions([['', 'Giọng mặc định của dự án'], ...voices.map(x => [x.value, x.label])], c.voice || '')}</select>
           <button class="btn ghost sm" data-char-preview type="button" title="Nghe thử giọng nhân vật">🔊</button>
           ${run ? '' : '<button class="btn ghost sm" data-char-del type="button" title="Xoá nhân vật">✕</button>'}</div>
-        <div class="grid2"><label class="field"><span>Ngoại hình cố định (tiếng Anh: tuổi, khuôn mặt, tóc, vóc dáng)</span><textarea data-char="look" rows="2" ${dis}>${esc(c.look || '')}</textarea></label>
-          <label class="field"><span>Trang phục cố định (tiếng Anh: áo, quần / váy, màu, phụ kiện)</span><textarea data-char="outfit" rows="2" ${dis}>${esc(c.outfit || '')}</textarea></label></div></div>`).join('')
+        ${c.locked ? '<small class="st-lockline">🔒 IDENTITY LOCK từ thư viện — chép nguyên văn, sửa ở màn <button class="link" data-goto-cast type="button">Nhân vật &amp; Layout</button></small>' : ''}
+        <div class="grid2"><label class="field"><span>Ngoại hình cố định (tiếng Anh: tuổi, khuôn mặt, tóc, vóc dáng)</span><textarea data-char="look" rows="2" ${dis} ${c.locked ? 'readonly class="locked"' : ''}>${esc(c.look || '')}</textarea></label>
+          <label class="field"><span>Trang phục cố định (tiếng Anh: áo, quần / váy, màu, phụ kiện)</span><textarea data-char="outfit" rows="2" ${dis} ${c.locked ? 'readonly class="locked"' : ''}>${esc(c.outfit || '')}</textarea></label></div></div>`).join('')
         || '<small class="muted">Chưa có hồ sơ nhân vật — viết storyboard mới sẽ tự tạo, hoặc bấm “+ Nhân vật”.</small>'}</div>`;
   }
 
@@ -1142,7 +1416,8 @@ function createStudioPage(CFG) {
       else if (t.id === 'stIdeaEdit') S.ideaDraft = t.value;  // sửa ý tưởng: chỉ lưu khi bấm Lưu
       else if (t.id === 'stName' || t.id === 'stTitle') { d.name = t.value; if (t.id === 'stTitle') markDirty(); }
       else if (t.dataset.bible) { d.bible = { ...(d.bible || {}), [t.dataset.bible]: t.value }; markDirty(); }
-      else if (t.dataset.brief) { d.brief = { ...(d.brief || {}), [t.dataset.brief]: t.value }; markDirty(); }  // bước 1–2
+      else if (t.dataset.form) d.form = { ...(d.form || {}), [t.dataset.form]: t.value };  // form ý tưởng (dự án mới)
+      else if (t.dataset.fe) S.formDraft = { ...(S.formDraft || d.form || {}), [t.dataset.fe]: t.value };  // sửa form (dự án đang mở)
       else if (t.dataset.sf && t.tagName !== 'SELECT') { d.scenes[+t.closest('[data-i]').dataset.i][t.dataset.sf] = t.value; markDirty(); }
       else if (t.dataset.ov) {  // chữ trên giao diện layout của cảnh
         const sc = d.scenes[+t.closest('[data-i]').dataset.i];
@@ -1177,8 +1452,9 @@ function createStudioPage(CFG) {
           t.closest('label').querySelector('output').textContent = `${Math.round(t.value * 100)}%`;
         }
         if (S.cur) markDirty();
+        if (t.dataset.opt === 'auto_video' && S.cur) return save(false);  // công tắc: lưu ngay, không làm prompt cũ hết hạn
         if (['model', 'image_engine', 'video_engine', 'scene_style', 'dub', 'lock_outfit', 'ref_note', 'negative_extra', 'post_ai', 'post_model',
-          'post_subs', 'subtitles', 'post_style', 'cast_direct', 'frame_mode', 'source_mode', 'chat_overlay', 'flow', 'idea_steps', 'transition_on', 'master_on', 'storyboard', 'shot_size', 'camera_angle', 'bgm', 'transition', 'length', 'aspect', 'quality'].includes(t.dataset.opt)) render();
+          'post_subs', 'subtitles', 'post_style', 'cast_direct', 'frame_mode', 'source_mode', 'chat_overlay', 'flow', 'transition_on', 'storyboard', 'frame_lock', 'frame_host', 'natural_look', 'shot_size', 'camera_angle', 'bgm', 'transition', 'length', 'aspect', 'quality'].includes(t.dataset.opt)) render();
       } else if (t.dataset.ban) {  // ràng buộc prompt: bật/tắt từng thứ bị cấm trong hình
         const all = (S.meta.bans || []).map(b => b.value);
         const on = new Set(bansOf(d.options));
@@ -1188,11 +1464,14 @@ function createStudioPage(CFG) {
         render();
       } else if (t.dataset.sf === 'seconds') { d.scenes[+t.closest('[data-i]').dataset.i].seconds = +t.value; markDirty(); }
       else if (t.dataset.sf === 'speaker') { d.scenes[+t.closest('[data-i]').dataset.i].speaker = t.value; markDirty(); }
-      else if (t.dataset.sf === 'shot' || t.dataset.sf === 'angle') { d.scenes[+t.closest('[data-i]').dataset.i][t.dataset.sf] = t.value; markDirty(); }
+      else if (['shot', 'angle', 'purpose'].includes(t.dataset.sf) && t.tagName === 'SELECT') { d.scenes[+t.closest('[data-i]').dataset.i][t.dataset.sf] = t.value; markDirty(); }
+      else if (t.dataset.sp !== undefined) { d.scenes[+t.closest('[data-i]').dataset.i].product = t.checked; markDirty(); render(); }
       else if (t.dataset.char === 'voice') { charsOf(d)[+t.closest('[data-ci]').dataset.ci].voice = t.value; markDirty(); }
       else if (t.dataset.line === 'who') {
         d.scenes[+t.closest('[data-i]').dataset.i].lines[+t.closest('[data-li]').dataset.li].who = t.value; markDirty();
       }
+      // Studio: rời ô lời thoại / số giây / người nói → vẽ lại để cập nhật bước Kiểm tra
+      if (PROMPT && S.cur && (t.dataset.sf || t.dataset.line)) render();
     };
     root.onclick = async e => {
       const grp = e.target.closest('summary[data-grp]');
@@ -1238,8 +1517,31 @@ function createStudioPage(CFG) {
         if (S.cur) markDirty();
         return render();
       }
-      if (t.dataset.viewMaster !== undefined) {  // ⓪ xem lớn ảnh tổng hợp
-        return openModal('DỰ ÁN', 'Ảnh tổng hợp', `<img src="${esc(t.dataset.viewMaster)}" alt="Ảnh tổng hợp" style="max-width:100%;max-height:78vh;display:block;margin:auto;border-radius:10px">`);
+      if (t.dataset.kind) { applyKind(t.dataset.kind); return render(); }  // Bước 0 — mẫu dự án (điền sẵn lựa chọn hợp mẫu)
+      if (t.dataset.kindAdd !== undefined) return kindDialog();
+      if (t.dataset.kindTrend !== undefined) return kindDialog({}, true);
+      if (t.dataset.kindEdit) return kindDialog((S.meta.kinds || []).find(x => x.value === t.dataset.kindEdit) || {});
+      if (t.dataset.kindDel) {
+        const k = (S.meta.kinds || []).find(x => x.value === t.dataset.kindDel);
+        if (!k || !confirm(`Xoá mẫu “${k.label}”? Dự án đã dùng mẫu này vẫn giữ storyboard.`)) return;
+        const res = await api(CFG.api + 'kinds_delete', k.value);
+        if (!res.ok) return toast(res.error, 'error');
+        S.meta.kinds = res.kinds;
+        if (S.draft && S.draft.options.kind === k.value) S.draft.options = { ...S.draft.options, kind: 'story' };
+        return render();
+      }
+      if (t.dataset.ptab) {  // Tầng 3: đổi tab Prompt Ảnh / Prompt Video của 1 cảnh
+        const sc = S.draft.scenes[+t.closest('[data-i]').dataset.i];
+        S.ptab = { ...(S.ptab || {}), [sc.index]: t.dataset.ptab };
+        return render();
+      }
+      if (t.dataset.copy) {  // copy prompt của cảnh (đủ cả phần LOCK)
+        const sc = S.draft.scenes[+t.closest('[data-i]').dataset.i];
+        const made = ((S.cur.prompts || {}).scenes || []).find(x => x.index === sc.index);
+        const text = ((made || {})[t.dataset.copy] || []).map(x => x.text).join('\n');
+        try { await navigator.clipboard.writeText(text); toast(`Đã copy ${t.dataset.copy === 'image' ? 'Prompt Ảnh' : 'Prompt Video'} cảnh ${sc.index}`, 'ok'); }
+        catch { toast('Không copy được — chọn chữ rồi Ctrl+C', 'warn'); }
+        return;
       }
       if (t.dataset.livePreview !== undefined) {  // 👁 xem trước giao diện livestream
         const label = t.textContent;
@@ -1442,14 +1744,71 @@ function createStudioPage(CFG) {
       }
       const act = t.dataset.act;
       if (act === 'add-scene') {
-        S.draft.scenes.push({ title: `Cảnh ${S.draft.scenes.length + 1}`, narration: '', image_prompt: '', motion_prompt: '', seconds: 10 });
+        S.draft.scenes.push({ title: `Cảnh ${S.draft.scenes.length + 1}`, narration: '', image_prompt: '', motion_prompt: '', seconds: 10, purpose: '', product: true });
         S.dirty = true; return render();
       }
       if (act === 'save') return save(true);
       if (act === 'settings') return openOpts();
       if (act === 'clone') return openClone();
-      if (act === 'edit-idea') { S.editIdea = true; S.ideaDraft = S.draft.idea || S.cur.idea; render(); $('#stIdeaEdit') && $('#stIdeaEdit').focus(); return; }
-      if (act === 'idea-cancel') { S.editIdea = false; S.ideaDraft = null; return render(); }
+      if (act === 'edit-idea') { S.editIdea = true; S.ideaDraft = S.draft.idea || S.cur.idea; S.formDraft = S.draft.form ? { ...S.draft.form } : null; render(); $('#stIdeaEdit') && $('#stIdeaEdit').focus(); return; }
+      if (act === 'idea-cancel') { S.editIdea = false; S.ideaDraft = null; S.formDraft = null; return render(); }
+      if (PROMPT && S.draft.form && (act === 'idea-save' || act === 'idea-rerun')) {  // Studio: lưu form ý tưởng
+        const f = { ...S.draft.form, ...(S.formDraft || {}) };
+        if ((f.chu_de || '').trim().length < 3) return toast('Nhập “Sản phẩm / chủ đề”', 'warn');
+        if (act === 'idea-rerun' && S.draft.scenes.length && !confirm('Viết lại storyboard từ form mới? Các cảnh hiện tại sẽ bị thay thế.')) return;
+        S.draft.form = f; S.dirty = true;
+        if (!(await save(false))) return;
+        S.editIdea = false; S.formDraft = null;
+        if (act === 'idea-rerun') return start('storyboard');
+        toast('Đã lưu form ý tưởng', 'ok');
+        return render();
+      }
+      if (act === 'prompts') {  // Bước 4 — sinh prompt (lưu thay đổi trước; lỗi đỏ → backend báo)
+        if (S.dirty && !(await save(false))) return;
+        t.disabled = true;
+        const res = await api(CFG.api + 'prompts', S.cur.id);
+        t.disabled = false;
+        if (!res.ok) return toast(res.error, 'error');
+        S.cur = res.project; S.draft = clone(S.cur); S.dirty = false;
+        toast(`Đã sinh prompt cho ${(S.cur.prompts.scenes || []).length} cảnh — xem tab Prompt Ảnh / Prompt Video dưới mỗi cảnh`, 'ok');
+        render();
+        if (S.cur.options.auto_video !== false) return start('make');  // có prompt là tạo video luôn
+        return;
+      }
+      if (act === 'export') {  // Bước 5 — xuất JSON / Excel vào <dự án>/export/
+        if (S.dirty && !(await save(false))) return;
+        t.disabled = true;
+        const res = await api(CFG.api + 'export', S.cur.id, t.dataset.fmt);
+        t.disabled = false;
+        if (!res.ok) return toast(res.error, 'error');
+        S.cur = res.result.project; S.draft = clone(S.cur);
+        toast(`Đã xuất ${t.dataset.fmt === 'json' ? 'JSON' : 'Excel'}: ${res.result.path.split(/[\\/]/).pop()} — bấm 📂 Thư mục xuất để mở`, 'ok');
+        return render();
+      }
+      if (act === 'paste-board') {  // cứu storyboard: dán JSON model đã viết (app chưa đọc được câu trả lời)
+        openModal('DÁN JSON STORYBOARD', S.cur.name, `<div id="stPasteDlg" class="st-optdlg">
+          <p class="hint">Model đã viết xong nhưng app chưa lấy được? Copy nguyên câu trả lời (JSON có "canh") của model rồi dán vào đây — app đọc thành các cảnh, không hỏi model lại.</p>
+          <textarea id="stPasteJson" class="mono" rows="14" placeholder='{"nhan_vat_ds":[…],"nhan_vat":"…","phong_cach":"…","canh":[…]}'></textarea>
+          <div class="modal-foot st-optfoot"><button class="btn ghost" data-paste-cancel type="button">Huỷ</button>
+            <button class="btn primary" data-paste-go type="button">📋 Đọc thành storyboard</button></div></div>`, true);
+        $('#stPasteDlg').onclick = async e => {
+          const b = e.target.closest('button');
+          if (!b) return;
+          if (b.dataset.pasteCancel !== undefined) return closeModal();
+          if (b.dataset.pasteGo === undefined) return;
+          if (S.draft.scenes.length && !confirm('Thay các cảnh hiện tại bằng storyboard dán vào?')) return;
+          b.disabled = true;
+          const res = await api(CFG.api + 'import_storyboard', S.cur.id, $('#stPasteJson').value);
+          b.disabled = false;
+          if (!res.ok) return toast(res.error, 'error');
+          closeModal();
+          S.cur = res.project; S.draft = clone(S.cur); S.dirty = false;
+          toast(`Đã đọc ${S.cur.scenes.length} cảnh từ JSON`, 'ok');
+          render();
+        };
+        return;
+      }
+      if (act === 'open-export') { const res = await api(CFG.api + 'open_export', S.cur.id); if (!res.ok) toast(res.error, 'error'); return; }
       if (act === 'idea-save' || act === 'idea-rerun') {
         const idea = String(S.ideaDraft ?? '').trim();
         if (idea.length < 10) return toast('Ý tưởng quá ngắn (ít nhất 1 câu)', 'warn');
@@ -1486,12 +1845,7 @@ function createStudioPage(CFG) {
         return toast(t.dataset.flow === 'auto' ? 'Chạy liên tục: các bước tự nối tới video' : 'Duyệt từng bước: dừng sau mỗi bước để bạn xem / sửa', 'ok');
       }
       // duyệt bước → chạy bước kế tiếp (lưu phần đã sửa trước)
-      const next = { 'approve-analyze': 'rewrite', 'approve-rewrite': 'storyboard', 'approve-board': 'make' }[act];
-      if (next) {
-        if (next === 'storyboard' && S.draft.scenes.length && !confirm('Viết storyboard mới từ ý tưởng đã duyệt? Các cảnh hiện tại sẽ bị thay thế.')) return;
-        return start(next);
-      }
-      if (['compose', 'analyze', 'rewrite'].includes(act)) return start(act);
+      if (act === 'approve-board') return start('make');
       if (act === 'storyboard' && S.draft.scenes.length
         && !confirm('Viết lại storyboard từ ý tưởng? Các cảnh hiện tại sẽ bị thay thế.')) return;
       if (act === 'post') return start('post', [], t.dataset.what || 'both');  // hậu kỳ AI tiếp trên video đã xong
@@ -1531,7 +1885,7 @@ function createStudioPage(CFG) {
       ${refs.length < 6 ? '<button class="st-clone-ref st-clone-add" data-clone-addref type="button"><b>+</b><small>Thêm ảnh</small></button>' : ''}`;
     openModal('NHÂN BẢN DỰ ÁN', p.name, `<div id="stCloneDlg" class="st-clone">
       <label class="field"><span>Tên dự án mới</span><input id="stCloneName" value="${esc(p.name)} (bản sao)"></label>
-      <div class="st-clone-opts">${CLONE_MODES.map(([v, title, desc]) => `<label class="st-clone-opt">
+      <div class="st-clone-opts">${CLONE_MODES.filter(([v]) => !PROMPT || v !== 'media').map(([v, title, desc]) => `<label class="st-clone-opt">
         <input type="radio" name="stCloneMode" value="${v}" ${v === 'storyboard' ? 'checked' : ''}><span><b>${title}</b><small class="muted">${desc}</small></span></label>`).join('')}</div>
       <div class="field"><span>Ảnh tham chiếu cho bản sao (nhân vật / sản phẩm, tối đa 6) — bỏ ✕ ảnh cũ hoặc thêm ảnh mới</span>
         <div class="st-clone-refs" id="stCloneRefs">${refsHtml()}</div></div>
@@ -1570,16 +1924,17 @@ function createStudioPage(CFG) {
     if (d.options.source_mode === 'video') {  // kịch bản từ video phân tích — không cần ý tưởng
       if (!S.newRefVideo) return toast('Dán link / chọn file video rồi bấm 🔍 Phân tích trước', 'warn');
     } else if (S.batch) return createBatch(btn);
-    else if ((d.idea || '').trim().length < 10) return toast('Hãy mô tả ý tưởng video', 'warn');
+    else if (PROMPT && ((d.form || {}).chu_de || '').trim().length < 3) return toast('Nhập “Sản phẩm / chủ đề”', 'warn');
+    else if (!PROMPT && (d.idea || '').trim().length < 10) return toast('Hãy mô tả ý tưởng video', 'warn');
     btn.disabled = true;
-    const res = await api(CFG.api + 'create', { idea: d.idea, name: d.name, refs: S.refs, logo: S.newLogo || '', options: d.options,
-      ref_video: S.newRefVideo || null });
+    const res = await api(CFG.api + 'create', { idea: PROMPT ? '' : d.idea, ...(PROMPT ? { form: d.form } : {}), name: d.name, refs: S.refs,
+      logo: S.newLogo || '', options: d.options, ref_video: S.newRefVideo || null });
     btn.disabled = false;
     if (!res.ok) return toast(res.error, 'error');
     S.tasks[res.result.task] = res.result.project.id;
     S.cur = res.result.project; S.draft = clone(S.cur); S.dirty = false; S.refs = []; S.newLogo = ''; S.newRefVideo = null; S.logs = []; S.wiz = 0; S.wizMax = 0;
     S.progress = { pct: 0, status: 'Đang viết storyboard' };
-    toast(d.options.auto ? 'Đang viết storyboard rồi tự làm video…' : 'Đang viết storyboard…', 'ok');
+    toast(PROMPT && d.options.kind === 'single' ? 'Đang tạo cảnh từ form…' : d.options.auto && !PROMPT ? 'Đang viết storyboard rồi tự làm video…' : 'Đang viết storyboard…', 'ok');
     await loadList();
     render();
   }
@@ -1589,15 +1944,16 @@ function createStudioPage(CFG) {
     const n = ideaLines(d.idea).length;
     if (!n) return toast('Nhập ít nhất 1 ý tưởng (mỗi dòng 1 ý tưởng, tối thiểu 1 câu)', 'warn');
     if (n > 20) return toast(`Tối đa 20 ý tưởng mỗi lần (đang có ${n})`, 'warn');
-    if (!confirm(`Tạo ${n} video? Mỗi video sẽ tự viết storyboard, tạo ảnh + clip từng cảnh rồi ghép — dùng lượt của các model đã chọn.`)) return;
+    if (!confirm(PROMPT ? `Tạo ${n} dự án? Mỗi dự án AI viết storyboard (không tạo ảnh / video — sinh prompt sau).`
+      : `Tạo ${n} video? Mỗi video sẽ tự viết storyboard, tạo ảnh + clip từng cảnh rồi ghép — dùng lượt của các model đã chọn.`)) return;
     btn.disabled = true;
-    const res = await api(CFG.api + 'create_batch', { idea: d.idea, name: d.name, refs: S.refs, logo: S.newLogo || '', options: d.options,
-      ref_video: S.newRefVideo || null });
+    const res = await api(CFG.api + 'create_batch', { idea: d.idea, ...(PROMPT ? { form: d.form } : {}), name: d.name, refs: S.refs,
+      logo: S.newLogo || '', options: d.options, ref_video: S.newRefVideo || null });
     btn.disabled = false;
     if (!res.ok) return toast(res.error, 'error');
     res.result.tasks.forEach((task, i) => { S.tasks[task] = res.result.projects[i].id; });
     S.draft = null; S.refs = []; S.newLogo = ''; S.cur = null; S.wiz = 0; S.wizMax = 0;
-    toast(`Đã tạo ${res.result.projects.length} dự án — đang xếp hàng làm video`, 'ok');
+    toast(`Đã tạo ${res.result.projects.length} dự án — đang xếp hàng ${PROMPT ? 'viết storyboard' : 'làm video'}`, 'ok');
     await loadList();
     render();
   }
@@ -1605,9 +1961,10 @@ function createStudioPage(CFG) {
   async function save(notify) {
     const d = S.draft;
     const res = await api(CFG.api + 'save', S.cur.id, { name: d.name, idea: d.idea, options: d.options, bible: d.bible,
-      ref_video: d.ref_video || null, brief: { analysis_text: (d.brief || {}).analysis_text || '', idea_ai: (d.brief || {}).idea_ai || '' },
+      ref_video: d.ref_video || null, ...(PROMPT && d.form ? { form: d.form } : {}),
       scenes: d.scenes.map(s => ({ index: s.index, title: s.title, narration: s.narration, speaker: s.speaker || '', image_prompt: s.image_prompt,
-        motion_prompt: s.motion_prompt, seconds: s.seconds, lines: s.lines || [],
+        motion_prompt: s.motion_prompt, seconds: s.seconds, lines: s.lines || [], shot: s.shot || '', angle: s.angle || '',
+        purpose: s.purpose || '', product: s.product !== false, ...(s.overlay ? { overlay: s.overlay } : {}),
         ...(Array.isArray(s.cast) ? { cast: s.cast } : {}) })) });
     if (!res.ok) { toast(res.error, 'error'); return false; }
     S.cur = res.project; S.draft = clone(S.cur); S.dirty = false;
@@ -1629,7 +1986,6 @@ function createStudioPage(CFG) {
     S.logs = []; S.progress = { pct: 0, status: 'Đang chờ tới lượt' };
     toast({ make: indexes.length ? `Đang làm lại ${indexes.length} cảnh rồi ghép video…` : 'Đang làm các cảnh rồi ghép video…',
       assemble: 'Đang ghép video…', storyboard: 'Đang viết storyboard…',
-      compose: 'Bước ⓪ · Đang ghép ảnh tổng hợp (layout + nhân vật + sản phẩm)…', analyze: 'Bước 1 · Đang phân tích ý tưởng…', rewrite: 'Bước 2 · AI đang viết lại ý tưởng…',
       scenes: 'Đang làm lại cảnh…',
       post: what === 'fresh' ? 'Đang hỏi AI gợi ý hậu kỳ mới rồi ghép lại…' : 'Đang chạy hậu kỳ AI rồi ghép lại…' }[action], 'ok');
   }

@@ -1,6 +1,6 @@
 """API · Chiến dịch (phòng marketing AI) + thư viện chiến dịch."""
-import os
 
+from ..osutil import open_path
 from ..config import settings
 
 from .common import _fail, _ok
@@ -148,7 +148,7 @@ class CampaignApi:
             target = (cdir / rel).resolve() if rel else cdir
             if not target.is_relative_to(cdir.resolve()) or not target.exists():
                 raise ValueError("Không tìm thấy file")
-            os.startfile(target)
+            open_path(target)
             return True
 
         return self._camp("opened", run)
@@ -163,7 +163,7 @@ class CampaignApi:
             zip_dir = store.root(settings.output_dir) / "_zip"
             zip_dir.mkdir(parents=True, exist_ok=True)
             path = _shutil.make_archive(str(zip_dir / cid), "zip", cdir)
-            os.startfile(zip_dir)
+            open_path(zip_dir)
             return path
 
         return self._camp("path", run)

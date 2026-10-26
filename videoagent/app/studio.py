@@ -12,6 +12,7 @@ phụ đề, nhạc nền.
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import threading
@@ -20,7 +21,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import ffmpeg, model_prefs
+from .osutil import open_path
+from . import ffmpeg, model_prefs, studio_kinds
 from .browser_profiles import task_context
 from .image_library import IMAGES_DIR
 from .library import save_job
@@ -29,7 +31,7 @@ from .pipeline import ref_video as rvm
 from .llm.image_engines import ENGINES as IMAGE_ENGINES
 from .llm.video_engines import ENGINES as VIDEO_ENGINES
 from .pipeline import SCENE_TAIL, VOICE_LEAD, Cancelled, scene_dir_name
-from .pipeline import live_chat, live_sim, post_ai, transitions
+from .pipeline import frame_restore, live_chat, live_sim, post_ai, transitions
 from .pipeline.assets import extract_audio
 from .pipeline.composer import compose
 from .pipeline.tasks import TaskPool
@@ -79,7 +81,7 @@ def clean_characters(raw) -> list[dict]:
         voice = c.get("voice") if c.get("voice") is not None else c.get("giong")
         out.append({"name": name, "look": _flat(c.get("look") or c.get("ngoai_hinh"), 500),
                     "outfit": _flat(c.get("outfit") or c.get("trang_phuc"), 400),
-                    "voice": voice if voice in ROLES else ""})
+                    "voice": voice if voice in ROLES else "", **({"locked": True} if c.get("locked") else {})})
     return out[:MAX_CHARACTERS]
 
 
@@ -90,9 +92,9 @@ def merge_cast(characters: list[dict], fixed: list[dict]) -> list[dict]:
         desc = _flat(f.get("description") or f.get("summary"), 500)
         hit = next((c for c in out if c["name"].lower() == f["name"].lower()), None)
         if hit is None:
-            out.append({"name": _flat(f["name"], 40), "look": desc, "outfit": "", "voice": ""})
-        else:
-            hit.update(look=desc or hit["look"], outfit="")
+            out.append({"name": _flat(f["name"], 40), "look": desc, "outfit": "", "voice": "", "locked": True})
+        else:  # LOCK chép nguyên văn từ thư viện — model không được viết lại (viết lại = trôi mặt)
+            hit.update(look=desc or hit["look"], outfit="", locked=True)
     return out[:MAX_CHARACTERS]
 
 
@@ -193,9 +195,26 @@ def split_narration(text: str, count: int) -> list[str]:
 
 
 def no_storyboard(options: dict) -> bool:
-    """Tắt bước viết storyboard (chỉ với nguồn ý tưởng + AI video; video phân tích / whiteboard luôn cần storyboard)."""
+    """Bỏ bước viết storyboard: mẫu Clip đơn, hoặc tắt storyboard (chỉ với nguồn ý tưởng + AI video; video phân tích /
+    whiteboard luôn cần storyboard)."""
     return (options.get("storyboard") is False and options.get("source_mode") != "video"
             and options.get("scene_style") != "whiteboard")
+
+
+def clean_form(raw) -> dict:
+    """Form ý tưởng (Bước 1): chủ đề, điều người xem cần nhớ, thoại mẫu."""
+    raw = raw if isinstance(raw, dict) else {}
+    return {k: " ".join(str(raw.get(k) or "").split())[:limit] for k, (_, limit) in FORM_FIELDS.items()}
+
+
+def form_idea(form: dict, kind: str = "story") -> str:
+    """Form → ý tưởng gửi model viết storyboard (nguyên văn người dùng nhập, có nhãn)."""
+    lines = [f"{FORM_FIELDS[k][0]}: {form[k]}" for k in FORM_FIELDS if form.get(k)]
+    kinds = all_kinds()
+    if lines and kind in kinds:
+        name = re.sub(r"^[^\w]+", "", kinds[kind][0]).strip()  # bỏ emoji đầu tên mẫu
+        lines.insert(0, f"Dạng video: {name}")
+    return "\n".join(lines)
 
 
 def framing(scene: dict, options: dict) -> str:
@@ -212,7 +231,68 @@ def scene_count(length: int) -> int:
         return SHORT_SCENES[length]
     return max(MIN_SCENES, min(MAX_SCENES, round(length / 8)))
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
-SCENE_FIELDS = ("title", "narration", "speaker", "image_prompt", "motion_prompt", "seconds", "shot", "angle")
+SCENE_FIELDS = ("title", "narration", "speaker", "image_prompt", "motion_prompt", "seconds", "shot", "angle", "purpose")
+# Bước 0 — mẫu dự án: (tên, mô tả, ghi chú cho model viết storyboard). Clip đơn: bỏ qua storyboard (1 cảnh từ form).
+PROJECT_KINDS = {
+    "story": ("🎬 Video truyện nhiều cảnh", "Kể chuyện nhiều cảnh — duyệt storyboard rồi mới sinh prompt", ""),
+    "single": ("⚡ Clip đơn", "1 cảnh duy nhất (~10s) — AI viết cảnh, không cần duyệt storyboard, có prompt là tạo video",
+               "DẠNG VIDEO: clip đơn 1 cảnh — hook ngay giây đầu, 1 hành động chính, 1 câu thoại ngắn, kết bằng lời kêu gọi."),
+    "live": ("📱 Chuỗi livestream bán hàng", "Người bán nói thẳng với người xem — nhìn ống kính, cận trung",
+             "DẠNG VIDEO: chuỗi livestream bán hàng — người bán nói trực tiếp với người xem (nhìn thẳng ống kính), mỗi "
+             "cảnh 1 ý: chào → vấn đề của khách → giới thiệu sản phẩm → lợi ích → ưu đãi → kêu gọi mua."),
+    "kids": ("🧸 Bài học cho bé", "Hoạt hình tươi sáng, câu ngắn dễ hiểu, nhịp chậm",
+             "DẠNG VIDEO: bài học cho bé — câu rất ngắn, từ ngữ đơn giản, vui tươi, nhắc lại ý chính; hình hoạt hình 3D "
+             "tươi sáng, an toàn cho trẻ em, không cảnh đáng sợ."),
+    "problem": ("🩺 Vấn đề → Giải pháp", "Nêu nỗi lo của khách → giới thiệu sản phẩm giải quyết → kêu gọi",
+                "DẠNG VIDEO: vấn đề → giải pháp — cảnh 1 hook bằng nỗi lo cụ thể của khách (vd. cây vàng lá, trái nhỏ), "
+                "cảnh giữa giải thích nguyên nhân ngắn gọn rồi giới thiệu sản phẩm như cách xử lý, cảnh cuối kêu gọi. "
+                "Không hứa hẹn kết quả tuyệt đối, không bịa số liệu."),
+    "howto": ("📋 Hướng dẫn sử dụng", "Từng bước: pha, bón / dùng, liều lượng, lưu ý — rõ ràng, dễ làm theo",
+              "DẠNG VIDEO: hướng dẫn sử dụng — mỗi cảnh 1 bước theo thứ tự (chuẩn bị → pha / chia liều → bón / dùng → "
+              "lưu ý an toàn), cận tay thao tác và sản phẩm, lời thoại ngắn kiểu chỉ dẫn. Liều lượng, cách dùng CHỈ lấy "
+              "từ thông tin người dùng đưa; chưa có thì nói chung chung, không bịa con số."),
+    "before_after": ("🔁 Trước – sau / So sánh", "Đặt cạnh nhau: chưa dùng và đã dùng sản phẩm, nhấn vào khác biệt",
+                     "DẠNG VIDEO: trước – sau / so sánh — xen kẽ cảnh ‘trước’ (vấn đề) và ‘sau’ (cải thiện), cùng bối cảnh, "
+                     "cùng góc máy để dễ so sánh; kết bằng sản phẩm + lời kêu gọi. Chỉ minh hoạ, không khẳng định số liệu "
+                     "năng suất / thời gian khi người dùng chưa cung cấp."),
+    "review": ("⭐ Review / đập hộp", "Cận sản phẩm: bao bì, thành phần, cách mở, cảm nhận — như người dùng thật",
+               "DẠNG VIDEO: review sản phẩm — mở bằng cận bao bì, lần lượt giới thiệu điểm nổi bật (bao bì, thành phần, "
+               "cách dùng), người review nói tự nhiên như chia sẻ cá nhân; giữ đúng bao bì, không bịa thành phần."),
+    "expert": ("👨‍🔬 Chuyên gia tư vấn", "Kỹ sư / chuyên gia giải thích ngắn gọn, đáng tin, nhìn thẳng người xem",
+               "DẠNG VIDEO: chuyên gia tư vấn — 1 kỹ sư / chuyên gia nông nghiệp (nhân vật hư cấu) nói thẳng với người xem, "
+               "giải thích vấn đề → nguyên nhân → cách xử lý có sản phẩm; giọng chắc chắn, dễ hiểu, không dùng thuật ngữ khó, "
+               "không tự nhận là cơ quan / nhà khoa học có thật."),
+    "story_customer": ("🧑‍🌾 Khách hàng kể chuyện", "Nông dân / khách kể trải nghiệm của mình, chân thật, gần gũi",
+                       "DẠNG VIDEO: khách hàng kể chuyện — 1 nhân vật khách hàng (hư cấu, ghi rõ là minh hoạ) kể ngôi thứ nhất: "
+                       "hoàn cảnh → khó khăn → dùng sản phẩm → điều thay đổi; giọng mộc mạc, chân thật. KHÔNG bịa lời chứng "
+                       "thực có số liệu cụ thể (năng suất, tăng X%) khi người dùng chưa cung cấp."),
+    "promo": ("🔥 Khuyến mãi / flash sale", "Ngắn, nhịp nhanh: ưu đãi, thời hạn, cách mua — kêu gọi hành động mạnh",
+              "DẠNG VIDEO: khuyến mãi — nhịp nhanh, cảnh ngắn: hook bằng ưu đãi → sản phẩm → điều kiện / thời hạn → cách "
+              "mua. Ưu đãi, giá, thời hạn CHỈ lấy từ thông tin người dùng đưa, không tự đặt ra."),
+    "drama": ("🎭 Phim ngắn / drama", "Mini drama có tình huống, cao trào, cú lật — sản phẩm là lời giải",
+              "DẠNG VIDEO: phim ngắn / drama — có nhân vật, tình huống mâu thuẫn, cao trào và cú lật hợp lý; sản phẩm xuất "
+              "hiện tự nhiên như lời giải ở cuối, không quảng cáo lộ liễu giữa truyện; mỗi cảnh 1 người nói."),
+}
+
+
+def all_kinds() -> dict:
+    """Mẫu có sẵn + mẫu người dùng tự thêm (app/studio_kinds.py): mã → (tên, mô tả, ghi chú cho model)."""
+    return {**PROJECT_KINDS, **{k["key"]: (k["label"], k.get("hint", ""), k.get("note", "")) for k in studio_kinds.load()}}
+
+
+def kinds_meta() -> list[dict]:
+    """Danh sách mẫu cho giao diện (mẫu tự thêm kèm ghi chú, điền sẵn, nguồn video để sửa)."""
+    return ([{"value": k, "label": v[0], "hint": v[1]} for k, v in PROJECT_KINDS.items()]
+            + [{"value": k["key"], "label": k["label"], "hint": k.get("hint", ""), "note": k.get("note", ""),
+                "presets": k.get("presets", {}), "source": k.get("source", {}), "custom": True} for k in studio_kinds.load()])
+
+
+# mục đích từng cảnh trong storyboard (Tầng 2)
+PURPOSES = {"hook": "Hook — gây chú ý", "problem": "Vấn đề / nỗi đau", "intro": "Giới thiệu", "benefit": "Lợi ích",
+            "proof": "Bằng chứng / minh hoạ", "offer": "Ưu đãi", "cta": "CTA — kêu gọi", "story": "Diễn biến",
+            "lesson": "Bài học / kiến thức"}
+FORM_FIELDS = {"chu_de": ("Sản phẩm / chủ đề", 300), "thong_diep": ("Người xem cần nhớ điều gì", 400),
+               "thoai_mau": ("Thoại mẫu", 600)}
 # cỡ cảnh / góc máy: mã → (nhãn tiếng Việt, câu tiếng Anh chèn vào prompt). Dự án chọn chung, từng cảnh ghi đè được;
 # "auto" = model storyboard tự chọn theo từng cảnh; "mix" = xen kẽ toàn / trung / cận theo nhịp truyện
 SHOT_SIZES = {
@@ -273,37 +353,6 @@ KEEP_UI_RULE = """- Mỗi cảnh thêm "noi_dung_layout": {{"binh_luan": [3–{n
   ngắn trên màn (tên sản phẩm / ưu đãi / lời kêu gọi), có thể để trống"}}. Bình luận: ưu tiên dùng / phỏng theo bình luận
   thật của khách dưới đây; được thêm câu hỏi, lời chào trung tính (giá, cách dùng, ship, xin tư vấn…). KHÔNG bịa lời
   chứng thực kết quả (năng suất, khỏi bệnh, tăng X%…), KHÔNG bịa số lượt thích / người xem / đã bán.{real}"""
-ANALYSIS_FIELDS = ("muc_tieu", "khach_hang", "san_pham", "thong_diep", "cam_xuc", "hook", "goc_tiep_can", "luu_y",
-                   "can_bo_sung")
-ANALYSIS_LABELS = {"muc_tieu": "Mục tiêu", "khach_hang": "Người xem mục tiêu", "san_pham": "Sản phẩm / điểm nổi bật",
-                   "thong_diep": "Thông điệp chính", "cam_xuc": "Cảm xúc / giọng điệu", "hook": "Gợi ý mở đầu (hook)",
-                   "goc_tiep_can": "Hướng kể chuyện", "luu_y": "Lưu ý", "can_bo_sung": "Nên bổ sung"}
-ANALYZE_PROMPT = """Bạn là chuyên gia chiến lược nội dung video ngắn bán hàng. Hãy PHÂN TÍCH ý tưởng video dưới đây.
-<y_tuong>
-{idea}
-</y_tuong>
-Bối cảnh dự án:
-{context}
-Trả về MỘT object JSON (tiếng Việt, không markdown):
-{{"muc_tieu": "video nhằm đạt gì", "khach_hang": "người xem mục tiêu (nghề, nhu cầu, nỗi lo)",
- "san_pham": "sản phẩm / dịch vụ và điểm nổi bật (theo ảnh nếu có; không bịa thông số)", "thong_diep": "1 thông điệp chính",
- "cam_xuc": "cảm xúc / giọng điệu nên dùng", "hook": ["3 cách mở đầu cụ thể cho 3 giây đầu"],
- "goc_tiep_can": ["2–3 hướng kể chuyện phù hợp"], "luu_y": ["điều cần tránh (hứa hẹn quá mức, so sánh sai…)"],
- "can_bo_sung": ["thông tin còn thiếu người dùng nên bổ sung (giá, ưu đãi, cách dùng…)"]}}"""
-REWRITE_PROMPT = """Bạn là biên kịch video ngắn bán hàng. Viết lại ý tưởng thành BẢN Ý TƯỞNG HOÀN CHỈNH để viết storyboard,
-bám theo phân tích (người dùng đã duyệt / sửa).
-<y_tuong_goc>
-{idea}
-</y_tuong_goc>
-<phan_tich>
-{analysis}
-</phan_tich>
-Bối cảnh dự án:
-{context}
-Yêu cầu: 1 đoạn 120–220 từ tiếng Việt, cụ thể và hình dung được: hook mở đầu, diễn biến mở – thân – kết, nhân vật làm gì
-(dùng đúng nhân vật cố định nếu có), sản phẩm xuất hiện thế nào, thông điệp, lời kêu gọi cuối. Không bịa thông số, giá,
-cam kết hiệu quả mà người dùng chưa cung cấp.
-Chỉ trả về MỘT object JSON: {{"y_tuong": "…", "ten": "tên dự án ngắn"}}"""
 
 
 def settings_text(o: dict, p: dict) -> str:
@@ -346,52 +395,6 @@ def settings_text(o: dict, p: dict) -> str:
     if ban:
         lines.append(f"- Ràng buộc hình: {ban}")
     return "CÀI ĐẶT DỰ ÁN (người dùng đã chọn — phải bám theo):\n" + "\n".join(lines)
-
-
-MASTER_PROMPT = """Create ONE photorealistic {aspect} key visual for a short sales video.
-People: {people}
-Product: the product in the product reference image(s) — {product_note}
-Setting: {setting}
-Composition: the people naturally present / hold the product toward the camera, mid shot, clean background around them.
-Keep every person exactly as their reference image (face, skin tone, apparent age, hair, body type, outfit) — no beautify,
-de-age or ageing — and keep the product exactly as its reference (packaging, shape, colours, label text, logo).
-Natural light, sharp focus, realistic proportions. No extra people. No added text or watermark."""
-
-
-def master_path(p: dict) -> Path | None:
-    """Ảnh tổng hợp (⓪) của dự án nếu đã có file."""
-    path = Path(str((p.get("master") or {}).get("path") or ""))
-    return path if (p.get("master") or {}).get("path") and path.is_file() else None
-
-
-def needs_master(o: dict, p: dict) -> bool:
-    """Cần bước ⓪ khi có ít nhất 2 trong 3: layout / bộ kết hợp · nhân vật · ảnh sản phẩm (và bật master_on)."""
-    if not o.get("master_on", True) or o.get("scene_style") == "whiteboard":
-        return False
-    kinds = [bool(o.get("cast_layout") or o.get("cast_combo")), bool(o.get("cast_characters")),
-             bool([r for r in p.get("refs") or [] if Path(r).is_file()])]
-    return sum(kinds) >= 2
-
-
-def _try_json(text):
-    try:
-        return extract_json(text)
-    except ValueError:
-        return None
-
-
-def format_analysis(data: dict) -> str:
-    """Phân tích ý tưởng → chữ dễ đọc, sửa được (bước 2 dùng nguyên văn phần này)."""
-    out = []
-    for k in ANALYSIS_FIELDS:
-        v = data.get(k)
-        if isinstance(v, list):
-            items = [str(x).strip() for x in v if str(x).strip()]
-            if items:
-                out.append(f"{ANALYSIS_LABELS[k]}:\n" + "\n".join(f"- {x}" for x in items))
-        elif str(v or "").strip():
-            out.append(f"{ANALYSIS_LABELS[k]}: {str(v).strip()}")
-    return "\n".join(out)[:6000]
 
 
 KEEP_PROMPT = """Edit the FIRST attached image (a fixed layout). Keep EVERYTHING identical except the parts listed below:
@@ -545,8 +548,6 @@ def clean_options(raw: dict, settings) -> dict:
             # chế độ chạy: auto = các bước chạy liên tục tới video · review = dừng sau mỗi bước để duyệt / sửa
             "flow": raw.get("flow") if raw.get("flow") in ("auto", "review") else ("auto" if raw.get("auto") else "review"),
             "auto": raw.get("flow") == "auto" if raw.get("flow") in ("auto", "review") else bool(raw.get("auto")),
-            # nguồn ý tưởng: phân tích ý tưởng + AI viết lại ý tưởng trước khi viết storyboard
-            "idea_steps": bool(raw.get("idea_steps", True)),
             # viết storyboard (model viết từng cảnh để duyệt) · tắt = app chia ý tưởng thành các clip nối tiếp, làm video luôn
             "storyboard": bool(raw.get("storyboard", True)),
             # video tham khảo (link / file) đã phân tích: dùng khi viết storyboard hay không + cách dùng
@@ -562,11 +563,22 @@ def clean_options(raw: dict, settings) -> dict:
             "dub": bool(raw.get("dub", True)),
             # nhân vật: khuôn mặt LUÔN khoá; trang phục khoá (giống nhau mọi cảnh) hoặc đổi theo mô tả từng cảnh
             "lock_outfit": bool(raw.get("lock_outfit", True)),
+            # Bước 0 — mẫu dự án; PRODUCT LOCK — mô tả bao bì sản phẩm do người dùng viết, chèn NGUYÊN VĂN vào mọi prompt
+            "kind": raw.get("kind") if raw.get("kind") in all_kinds() else "story",
+            "auto_video": bool(raw.get("auto_video", True)),  # Studio: có prompt là tạo video luôn (ảnh → clip → ghép)
+            "product_lock": " ".join(str(raw.get("product_lock") or "").split())[:600],
             # cỡ cảnh / góc máy chung của dự án (từng cảnh ghi đè được ở storyboard)
             "shot_size": raw.get("shot_size") if raw.get("shot_size") in SHOT_SIZES else "auto",
             "camera_angle": raw.get("camera_angle") if raw.get("camera_angle") in CAMERA_ANGLES else "auto",
             # ràng buộc prompt: cấm chữ / phụ đề / logo / watermark + câu cấm thêm; câu mô tả ảnh tham chiếu
-            "bans": [k for k in BANS if k in (raw["bans"] if isinstance(raw.get("bans"), list) else BANS)],
+            # dự án mới: mặc định không cấm gì (dự án cũ đã lưu danh sách riêng nên giữ nguyên)
+            "bans": [k for k in BANS if k in raw["bans"]] if isinstance(raw.get("bans"), list) else [],
+            # 🔒 khoá hoàn toàn khung hình: nguyên ảnh layout ⭐ làm khung đầu mọi cảnh, giữ mọi chi tiết (Studio)
+            "frame_lock": bool(raw.get("frame_lock", True)),
+            # 👤 khung đã khoá có sẵn người dẫn? tắt (mặc định) = không ai trên hình, lời thoại là giọng ngoài khung
+            "frame_host": bool(raw.get("frame_host", False)),
+            # 🌿 hình ảnh tự nhiên: màu tươi sáng nhưng thật, giữ kết cấu da — không làm mịn, không filter làm đẹp
+            "natural_look": bool(raw.get("natural_look", True)),
             "negative_extra": " ".join(str(raw.get("negative_extra") or "").split())[:300],
             "ref_note": bool(raw.get("ref_note", True)),
             "logo_overlay": raw.get("logo_overlay") if raw.get("logo_overlay") in LOGO_CORNERS else "none",
@@ -594,8 +606,6 @@ def clean_options(raw: dict, settings) -> dict:
             # giữ layout có khung bình luận: app tự vẽ bình luận chạy như livestream (chữ chuẩn), model không vẽ chữ
             "chat_overlay": bool(raw.get("chat_overlay", True)),
             "transition_on": bool(raw.get("transition_on", True)),  # công tắc chuyển cảnh khi ghép
-            # ⓪ ghép layout + nhân vật + sản phẩm thành 1 ảnh tổng hợp trước — các bước sau dùng ảnh này
-            "master_on": bool(raw.get("master_on", True)),
             # 📱 mô phỏng livestream TikTok: app vẽ toàn bộ giao diện live lên video khi ghép
             "live": live_sim.clean_config(raw.get("live")),
             "ref_prompt": " ".join(str(raw.get("ref_prompt") or "").split())[:300] or REF_PROMPT,
@@ -622,6 +632,8 @@ def meta(settings) -> dict:
             "aspects": [{"value": k, "label": v[0]} for k, v in ASPECTS.items()],
             "ref_video_modes": [{"value": k, "label": v} for k, v in rvm.MODES.items()],
             "qualities": [{"value": k, "label": v} for k, v in QUALITIES.items()],
+            "kinds": kinds_meta(),
+            "purposes": [{"value": k, "label": v} for k, v in PURPOSES.items()],
             "shot_sizes": [{"value": k, "label": v[0]} for k, v in SHOT_SIZES.items()],
             "camera_angles": [{"value": k, "label": v[0]} for k, v in CAMERA_ANGLES.items()],
             "voices": VOICES, "rates": RATES, "speakers": [{"value": k, "label": v[0]} for k, v in ROLES.items()],
@@ -687,6 +699,57 @@ def strip_outfit(text: str) -> str:
     return " ".join(OUTFIT_RE.sub("", text or "").split()).strip(" ,")
 
 
+def frame_locked(options: dict) -> bool:
+    """🔒 Khoá hoàn toàn khung hình: có layout + bật frame_lock + đang dùng thẳng ảnh có sẵn làm khung đầu."""
+    return bool(options.get("frame_lock") and options.get("cast_layout") and frame_mode(options) == "direct")
+
+
+def frame_offscreen(options: dict) -> bool:
+    """Khung đã khoá KHÔNG có người dẫn (ghế trống, điện thoại trên chân máy…): không vẽ người nào, thoại = giọng ngoài
+    khung. Bắt model vẽ người không có trong ảnh → model dựng lại cả khung (xếp lại sản phẩm, đổi bàn, mất chi tiết)."""
+    return frame_locked(options) and not options.get("frame_host")
+
+
+def frame_insert(options: dict) -> bool:
+    """Khung đã khoá + có người dẫn + đã chọn nhân vật: app ghép nhân vật vào ảnh layout 1 lần rồi khoá khung đó
+    (model video không phải tự vẽ người → không dựng lại cả khung)."""
+    return frame_locked(options) and bool(options.get("frame_host")) and bool(options.get("cast_characters"))
+
+
+def host_prompt(who: str = "", product: bool = False) -> str:
+    """Prompt sửa ảnh layout 1 lần cho cả dự án: thêm người dẫn (who) và / hoặc thay sản phẩm bằng ảnh sản phẩm thật."""
+    changes = []
+    if who:
+        changes.append(f"Add EXACTLY ONE person: {who} — the exact person from the character reference image (same face, "
+                       "skin tone, apparent age, hair, body type and outfit). Place them in the presenter position (for "
+                       "example the empty chair behind the table, behind the phone on its tripod), upper body visible, "
+                       "facing the camera, hands relaxed, natural size for that distance, lit like the scene; real "
+                       "unretouched skin texture (pores, fine lines), no beauty filter, no smoothing, no plastic look.")
+    if product:
+        changes.append("Replace EVERY product container on the table and in the foreground with the exact product from "
+                       "the product reference image — identical container shape, lid, handle, colours, label artwork, "
+                       "logo and label text (sharp, correctly spelled, not invented). Keep each product's count, position, "
+                       "size, angle and lighting; the small products far away on the background shelves stay as they are.")
+    kept = "every product (same count, position, size and label text), " if not product else ""
+    return (f"Edit image 1 (a live-stream scene). {' '.join(changes)} Keep EVERYTHING ELSE pixel-identical to image 1: "
+            f"{kept}the table and its cloth, the phone and tripod, shelves, plants, lighting, and the whole on-screen "
+            "interface (top bar, badges, viewer count, comments with avatars and names, hearts, buttons, comment bar) "
+            "with all its text. Same framing, same crop, same aspect ratio. Do not add any text, name tag, caption or "
+            "subtitle; do not add or remove any object.")
+
+
+OFFSCREEN_MOTION = ("Nobody is visible in the frame and nobody enters it — every empty chair, device, product and prop "
+                    "stays exactly where it is. Only subtle ambient motion: floating hearts rising at the side, a gentle "
+                    "light flicker, leaves and plants swaying slightly. Static camera for the whole shot.")
+FRAME_LOCK = ("FRAME LOCK (highest priority): the opening frame is final — keep EVERY detail exactly as it is: every "
+              "product and its packaging, label and printed text, every logo, sign, shelf, prop, person, and every on-screen "
+              "interface element (top bar, badges, follow button, viewer count, comments with their avatars and names, "
+              "hearts, icons, buttons, comment bar) in the same position, size, colour and spelling. Do not add, remove, "
+              "move, redraw, translate or re-letter anything; never write character names, captions, subtitles or any new "
+              "text on screen. Locked-off static camera (no zoom, pan or cut); only subtle "
+              "natural motion is allowed (light flicker, leaves swaying, floating hearts, a person's small gestures).")
+
+
 def frame_mode(options: dict) -> str:
     """Cách tạo khung đầu thực tế của dự án: keep (giữ layout, thay sản phẩm + chữ) | direct (ảnh ⭐) | ai (tạo mới)."""
     has_layout = bool(options.get("cast_layout") or options.get("cast_combo"))
@@ -733,6 +796,8 @@ def _clip_speech(scene: dict, options: dict, bible: dict | None = None) -> dict:
     Lồng tiếng AI: nhân vật vẫn mấp máy môi + cử chỉ theo đúng câu (tiếng clip bị thay bằng giọng đọc khi ghép);
     giọng gốc: model video phải nói to rõ đúng nguyên văn câu đó, không nhạc nền. Cảnh không lời → bỏ dòng thoại."""
     motion = " ".join((scene.get("motion_prompt") or scene.get("image_prompt") or "").split())[:700]
+    if frame_offscreen(options):
+        return _offscreen_speech(scene, options)
     roster = {c["name"]: c for c in (bible or {}).get("characters") or []}
     if options.get("cast_layout") or options.get("cast_combo"):
         motion = ("Same location as in the first frame. " + motion)[:700]
@@ -778,6 +843,45 @@ def _clip_speech(scene: dict, options: dict, bible: dict | None = None) -> dict:
     return {"MoTa": motion, "LoiThoai": line + timing, "CamKy": ban, **lock}
 
 
+def _offscreen_speech(scene: dict, options: dict) -> dict:
+    """Khung khoá không người: không khoá nhân vật (tránh model vẽ người theo mô tả), thoại = giọng người cầm máy."""
+    texts = [ln["text"] for ln in scene.get("lines") or [] if ln.get("text")] or [scene.get("narration") or ""]
+    said = _clip_text(" ".join(" ".join(texts).split()).replace('"', "'"), 900)
+    secs = int(float(scene.get("seconds") or 0))
+    out = {"MoTa": OFFSCREEN_MOTION, "LoiThoai": "", "CamKy": negative_line(options), "KhoaNhanVat": ""}
+    if said:
+        role = ROLES.get(scene.get("speaker") or "", ROLES[""])[4]
+        out["LoiThoai"] = (f"Off-screen voice of the livestream host holding the phone (not visible{', ' + role if role else ''})"
+                           f" speaks this line out loud in Vietnamese, word for word, clearly audible; nobody on screen "
+                           f"speaks or moves their lips: \"{said}\""
+                           + (f" Finish every word within {max(2, secs - 1)} seconds." if secs else ""))
+    return out
+
+
+def product_lock(options: dict, has_ref: bool) -> str:
+    """PRODUCT LOCK: mô tả bao bì người dùng viết (nguyên văn) + giữ đúng ảnh sản phẩm tham chiếu (nếu có)."""
+    text = (options.get("product_lock") or "").strip()
+    if not (text or has_ref):
+        return ""
+    return ("PRODUCT LOCK: the product stays 100% identical to "
+            + ("the product reference image" if has_ref else "this description")
+            + (f" ({text})" if text else "")
+            + " — same shape, cap / lid, label, colours and logo; never redraw, invent or warp the label text; keep the "
+              "product at a medium distance (no extreme close-up on small label text).")
+
+
+NATURAL_LOOK = ("LOOK: bright, fresh, vivid yet true-to-life colours (clean daylight white balance, no colour cast, no "
+                "washed-out or muddy tones); real, unretouched skin texture with natural pores, fine lines and baby hairs; "
+                "natural hair strands and fabric weave; crisp natural detail like a high-end phone camera. No beauty filter, "
+                "no skin smoothing, no airbrushed, waxy or plastic look, no over-sharpening, no glow or haze.")
+NATURAL_MOTION = ("Motion is natural and unhurried — real breathing, blinking and micro-expressions, no slow-motion, no "
+                  "morphing or floaty movement.")
+
+
+def natural_look(options: dict) -> str:
+    return NATURAL_LOOK if options.get("natural_look", True) else ""
+
+
 CLIP_NEGATIVE = ("No extra people, no face change, no outfit change, no change to the product packaging or label, "
                  "no deformed hands, no extra fingers, no morphing, no cuts.")
 
@@ -799,13 +903,14 @@ def clip_variables(scene: dict, options: dict, bible: dict | None = None, refs: 
     aspect = ASPECTS.get(options.get("aspect") or "9:16", ASPECTS["9:16"])[2]
     out["ThongSo"] = (f"{aspect} video, {secs} seconds, {options.get('quality') or '720p'}, image-to-video "
                       f"({'; '.join(images)}): animate the opening frame exactly — do not create a new image. "
-                      "ONE continuous shot from start to end: no cuts, no scene changes, no transitions.")
+                      "ONE continuous shot from start to end: no cuts, no scene changes, no transitions."
+                      + (f" {NATURAL_LOOK} {NATURAL_MOTION}" if options.get("natural_look", True) else ""))
     keep_ui = ui and frame_mode(options) == "keep"
+    locked = frame_locked(options)
     out["KhoaBoiCanh"] = " ".join(x for x in (
+        FRAME_LOCK if locked else "",
         "SETTING LOCK: keep the location, background, props and lighting exactly as in the opening frame for the whole clip.",
-        ("PRODUCT LOCK: the product stays 100% identical to the product reference — same shape, cap / lid, label, colours "
-         "and logo; never redraw, invent or warp the label text; keep the product at a medium distance (no extreme "
-         "close-up on small label text).") if product else "",
+        product_lock(options, product) if scene.get("product", True) else "",
         "Keep every on-screen interface element and its text exactly as in the opening frame; do not add any new text."
         if keep_ui else "") if x)
     out["AmThanh"] = ("No background music, no sound effects, no extra voices — the voice-over and music are added in editing."
@@ -814,9 +919,187 @@ def clip_variables(scene: dict, options: dict, bible: dict | None = None, refs: 
                       if out.get("LoiThoai") else "Light natural ambience only — no music, no speech.")
     # giữ giao diện livestream: cấm "chữ / phụ đề" sẽ xoá mất chữ của layout → bỏ 2 mục đó, đã dặn giữ nguyên chữ ở ③
     bans = options.get("bans", list(BANS))
-    ban = negative_line({**options, "bans": [b for b in bans if b not in ("text", "subtitles")]} if keep_ui else options)
+    ban = negative_line({**options, "bans": [b for b in bans if b not in ("text", "subtitles", "logos")]}
+                        if keep_ui or locked else options)
     out["CamKy"] = " ".join(x for x in (ban, CLIP_NEGATIVE) if x)
     return out
+
+
+# ---------------------------------------------------------------- Bước 3 — kiểm tra trước khi sinh prompt
+WORDS_HARD = 4.4  # từ / giây: vượt mức này = đỏ (5 giây > 22 từ — nói không kịp)
+
+
+def scene_words(sc: dict) -> int:
+    texts = [ln["text"] for ln in sc.get("lines") or [] if ln.get("text")] or [sc.get("narration") or ""]
+    return sum(len(t.split()) for t in texts)
+
+
+def validate_project(p: dict) -> dict:
+    """Lỗi đỏ chặn sinh prompt; vàng chỉ nhắc. scene = 0 là lỗi cả dự án."""
+    o = p.get("options") or {}
+    scenes = p.get("scenes") or []
+    issues = []
+
+    def add(idx: int, level: str, msg: str) -> None:
+        issues.append({"scene": idx, "level": level, "msg": msg})
+
+    total = sum(int(s.get("seconds") or 0) for s in scenes)
+    target = int(o.get("length") or 0)
+    if not scenes:
+        add(0, "red", "Chưa có cảnh nào — viết storyboard trước")
+    elif o.get("kind") != "single" and abs(total - target) > 1:
+        add(0, "red", f"Tổng thời lượng các cảnh {total}s ≠ thời lượng dự án {target}s — thêm / bớt cảnh, đổi số giây "
+                      "hoặc đổi độ dài ở ⚙")
+    roster = [c["name"] for c in (p.get("bible") or {}).get("characters") or []]
+    for sc in scenes:
+        i, secs = sc["index"], int(sc.get("seconds") or 0) or 10
+        words = scene_words(sc)
+        hard, soft = int(secs * WORDS_HARD), int((secs - SPEECH_PAD) * SPEAK_RATE)
+        if words > hard:
+            add(i, "red", f"Thoại {words} chữ > {hard} chữ cho cảnh {secs}s — nói không kịp: rút gọn hoặc tách cảnh")
+        elif words > soft:
+            add(i, "yellow", f"Thoại {words} chữ hơi dài cho {secs}s (nên ≤ {soft}) — dễ nói vội")
+        speakers = sorted({ln["who"] for ln in sc.get("lines") or [] if ln.get("text") and ln.get("who")})
+        if len(speakers) > 1:
+            add(i, "red", f"{len(speakers)} người cùng nói trong 1 cảnh ({', '.join(speakers)}) — mỗi lượt nói tách 1 cảnh")
+        on_screen = sc["cast"] if isinstance(sc.get("cast"), list) else roster
+        if not on_screen and not sc.get("product", True):
+            add(i, "yellow", "Cảnh chưa gán nhân vật / sản phẩm")
+        if not (sc.get("image_prompt") or "").strip():
+            add(i, "red", "Thiếu mô tả hình ảnh (prompt ảnh)")
+        if not (sc.get("motion_prompt") or "").strip():
+            add(i, "red", "Thiếu hành động / camera (prompt chuyển động)")
+    return {"issues": issues, "total": total, "target": target, "ok": not any(x["level"] == "red" for x in issues)}
+
+
+# ---------------------------------------------------------------- Bước 4 — prompt từng cảnh: đánh dấu phần LOCK (không sửa)
+LOCK_PREFIX = ("FRAME LOCK", "IDENTITY LOCK", "OUTFIT LOCK", "OUTFIT:", "Clothes:", "SETTING LOCK", "PRODUCT LOCK", "Fixed characters",
+               "Fixed setting", "Characters in this scene", "Other characters", "Characters (keep", "Keep the social-media UI",
+               "Keep every on-screen", "Keep faces and outfits", "NEGATIVE:")
+
+
+PROMPT_SCENE_KEYS = ("title", "narration", "lines", "speaker", "image_prompt", "motion_prompt", "seconds", "shot", "angle",
+                     "purpose", "product", "cast")
+PROMPT_FREE_OPTIONS = ("auto_video", "flow", "auto", "show_browser")  # đổi mấy cái này không làm prompt cũ sai
+
+
+def prompt_sig(p: dict) -> str:
+    """Dấu vân tay những gì tạo nên prompt (cài đặt, Bible, form, ảnh, cảnh) — đổi tên dự án / bật tắt không tính."""
+    o = {k: v for k, v in (p.get("options") or {}).items() if k not in PROMPT_FREE_OPTIONS}
+    return json.dumps([o, p.get("bible"), p.get("form"), p.get("idea"), p.get("refs"),
+                       [{k: s.get(k) for k in PROMPT_SCENE_KEYS} for s in p.get("scenes") or []]],
+                      sort_keys=True, ensure_ascii=False, default=str)
+
+
+def prompt_segments(text: str, negative: str = "") -> list[dict]:
+    """Prompt → các dòng {text, lock}: lock = phần khoá chép nguyên văn từ Bible (giao diện tô xám, không sửa)."""
+    out, prev = [], False
+    for line in (text or "").split("\n"):
+        line = line.rstrip()
+        if not line.strip():
+            continue
+        lock = line.startswith(LOCK_PREFIX) or bool(negative and line.strip() == negative) or (prev and line.startswith("- "))
+        out.append({"text": line, "lock": lock})
+        prev = lock
+    return out
+
+
+def _seg_text(segs) -> str:
+    return "\n".join(x["text"] for x in segs or [])
+
+
+# ---------------------------------------------------------------- Bước 5 — xuất JSON (schema cho dev) / Excel storyboard
+def export_data(p: dict) -> dict:
+    o, bible = p.get("options") or {}, p.get("bible") or {}
+    made = {x["index"]: x for x in (p.get("prompts") or {}).get("scenes") or []}
+    chars = bible.get("characters") or []
+    voices = {c["name"]: c.get("voice") or "" for c in chars}
+
+    def voice_of(sc: dict) -> str:
+        who = next((ln["who"] for ln in sc.get("lines") or [] if ln.get("who") and ln.get("text")), "")
+        role = voices.get(who) or sc.get("speaker") or ""
+        return (f"{who} — " if who else "") + ROLES.get(role, ROLES[""])[0]
+
+    def negative(segs) -> str:
+        return next((x["text"].split(":", 1)[1].strip() for x in segs or [] if x["text"].startswith("NEGATIVE:")), "")
+
+    return {
+        "project": {"name": p.get("name", ""), "kind": o.get("kind", "story"), "ratio": o.get("aspect", "9:16"),
+                    "total_duration": o.get("length"), "style": bible.get("phong_cach") or o.get("style") or "",
+                    "idea": p.get("form") or p.get("idea", ""),
+                    "bible": {"characters": [{k: c.get(k, "") for k in ("name", "look", "outfit", "voice")}
+                                             | {"locked": bool(c.get("locked"))} for c in chars],
+                              "product_lock": o.get("product_lock", ""), "product_props": bible.get("nhan_vat", ""),
+                              "style": bible.get("phong_cach", "")}},
+        "scenes": [{"scene_id": sc["index"], "title": sc.get("title", ""),
+                    "purpose": PURPOSES.get(sc.get("purpose") or "", "").split(" — ")[0],
+                    "duration": int(sc.get("seconds") or 0), "visual": sc.get("image_prompt", ""),
+                    "action_timeline": sc.get("motion_prompt", ""), "dialogue": sc.get("narration", ""),
+                    "lines": [{"who": ln.get("who") or "Người dẫn chuyện", "text": ln["text"], "tone": ln.get("tone", "")}
+                              for ln in sc.get("lines") or [] if ln.get("text")],
+                    "voice": voice_of(sc), "audio": "no_music",
+                    "characters": sc["cast"] if isinstance(sc.get("cast"), list) else [c["name"] for c in chars],
+                    "product": bool(sc.get("product", True)),
+                    "shot": sc.get("shot", ""), "angle": sc.get("angle", ""),
+                    "attach": (made.get(sc["index"]) or {}).get("attach", []),
+                    "prompt_anh": _seg_text((made.get(sc["index"]) or {}).get("image")),
+                    "prompt_chuyen_dong": _seg_text((made.get(sc["index"]) or {}).get("video")),
+                    "negative": negative((made.get(sc["index"]) or {}).get("video"))}
+                   for sc in p.get("scenes") or []]}
+
+
+def write_xlsx(path: Path, rows: list[list], widths: list[int]) -> None:
+    """File Excel tối thiểu (1 sheet, dòng tiêu đề in đậm + cố định, chữ xuống dòng) — không cần thư viện ngoài."""
+    import re as _re
+    import zipfile
+    from xml.sax.saxutils import escape
+
+    def col(i: int) -> str:
+        name, i = "", i + 1
+        while i:
+            i, r = divmod(i - 1, 26)
+            name = chr(65 + r) + name
+        return name
+
+    def cell(r: int, c: int, v) -> str:
+        text = escape(_re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(v if v is not None else "")))
+        return f'<c r="{col(c)}{r}" t="inlineStr" s="{1 if r == 1 else 2}"><is><t xml:space="preserve">{text}</t></is></c>'
+
+    body = "".join(f'<row r="{r}">' + "".join(cell(r, c, v) for c, v in enumerate(row)) + "</row>"
+                   for r, row in enumerate(rows, 1))
+    ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+    head = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    sheet = (f'{head}<worksheet {ns}><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" '
+             'activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>'
+             + "".join(f'<col min="{i + 1}" max="{i + 1}" width="{w}" customWidth="1"/>' for i, w in enumerate(widths))
+             + f'</cols><sheetData>{body}</sheetData></worksheet>')
+    styles = (f'{head}<styleSheet {ns}><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>'
+              '<font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill '
+              'patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1">'
+              '<border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>'
+              '</cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+              '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1">'
+              '<alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" '
+              'applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs></styleSheet>')
+    rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    files = {
+        "[Content_Types].xml": f'{head}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>',
+        "_rels/.rels": f'{head}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        f'<Relationship Id="rId1" Type="{rel}/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+        "xl/workbook.xml": f'{head}<workbook {ns} xmlns:r="{rel}"><sheets><sheet name="Storyboard" sheetId="1" r:id="rId1"/>'
+        '</sheets></workbook>',
+        "xl/_rels/workbook.xml.rels": f'{head}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        f'<Relationship Id="rId1" Type="{rel}/worksheet" Target="worksheets/sheet1.xml"/>'
+        f'<Relationship Id="rId2" Type="{rel}/styles" Target="styles.xml"/></Relationships>',
+        "xl/worksheets/sheet1.xml": sheet, "xl/styles.xml": styles}
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, text in files.items():
+            z.writestr(name, text)
 
 
 def _clip_text(text: str, limit: int) -> str:
@@ -896,6 +1179,7 @@ class StudioRunner:
         self.cast = None  # CastRunner (màn Nhân vật & Layout) — api.py gắn vào
         self._emit = emit
         self.muse = variant == "muse"  # Studio Muse AI: khoá mọi model về Muse
+        self.prompt_only = not self.muse  # Studio: Bible → Storyboard → Prompt (copy / xuất ra công cụ ngoài)
         self.prefix = "mstudio_" if self.muse else "studio_"
         self.store = Store(settings, MUSE_DIR if self.muse else STUDIO_DIR)
         if not self.muse:
@@ -907,8 +1191,14 @@ class StudioRunner:
     def _clean(self, raw: dict) -> dict:
         """Chuẩn hoá tuỳ chọn dự án; Studio Muse AI: viết storyboard, ảnh, clip, hậu kỳ luôn dùng Muse."""
         if self.muse:
-            return {**clean_options(raw, self.settings), **MUSE_LOCK}
-        return clean_options(model_prefs.apply_studio(raw, self.settings), self.settings)
+            return {**clean_options(raw, self.settings), **MUSE_LOCK, "frame_lock": False}  # khoá khung hình: chỉ Studio
+        out = clean_options(model_prefs.apply_studio(raw, self.settings), self.settings)
+        # chỉ sinh prompt: nhân vật nói giọng gốc trong clip (công cụ ngoài tạo tiếng), app không ghép / lồng tiếng /
+        # vẽ livestream; khung đầu luôn vẽ từ prompt ảnh (kèm ảnh tham chiếu)
+        locked = bool(out.get("frame_lock") and out.get("cast_layout"))
+        out.update(dub=False, subtitles=False, bgm=False, post_ai=False, scene_style="video",
+                   frame_mode="direct" if locked else "ai", auto=False, flow="review", live={**out["live"], "on": False})
+        return out
 
     def _shared_models(self, options: dict) -> dict:
         """Dự án đã lưu (kể cả dự án cũ) đọc lên luôn dùng model ở Cài đặt → Model AI."""
@@ -941,7 +1231,6 @@ class StudioRunner:
                 "refs_view": [url(f"refs/{Path(r).name}") for r in project.get("refs") or []],
                 "logo_url": url(Path(project["logo"]).name) if project.get("logo") else "",
                 "ref_video_url": url("ref_video.jpg") if project.get("ref_video") else "",
-                "master_url": url(Path(project["master"]["path"]).name) if (project.get("master") or {}).get("path") else "",
                 "final_url": (f"/media/{final['job_id']}/final.mp4?v={int(final_path.stat().st_mtime)}"
                               if final_path and final_path.is_file() else "")}
 
@@ -955,6 +1244,11 @@ class StudioRunner:
     def create(self, form: dict) -> dict:
         idea = str(form.get("idea") or "").strip()
         options = self._clean(form.get("options") or {})
+        brief = clean_form(form.get("form")) if isinstance(form.get("form"), dict) else None
+        if brief is not None and options["source_mode"] != "video":  # Bước 1: form ý tưởng thay ô chữ tự do
+            if len(brief["chu_de"]) < 3:
+                raise StudioError("Nhập “Sản phẩm / chủ đề” (Bước 1)")
+            idea = form_idea(brief, options["kind"])
         if options["source_mode"] == "video":  # kịch bản từ video phân tích — không cần ý tưởng
             rv = rvm.clean(form.get("ref_video"))
             if not rv:
@@ -963,7 +1257,7 @@ class StudioRunner:
             idea = idea or f"Chuyển thể video: {rv.get('title') or 'video phân tích'}"
         elif len(idea) < 10:
             raise StudioError("Hãy mô tả ý tưởng video (ít nhất 1 câu)")
-        name = str(form.get("name") or "").strip()[:80] or idea[:60]
+        name = str(form.get("name") or "").strip()[:80] or ((brief or {}).get("chu_de") or idea)[:60]
         pid = f"{slugify(name, 40)}-{uuid.uuid4().hex[:6]}"
         pdir = self.store.root / pid
         (pdir / "refs").mkdir(parents=True)
@@ -978,19 +1272,10 @@ class StudioRunner:
         project = {"id": pid, "name": name, "idea": idea, "created_at": now(), "options": options, "refs": refs,
                    "logo": copy_logo(pdir, form["logo"]) if form.get("logo") else "",
                    "ref_video": rvm.copy_sheet(rvm.clean(form.get("ref_video")), pdir),
+                   **({"form": brief} if brief is not None else {}),
                    "bible": {}, "scenes": [], "status": "draft", "error": "", "final": {}}
         self.store.save(project)
-        return {"project": self.public(project), "task": self.start(pid, self._first_step(options, project))}
-
-    @staticmethod
-    def _after_master(o: dict) -> str:
-        """Bước sau ảnh tổng hợp: nguồn ý tưởng + bật phân tích → Phân tích ý tưởng; còn lại → storyboard."""
-        return "analyze" if o.get("source_mode") != "video" and o.get("idea_steps", True) else "storyboard"
-
-    @classmethod
-    def _first_step(cls, o: dict, p: dict | None = None) -> str:
-        """Bước đầu: ⓪ ảnh tổng hợp (khi có ≥ 2 trong layout / nhân vật / sản phẩm) → ① phân tích → … → storyboard."""
-        return "compose" if p is not None and needs_master(o, p) else cls._after_master(o)
+        return {"project": self.public(project), "task": self.start(pid, "storyboard")}
 
     def create_batch(self, form: dict) -> dict:
         """Tạo hàng loạt: mỗi dòng ý tưởng = 1 dự án, cùng tuỳ chọn + ảnh tham chiếu, tự làm video luôn (auto).
@@ -1006,7 +1291,10 @@ class StudioRunner:
         created = []
         for k, idea in enumerate(ideas, 1):
             name = f"{prefix} #{k}" if prefix else idea[:60]
-            created.append(self.create({**form, "idea": idea, "name": name, "options": options}))
+            one = {**form, "idea": idea, "name": name, "options": options}
+            if isinstance(form.get("form"), dict):  # hàng loạt + form: mỗi dòng là 1 “sản phẩm / chủ đề”
+                one["form"] = {**form["form"], "chu_de": idea}
+            created.append(self.create(one))
         return {"projects": [c["project"] for c in created], "tasks": [c["task"] for c in created]}
 
     def resume_all(self) -> dict:
@@ -1017,6 +1305,12 @@ class StudioRunner:
             if p["id"] in running or (p.get("final") or {}).get("job_id"):
                 continue
             try:
+                if self.prompt_only:  # Studio chỉ sinh prompt: chỉ viết storyboard còn thiếu
+                    if p.get("scenes"):
+                        continue
+                    self.start(p["id"], "storyboard")
+                    started.append(p["id"])
+                    continue
                 if not p.get("scenes"):  # viết storyboard xong thì tự làm luôn
                     self.store.update(p["id"], lambda x: x["options"].update(auto=True))
                 self.start(p["id"], "make" if p.get("scenes") else "storyboard")
@@ -1035,11 +1329,10 @@ class StudioRunner:
                 p["name"] = str(data["name"]).strip()[:80] or p["name"]
             if "idea" in data:
                 p["idea"] = str(data["idea"]).strip()[:4000] or p["idea"]
-            if isinstance(data.get("brief"), dict):  # bước 1–2: phân tích / ý tưởng viết lại do người dùng sửa
-                b = p.setdefault("brief", {})
-                for k in ("analysis_text", "idea_ai"):
-                    if k in data["brief"]:
-                        b[k] = str(data["brief"][k] or "").strip()[:6000]
+            if isinstance(data.get("form"), dict):  # form ý tưởng → ý tưởng gửi model viết storyboard
+                p["form"] = clean_form(data["form"])
+                kind = ((data.get("options") or {}).get("kind") or p["options"].get("kind") or "story")
+                p["idea"] = form_idea(p["form"], kind) or p["idea"]
             if isinstance(data.get("options"), dict):
                 p["options"] = self._clean({**p["options"], **data["options"]})
                 self._pin_live_avatar(self.store.dir(pid), p["options"])
@@ -1049,6 +1342,10 @@ class StudioRunner:
                 old_chars = (p.get("bible") or {}).get("characters") or []
                 p["bible"] = {k: str(v)[:1500] for k, v in data["bible"].items() if k in ("nhan_vat", "phong_cach")}
                 chars = clean_characters(data["bible"]["characters"]) if "characters" in data["bible"] else old_chars
+                locked = {c["name"].lower(): c for c in old_chars if c.get("locked")}
+                for c in chars:  # nhân vật từ thư viện: giữ nguyên LOCK (ngoại hình / trang phục), chỉ đổi giọng
+                    if c["name"].lower() in locked:
+                        c.update(look=locked[c["name"].lower()]["look"], outfit=locked[c["name"].lower()]["outfit"], locked=True)
                 if chars:
                     p["bible"]["characters"] = chars
             if isinstance(data.get("scenes"), list):
@@ -1062,6 +1359,8 @@ class StudioRunner:
                         sc["overlay"] = overlay
                     for k in SCENE_FIELDS:
                         sc[k] = str(raw.get(k, prev.get(k, "")) or "").strip()[:2000]
+                    sc["purpose"] = sc["purpose"] if sc["purpose"] in PURPOSES else ""
+                    sc["product"] = bool(raw.get("product", prev.get("product", True)))  # cảnh có sản phẩm (PRODUCT LOCK)
                     names = [c["name"] for c in (p.get("bible") or {}).get("characters") or []]
                     sc["lines"] = clean_lines(raw.get("lines", prev.get("lines")), names)
                     if sc["lines"]:  # lời đọc của cảnh = các câu thoại nối lại (phụ đề, whiteboard, hậu kỳ dùng chung)
@@ -1088,8 +1387,13 @@ class StudioRunner:
                         sc["seconds"] = seconds_for_speech(p["options"]["video_engine"], sc["seconds"], sc)
                     scenes.append(sc)
                 p["scenes"] = scenes[:MAX_SCENES + 5]
-                p["final"] = {}  # storyboard đổi → video cũ không còn khớp
-        project = self.store.update(pid, apply)
+
+        def apply_tracked(p):  # chỉ khi Bible / form / cảnh / cài đặt thật sự đổi → prompt + video cũ không còn khớp
+            before = prompt_sig(p)
+            apply(p)
+            if prompt_sig(p) != before:
+                p["prompts"], p["final"] = {}, {}
+        project = self.store.update(pid, apply_tracked)
         self._push(project)
         return self.public(project)
 
@@ -1149,8 +1453,13 @@ class StudioRunner:
     def start(self, pid: str, action: str, indexes: list | None = None, what: str = "both") -> str:
         """action: storyboard | scenes | assemble | make (= scenes + assemble) | post (hậu kỳ AI tiếp trên video đã xong).
         what: both | frame | clip; với post: fresh = bỏ gợi ý đã lưu, hỏi model lại."""
-        if action not in ("compose", "analyze", "rewrite", "storyboard", "scenes", "assemble", "make", "post"):
+        if action not in ("storyboard", "scenes", "assemble", "make", "post"):
             raise StudioError("Việc không hợp lệ")
+        if self.prompt_only and action == "post":
+            raise StudioError("Studio không có hậu kỳ AI — dùng Studio Muse AI nếu cần")
+        if self.prompt_only and action != "storyboard" and not ((self.store.load(pid).get("prompts") or {}).get("scenes")):
+            # Studio: tạo ảnh / clip / ghép chỉ khi đã có prompt khớp storyboard (Bible → Storyboard → Kiểm tra → Prompt)
+            raise StudioError("Chưa có prompt (hoặc storyboard vừa sửa) — bấm ⚡ Sinh prompt trước rồi mới tạo video")
         # khoá kiểm tra "đang chạy" → đưa vào hàng đợi: pywebview gọi API trên nhiều luồng, bấm nhanh 2 lần
         # (hoặc 2 nút cùng lúc) trước đây lọt cả 2 lời gọi → chạy trùng bước (vd. AI viết lại ý tưởng 2 lần)
         with self._start_lock:
@@ -1160,9 +1469,7 @@ class StudioRunner:
         project = self.store.load(pid)
         if pid in self.running_ids():
             raise StudioError("Dự án đang chạy — chờ xong hoặc bấm Dừng")
-        if action == "rewrite" and not (project.get("brief") or {}).get("analysis"):
-            raise StudioError("Chưa phân tích ý tưởng — chạy bước 1 trước")
-        if action not in ("compose", "analyze", "rewrite", "storyboard") and not project.get("scenes"):
+        if action != "storyboard" and not project.get("scenes"):
             raise StudioError("Chưa có storyboard — bấm Tạo storyboard trước")
         if action == "post":
             pdir = self.store.dir(pid)
@@ -1170,14 +1477,112 @@ class StudioRunner:
                 raise StudioError("Chưa đủ clip các cảnh — bấm ▶ Làm video trước, rồi mới chạy hậu kỳ AI")
             # chạy hậu kỳ chủ động → bật luôn tuỳ chọn (Ghép lại sau này cũng có hậu kỳ)
             project = self.store.update(pid, lambda p: p["options"].update(post_ai=True))
-        title = {"compose": "Ảnh tổng hợp", "analyze": "Phân tích ý tưởng", "rewrite": "AI viết lại ý tưởng", "storyboard": "Storyboard",
-                 "scenes": "Làm cảnh", "assemble": "Ghép video", "make": "Làm video", "post": "Hậu kỳ AI"}[action]
+        title = {"storyboard": "Storyboard", "scenes": "Làm cảnh", "assemble": "Ghép video", "make": "Làm video", "post": "Hậu kỳ AI"}[action]
         task = self.pool.submit(f"Studio · {title} · {project['name']}", self._run, pid, action,
                                 [int(i) for i in indexes or []], what if what in ("both", "frame", "clip", "fresh") else "both",
                                 meta={"studio": pid})
         self._active[pid] = task
         self._push(project)
         return task
+
+    # ------------------------------------------------------------ Bước 4–5: sinh prompt từng cảnh, xuất file
+    def _single_followup(self, pid: str) -> str:
+        """Clip đơn (không duyệt storyboard): 1 cảnh hợp lệ → sinh prompt luôn; bật “có prompt là tạo video” → "make"."""
+        p = self.store.load(pid)
+        check = validate_project(p)
+        if not check["ok"]:
+            self._log("Clip đơn: cảnh chưa qua bước Kiểm tra — sửa lỗi đỏ rồi bấm ⚡ Sinh prompt", "warn")
+            return ""
+        self._make_prompts(pid)
+        return "make" if p["options"].get("auto_video", True) else ""
+
+    def prompts(self, pid: str) -> dict:
+        """Sinh 2 prompt riêng cho mỗi cảnh: prompt ảnh (khung đầu) + prompt video (theo mốc giây, thoại, âm thanh,
+        NEGATIVE). Phần LOCK chép nguyên văn từ Bible. Lỗi đỏ ở bước kiểm tra → không sinh."""
+        if pid in self.running_ids():
+            raise StudioError("Dự án đang chạy — chờ viết storyboard xong")
+        return self._make_prompts(pid)
+
+    def _make_prompts(self, pid: str) -> dict:
+        p = self.store.load(pid)
+        check = validate_project(p)
+        if not check["ok"]:
+            reds = [x for x in check["issues"] if x["level"] == "red"]
+            raise StudioError("Chưa sinh prompt được — sửa lỗi đỏ trước: " + "; ".join(
+                (f"cảnh {x['scene']}: " if x["scene"] else "") + x["msg"] for x in reds[:4]))
+        from .pipeline.ai_video import collect_variables, template_prompt
+        from .templates_registry import registry
+
+        o = self._clean(p["options"]) if self.prompt_only else p["options"]
+        bible = p.get("bible") or {}
+        cast = self._cast(o)
+        refs = [r for r in p.get("refs") or [] if Path(r).is_file()]
+        tpl = registry.get(SCENE_TEMPLATE)
+        if tpl is None:
+            raise StudioError("Thiếu template studio-canh")
+        out = []
+        for sc in p["scenes"]:
+            sc_refs = clip_refs(cast, refs[0] if refs else "")
+            products = bool([r for r in p.get("refs") or [] if Path(r).is_file()])
+            image = (host_prompt(", ".join(c["name"] for c in cast.get("characters") or []) if frame_insert(o) else "",
+                                 products)
+                     + " (image 1 = ảnh layout; kèm ảnh nhân vật ⭐ / ảnh sản phẩm thật — ghép 1 lần, mọi cảnh dùng chung "
+                       "khung này)"
+                     if frame_locked(o) and (frame_insert(o) or products) else
+                     f"FRAME LOCK: dùng NGUYÊN ảnh layout «{(cast.get('layout') or {}).get('name', 'layout')}» làm khung đầu — "
+                     "KHÔNG tạo ảnh mới, giữ mọi chi tiết (sản phẩm, chữ, logo, giao diện, bình luận)."
+                     if frame_locked(o) else self._frame_prompt(bible, sc, bool(refs), o, False, cast))
+            video = template_prompt(tpl, collect_variables(tpl, clip_variables(sc, o, bible, sc_refs, product=bool(refs))), [])
+            names_in = sc["cast"] if isinstance(sc.get("cast"), list) else None
+            attach = [{"role": r.get("role", ""), "path": r["path"]} for r in cast.get("refs") or []
+                      if names_in is None or not str(r.get("role", "")).startswith("character")
+                      or any(n.lower() in str(r.get("role", "")).lower() for n in names_in)]
+            if sc.get("product", True):
+                attach += [{"role": "product photo", "path": r} for r in refs[:3]]
+            out.append({"index": sc["index"], "image": prompt_segments(image, negative_line(o)),
+                        "video": prompt_segments(video), "attach": attach})
+        project = self._set(pid, prompts={"at": now(), "scenes": out})
+        self._log_safe(f"Đã sinh prompt cho {len(out)} cảnh", "ok")
+        return self.public(project)
+
+    def export(self, pid: str, fmt: str = "json") -> dict:
+        """Xuất prompt + storyboard: json (schema cho dev) | xlsx (bảng storyboard). Chưa sinh prompt → sinh trước."""
+        if fmt not in ("json", "xlsx"):
+            raise StudioError("Định dạng xuất không hợp lệ")
+        p = self.store.load(pid)
+        if not (p.get("prompts") or {}).get("scenes"):
+            self.prompts(pid)
+            p = self.store.load(pid)
+        data = export_data(p)
+        folder = self.store.dir(pid) / "export"
+        folder.mkdir(exist_ok=True)
+        path = folder / f"{slugify(p['name'], 40) or pid}.{fmt}"
+        if fmt == "json":
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        else:
+            head = ["Cảnh", "Mục đích", "Giây", "Tiêu đề", "Nhân vật", "Sản phẩm", "Hình ảnh", "Hành động / camera",
+                    "Lời thoại", "Giọng", "Ảnh cần đính kèm", "Prompt Ảnh", "Prompt Video"]
+            rows = [head] + [[sc["scene_id"], sc["purpose"], sc["duration"], sc["title"], ", ".join(sc["characters"]),
+                              "Có" if sc["product"] else "", sc["visual"], sc["action_timeline"], sc["dialogue"], sc["voice"],
+                              "\n".join(f"{a['role']}: {Path(a['path']).name}" for a in sc["attach"]),
+                              sc["prompt_anh"], sc["prompt_chuyen_dong"]] for sc in data["scenes"]]
+            write_xlsx(path, rows, [6, 12, 6, 22, 16, 9, 40, 40, 40, 22, 26, 70, 70])
+        project = self._set(pid, exported_at=now())
+        return {"path": str(path), "project": self.public(project)}
+
+    def open_export(self, pid: str) -> str:
+        folder = self.store.dir(pid) / "export"
+        folder.mkdir(exist_ok=True)
+        if hasattr(os, "startfile"):
+            open_path(folder)
+        return str(folder)
+
+    def _log_safe(self, message: str, level: str = "info") -> None:
+        """Ghi nhật ký cả khi gọi ngoài luồng tác vụ (sinh prompt / xuất chạy trực tiếp từ giao diện)."""
+        try:
+            self.pool.log(message, level)
+        except RuntimeError:
+            logging.getLogger(__name__).info(message)
 
     def cancel(self, pid: str) -> int:
         task = self._active.get(pid)
@@ -1190,7 +1595,7 @@ class StudioRunner:
 
     # ------------------------------------------------------------ chạy
     def _log(self, message: str, level: str = "info") -> None:
-        self.pool.log(message, level)
+        self._log_safe(message, level)
 
     def _set(self, pid: str, **fields) -> dict:
         project = self.store.update(pid, lambda p: p.update(fields))
@@ -1209,28 +1614,17 @@ class StudioRunner:
         self.license.require_active()
         self._set(pid, status="running", error="")
         try:
-            # các bước nối nhau: chạy liên tục (flow=auto) thì đi tiếp; duyệt từng bước thì dừng để người dùng xem / sửa
-            auto = lambda: self.store.load(pid)["options"].get("flow") == "auto"  # noqa: E731
-            if action == "compose":  # ⓪ ghép layout + nhân vật + sản phẩm thành 1 ảnh tổng hợp
-                self._compose_master(pid)
-                if auto():
-                    action = self._after_master(self.store.load(pid)["options"])
-            if action == "analyze":
-                self._analyze(pid)
-                if auto():
-                    action = "rewrite"
-            if action == "rewrite":
-                self._rewrite(pid)
-                if auto():
-                    action = "storyboard"
             if action == "storyboard":
                 if no_storyboard(self.store.load(pid)["options"]):
                     self._direct_story(pid)
-                    action = "make"  # không storyboard: không có gì để duyệt → làm cảnh → ghép luôn
+                    # không storyboard: không có gì để duyệt → (Studio Muse AI) làm cảnh → ghép luôn
+                    action = "" if self.prompt_only else "make"
                 else:
                     self._storyboard(pid)
-                    if self.store.load(pid)["options"].get("auto"):
+                    if self.store.load(pid)["options"].get("auto") and not self.prompt_only:
                         action = "make"  # "Tự làm luôn": storyboard xong → làm cảnh → ghép
+                    elif self.prompt_only and self.store.load(pid)["options"].get("kind") == "single":
+                        action = self._single_followup(pid)
             if action in ("scenes", "make"):
                 if no_storyboard(self.store.load(pid)["options"]):
                     self._fill_narration(pid)
@@ -1245,6 +1639,8 @@ class StudioRunner:
         except Exception as exc:
             self._settle_scenes(pid, status="error", error=str(exc))
             raise
+        if self.prompt_only:  # Studio không ghép video → báo xong ở đây (khung tiến trình hiện “Hoàn tất”)
+            self.pool.progress(100, "Storyboard xong — kiểm tra rồi bấm ⚡ Sinh prompt", "finish")
         done = bool((self.store.load(pid).get("final") or {}).get("job_id"))
         project = self._set(pid, status="done" if done else "ready")
         return {"studio": pid, "status": project["status"]}
@@ -1253,71 +1649,6 @@ class StudioRunner:
     def _ask(self, options: dict, prompt: str, complete=None, what: str = "viết storyboard", images=None) -> str:
         return ask_model(self.settings, options, prompt, complete=complete, what=what, log=self._log,
                          check_cancel=self.pool.check_cancel, images=images or None)
-
-    # ---- 0. phân tích ý tưởng → AI viết lại ý tưởng (bước 1, 2 — nguồn ý tưởng)
-    def _context(self, o: dict, p: dict) -> str:
-        """Bối cảnh dự án cho bước phân tích / viết lại: nhân vật, layout, ảnh sản phẩm, livestream, độ dài."""
-        cast = self._cast(o, 0)
-        lines = [f"- Video {ASPECTS[o['aspect']][3]} ~{o['length']} giây"]
-        if cast["characters"]:
-            lines.append("- Nhân vật cố định: " + "; ".join(f"{c['name']} ({c.get('summary') or c.get('description', '')[:160]})"
-                                                           for c in cast["characters"]))
-        if cast["layout"]:
-            lines.append(f"- Bối cảnh / layout cố định: {cast['layout'].get('summary') or cast['layout'].get('description', '')[:200]}")
-        if cast.get("combo"):
-            lines.append(f"- Dàn cảnh mẫu: {cast['combo'].get('summary') or cast['combo'].get('idea', '')[:200]}")
-        if p.get("refs"):
-            lines.append(f"- Có {len(p['refs'])} ảnh sản phẩm / tham chiếu (đính kèm nếu model xem được ảnh)")
-        # toàn bộ cài đặt đã chọn ở wizard (model video, độ dài clip, lồng tiếng / giọng gốc, khung đầu, livestream…)
-        return "\n".join(lines) + "\n" + settings_text(o, p)
-
-    def _brief_refs(self, o: dict, p: dict) -> tuple[list | None, str]:
-        """Ảnh gửi kèm bước ① / ② (model trình duyệt): nhân vật ⭐, dàn cảnh / layout, sản phẩm + danh sách ảnh nào là gì
-        (thêm vào prompt). Ghi nhật ký để người dùng biết ảnh có được gửi."""
-        refs = self._story_refs(o, p, {"base": None}, {})
-        if refs and o["model"].startswith("api:"):
-            self._log(f"Model API chưa nhận ảnh — {len(refs)} ảnh nhân vật / sản phẩm không được gửi; muốn AI xem ảnh, "
-                      "chọn model trình duyệt (ChatGPT / Gemini / Claude) ở bước ③", "warn")
-            return None, ""
-        if not refs:
-            return None, ""
-        self._log(f"Gửi kèm {len(refs)} ảnh — " + ", ".join(label.split(" —")[0] for _, label in refs))
-        note = "\nẢnh đính kèm (theo thứ tự):\n" + "\n".join(f"{i}. {label}" for i, (_, label) in enumerate(refs, 1))
-        return [str(path) for path, _ in refs], note
-
-    def _analyze(self, pid: str) -> None:
-        p = self.store.load(pid)
-        o = p["options"]
-        self.pool.progress(3, "Đang phân tích ý tưởng", "brief")
-        self._log("Bước 1 · Phân tích ý tưởng…")
-        images, note = self._brief_refs(o, p)  # ảnh nhân vật + dàn cảnh / layout + sản phẩm
-        prompt = ANALYZE_PROMPT.format(idea=p["idea"], context=self._context(o, p) + note)
-        complete = lambda t: isinstance(_try_json(t), dict) and bool(_try_json(t).get("thong_diep"))  # noqa: E731
-        text = self._ask(o, prompt, complete=complete, what="phân tích ý tưởng", images=images)
-        data = _try_json(text)
-        if not isinstance(data, dict):
-            raise StudioError("Model không trả về phân tích hợp lệ — thử lại hoặc đổi model")
-        analysis = {k: data.get(k) for k in ANALYSIS_FIELDS}
-        self._set(pid, brief={**(p.get("brief") or {}), "analysis": analysis, "analysis_text": format_analysis(analysis),
-                              "idea_ai": "", "analyzed_at": now()})
-        self._log("Bước 1 xong — xem / sửa phân tích rồi duyệt để AI viết lại ý tưởng", "ok")
-
-    def _rewrite(self, pid: str) -> None:
-        p = self.store.load(pid)
-        o, brief = p["options"], p.get("brief") or {}
-        self.pool.progress(5, "AI đang viết lại ý tưởng", "brief")
-        self._log("Bước 2 · AI viết lại ý tưởng theo phân tích…")
-        images, note = self._brief_refs(o, p)
-        prompt = REWRITE_PROMPT.format(idea=p["idea"], analysis=brief.get("analysis_text") or "",
-                                       context=self._context(o, p) + note)
-        complete = lambda t: isinstance(_try_json(t), dict) and len(str(_try_json(t).get("y_tuong") or "")) > 40  # noqa: E731
-        text = self._ask(o, prompt, complete=complete, what="viết lại ý tưởng", images=images)
-        data = _try_json(text)
-        idea_ai = str((data or {}).get("y_tuong") or "").strip() if isinstance(data, dict) else ""
-        if len(idea_ai) < 40:
-            raise StudioError("Model không trả về ý tưởng viết lại hợp lệ — thử lại hoặc đổi model")
-        self._set(pid, brief={**brief, "idea_ai": idea_ai[:4000], "rewritten_at": now()})
-        self._log("Bước 2 xong — xem / sửa ý tưởng mới rồi duyệt để viết storyboard", "ok")
 
     def _direct_frames(self, o: dict, p: dict | None = None) -> dict:
         """Ảnh ⭐ dùng THẲNG làm khung đầu (tuỳ chọn cast_direct, kiểu dựng cảnh video): bộ kết hợp → nhân vật → layout.
@@ -1343,8 +1674,14 @@ class StudioRunner:
                 out["chars"][item["name"]] = paths
         if o.get("cast_layout"):
             out["layout"] = starred("layout", o["cast_layout"])[1]
-        if p is not None and master_path(p) is not None:  # ⓪ ảnh tổng hợp → khung đầu ưu tiên
-            out["combo"] = [master_path(p)]
+        if frame_locked(o) and not out["layout"] and o.get("cast_layout"):  # layout chưa gắn ⭐ → ảnh gốc đầu tiên
+            try:
+                item = self.cast.get("layout", o["cast_layout"])
+                out["layout"] = [Path(im["path"]) for im in item["images"] if im["exists"] and im.get("kind") == "base"][:1]
+            except Exception:  # layout đã xoá — _cast đã ghi nhật ký
+                pass
+        if frame_locked(o) and out["layout"]:  # khoá khung hình: mọi cảnh dùng cùng 1 ảnh layout, không lấy ảnh nhân vật
+            out.update(combo=out["layout"][:1], chars={})
         out["all"] = out["combo"] or [x for ps in out["chars"].values() for x in ps] or out["layout"]
         return out
 
@@ -1358,13 +1695,6 @@ class StudioRunner:
             if path and path.is_file() and all(path != x for x, _ in out) and len(out) < 6:
                 out.append((path, label))
 
-        master = master_path(p)
-        if master is not None:  # ⓪ đã có ảnh tổng hợp → CHỈ gửi ảnh tổng hợp + ảnh sản phẩm
-            add(master, "ẢNH TỔNG HỢP — layout + nhân vật + sản phẩm đã ghép sẵn; là khung chuẩn của video "
-                        "(đúng người, trang phục, bối cảnh, sản phẩm)")
-            for r in (p.get("refs") or [])[:3]:
-                add(r, "SẢN PHẨM — đúng bao bì, nhãn, màu")
-            return out
         if keep.get("base") is not None:
             add(keep["base"], "ẢNH LAYOUT — khung đầu của mọi cảnh (giữ nguyên bối cảnh, giao diện)")
         for path in direct.get("all", [])[:2]:
@@ -1410,83 +1740,6 @@ class StudioRunner:
         sc.update(frame=dest.relative_to(pdir).as_posix(), clip="", frame_src=src.name)
         self._scene_update(pid, sc["index"], frame=sc["frame"], clip="", frame_src=src.name, status="frame", error="")
 
-    def _char_refs(self, o: dict) -> list[dict]:
-        """Ảnh ⭐ của nhân vật đã chọn (1 ảnh / người, bỏ sheet / lưới biểu cảm) — [{name, path, desc}]."""
-        out = []
-        if self.cast is None:
-            return out
-        ids = list(o.get("cast_characters") or [])
-        if not ids and o.get("cast_combo"):
-            try:
-                ids = list(self.cast.get("combo", o["cast_combo"]).get("characters") or [])
-            except Exception:
-                ids = []
-        for cid in ids[:MAX_CAST]:
-            try:
-                item = self.cast.get("character", cid)
-            except Exception:
-                continue
-            pick = next((Path(im["path"]) for im in item["starred"] if Path(im["path"]).is_file()
-                         and im.get("preset") not in DIRECT_SKIP), None) or next(
-                (Path(im["path"]) for im in item["starred"] if Path(im["path"]).is_file()), None)
-            if pick:
-                out.append({"name": item["name"], "path": pick, "desc": item.get("description") or item.get("summary") or ""})
-        return out
-
-    def _compose_master(self, pid: str) -> None:
-        """⓪ Ảnh tổng hợp: ghép layout + nhân vật + sản phẩm thành 1 ảnh hoàn chỉnh (model ảnh). Các bước sau (phân tích,
-        storyboard, khung đầu) dùng ảnh này thay cho từng ảnh rời."""
-        p = self.store.load(pid)
-        o, pdir = p["options"], self.store.dir(pid)
-        spec = IMAGE_ENGINES[o["image_engine"]]
-        self.pool.progress(2, "Đang ghép ảnh tổng hợp (layout + nhân vật + sản phẩm)", "master")
-        self._log("Bước ⓪ · Ghép layout + nhân vật + sản phẩm thành 1 ảnh tổng hợp…")
-        if spec["max_images"] < 1:
-            raise StudioError(f"{spec['name']} không nhận ảnh tham chiếu — chọn model ảnh khác (ChatGPT, Gemini…) ở bước ③ "
-                              "để ghép ảnh tổng hợp, hoặc tắt “Ảnh tổng hợp” ở bước ②")
-        o_keep = {**o, "frame_mode": "keep"}
-        keep = self._keep_base(o_keep, {**p, "master": None})  # ảnh layout / bộ kết hợp làm nền (nếu có)
-        src, task = None, None
-        if keep["base"] is not None:  # có layout: SỬA ảnh layout — đặt đúng nhân vật, thay sản phẩm, dọn giao diện
-            job = self._keep_job(o_keep, keep, {"index": 0, "overlay": {}}, spec)
-            if job is None:
-                src = Path(keep["base"])
-        else:  # không có layout: ghép nhân vật + sản phẩm thành ảnh mới theo ý tưởng / phong cách
-            chars = self._char_refs(o)[:max(0, spec["max_images"] - 1)]
-            products = [Path(r) for r in p.get("refs") or [] if Path(r).is_file()][:max(0, spec["max_images"] - len(chars))]
-            bans = [b for b in o.get("bans", list(BANS)) if b not in ("text", "logos")]  # chữ / logo in trên bao bì
-            prompt = MASTER_PROMPT.format(
-                aspect=ASPECTS[o["aspect"]][2],
-                people="; ".join(f"{c['name']} (character reference) — {c['desc'][:220]}" for c in chars)
-                or "one friendly Vietnamese salesperson",
-                product_note="keep it identical" if products else "no specific product",
-                setting=o.get("style") or " ".join(p["idea"].split())[:300])
-            job = {"engine": o["image_engine"], "prompt": (prompt + " " + negative_line({**o, "bans": bans})).strip(),
-                   "aspect": o["aspect"], "count": 1, "quality": "high", "refs": [],
-                   "show_browser": bool(o.get("show_browser")), "ref_note": True,
-                   "ref_prompt": o.get("ref_prompt") or REF_PROMPT, "browser_profile": o.get("image_profile", ""),
-                   "extra_refs": [{"path": str(c["path"]), "role": f"character reference — {c['name']}",
-                                   "prompt": "this is the exact person: keep face, hair, body type and outfit identical"}
-                                  for c in chars]
-                   + [{"path": str(x), "role": "product photo",
-                       "prompt": "keep this exact product — packaging, logo, label text, colours and proportions identical"}
-                      for x in products]}
-        try:
-            if src is None:
-                task = self.images.start(job)
-                result = self._wait(self.images, task, "Ảnh tổng hợp")
-                src = Path(self.settings.output_dir) / IMAGES_DIR / result["id"] / result["files"][0]["name"]
-        except Cancelled:
-            if task:
-                self.images.cancel(task)
-            raise
-        for old in pdir.glob("master.*"):
-            old.unlink(missing_ok=True)
-        dest = pdir / f"master{src.suffix.lower()}"
-        shutil.copy2(src, dest)
-        self._set(pid, master={"path": str(dest), "at": now()})
-        self._log("Bước ⓪ xong — ảnh tổng hợp dùng cho phân tích ý tưởng, storyboard và khung đầu các cảnh", "ok")
-
     def _keep_base(self, o: dict, p: dict) -> dict:
         """Giữ layout: ảnh nền để sửa (⭐ mới nhất của bộ kết hợp, không có thì của layout), layout (giao diện, bình
         luận thật) và ảnh sản phẩm thay vào (ảnh tham chiếu của dự án + ảnh sản phẩm của bộ kết hợp, tối đa 3)."""
@@ -1525,9 +1778,6 @@ class StudioRunner:
         products = [Path(r) for r in p.get("refs") or [] if Path(r).is_file()]
         products += [Path(im["path"]) for im in (combo or {}).get("products") or [] if Path(im["path"]).is_file()]
         out["products"] = list(dict.fromkeys(products))[:3]
-        master = master_path(p)
-        if master is not None and out["base"] is not None:  # ⓪ đã có ảnh tổng hợp (nhân vật + sản phẩm + layout sạch)
-            out.update(base=master, from_combo=True, master=True)
         return out
 
     @staticmethod
@@ -1589,11 +1839,10 @@ class StudioRunner:
         """Phiếu Tạo hình ảnh: SỬA ảnh layout — chỉ thay sản phẩm + chữ trên giao diện. None = không có gì để đổi
         (dùng nguyên ảnh layout, không tốn lượt tạo ảnh)."""
         texts = self._keep_texts(keep, sc)
-        master = bool(keep.get("master"))  # nền = ảnh tổng hợp ⓪: đã có nhân vật + sản phẩm, giao diện đã dọn
         names_in = sc.get("cast") if isinstance(sc.get("cast"), list) else None
-        chars = [] if master else [c for c in keep.get("chars") or [] if names_in is None or c["name"] in names_in] or keep.get("chars") or []
+        chars = [c for c in keep.get("chars") or [] if names_in is None or c["name"] in names_in] or keep.get("chars") or []
         chars = chars[:max(0, spec["max_images"] - 1)]
-        products = [] if master else keep["products"][:max(0, spec["max_images"] - 1 - len(chars))]
+        products = keep["products"][:max(0, spec["max_images"] - 1 - len(chars))]
         changes = []
         if chars:  # nền là layout: người trong ảnh phải là ĐÚNG nhân vật đã chọn
             changes.append("- The person: the person in the scene must be EXACTLY "
@@ -1607,9 +1856,7 @@ class StudioRunner:
             changes.append("- The product: replace the product the person holds / presents with the product in the next "
                            "attached image(s) — exact packaging, shape, colours, label text and logo; same size, position "
                            "and grip as the original product.")
-        if master and ((o.get("live") or {}).get("on") or self._chat_by_app(o, keep)):
-            pass  # ảnh tổng hợp đã dọn giao diện / vùng bình luận
-        elif (o.get("live") or {}).get("on") and (keep.get("ui") or {}).get("elements"):
+        if (o.get("live") or {}).get("on") and (keep.get("ui") or {}).get("elements"):
             # app vẽ lại TOÀN BỘ giao diện livestream khi ghép → bỏ giao diện cũ của layout (tránh 2 lớp chồng nhau)
             changes.append("- The interface: remove EVERY on-screen interface element (badges, avatars, icons, buttons, "
                            "hearts, comment bubbles, input bar, all overlay text) so only the clean photographic scene "
@@ -1660,33 +1907,38 @@ class StudioRunner:
         của model video. Không hỏi model viết; lời đọc = các câu của ý tưởng chia đều cho từng clip (sửa được trước khi làm)."""
         p = self.store.load(pid)
         o = p["options"]
-        idea = self._direct_idea(p)
+        form = p.get("form") or {}
+        # dự án có form: mô tả hình = chủ đề + thông điệp (không kèm nhãn); lời thoại CHỈ lấy “Thoại mẫu” (không có → để trống)
+        idea = " ".join(x for x in (form.get("chu_de"), form.get("thong_diep")) if x) if form else self._direct_idea(p)
         if not idea:
             raise StudioError("Chưa có ý tưởng để làm video")
         longest = max(video_engine_durations(o["video_engine"]))
         count = max(1, min(MAX_SCENES, -(-o["length"] // longest)))
         self.pool.progress(3, f"Chia ý tưởng thành {count} clip (không storyboard)", "script")
-        reads = split_narration(idea, count)
+        reads = (split_narration(form["thoai_mau"], count) if form.get("thoai_mau") else [""] * count) if form \
+            else split_narration(idea, count)
         scenes = []
         for i in range(1, count + 1):
             part = f"Part {i} of {count} — continue the action naturally from the previous part. " if count > 1 else ""
             scenes.append({"index": i, "title": f"Phần {i}/{count}" if count > 1 else "Video", "narration": reads[i - 1], "lines": [],
                            "speaker": "", "image_prompt": idea[:1500], "motion_prompt": (part + idea)[:600],
+                           "purpose": "", "product": True,
                            "seconds": longest, "frame": "", "clip": "", "status": "", "error": ""})
-        self._set(pid, scenes=scenes, final={})
+        self._set(pid, scenes=scenes, final={}, prompts={})
         self._warn_long_speech(scenes, o["video_engine"])
-        self._log(f"Không storyboard: {count} clip × {longest}s từ ý tưởng, lời đọc lấy từ ý tưởng — làm video luôn", "ok")
+        self._log(f"Không storyboard: {count} clip × {longest}s từ ý tưởng"
+                  + (" — sửa cảnh nếu cần rồi bấm ⚡ Sinh prompt" if self.prompt_only else " — làm video luôn"), "ok")
 
     @staticmethod
     def _direct_idea(p: dict) -> str:
-        return " ".join(str((p.get("brief") or {}).get("idea_ai") or p.get("idea") or "").split())
+        return " ".join(str(p.get("idea") or "").split())
 
     def _fill_narration(self, pid: str) -> None:
         """Dự án đã chia clip trước đây (lời đọc trống) → điền lời đọc từ ý tưởng trước khi làm cảnh."""
         p = self.store.load(pid)
         scenes = p.get("scenes") or []
-        if not scenes or any((s.get("narration") or "").strip() or s.get("lines") for s in scenes):
-            return
+        if p.get("form") or not scenes or any((s.get("narration") or "").strip() or s.get("lines") for s in scenes):
+            return  # dự án có form: không lấy chữ ý tưởng làm lời thoại
         reads = split_narration(self._direct_idea(p), len(scenes))
         self._set(pid, scenes=[{**s, "narration": reads[k]} for k, s in enumerate(scenes)])
         self._log("Lời đọc đang trống — đã lấy các câu của ý tưởng chia cho từng clip", "info")
@@ -1696,7 +1948,7 @@ class StudioRunner:
         o = p["options"]
         self.pool.progress(3, "Đang viết storyboard", "script")
         allowed = video_engine_durations(o["video_engine"])
-        count = scene_count(o["length"])
+        count = 1 if o.get("kind") == "single" else scene_count(o["length"])  # Clip đơn: đúng 1 cảnh
         # nguồn kịch bản = video phân tích: mỗi đoạn trong vật liệu = 1 cảnh, không dùng ý tưởng
         from_video = o.get("source_mode") == "video" and bool(p.get("ref_video"))
         mats = ((p.get("ref_video") or {}).get("data") or {}).get("canh") or [] if from_video else []
@@ -1736,6 +1988,26 @@ class StudioRunner:
             ("GIỮ NGUYÊN BỐI CẢNH: KHÔNG chuyển sang địa điểm khác — ‘prompt_anh’ chỉ tả hành động, biểu cảm, góc máy, "
              "khoảng cách máy, đạo cụ trong bối cảnh cố định.")
             if cast["layout"] else "") if x)
+        if frame_locked(o):
+            cast_text += ("\nKHUNG HÌNH ĐÃ KHOÁ — MỌI cảnh bắt đầu từ CÙNG MỘT ảnh layout có sẵn (đính kèm), giữ nguyên mọi chi tiết "
+                          "(sản phẩm, chữ, logo, giao diện, bình luận, người). Vì vậy: ‘prompt_anh’ chỉ tả ngắn ảnh có sẵn, KHÔNG "
+                          "đổi bố cục / địa điểm, KHÔNG thêm người hay đồ vật; ‘co_canh’ / ‘goc_may’ giữ đúng như ảnh; "
+                          "‘prompt_chuyen_dong’ chỉ là chuyển động nhỏ trong khung (người nói, cử chỉ nhẹ, tim bay, ánh sáng), máy "
+                          "quay đứng yên. Đa dạng các cảnh bằng LỜI THOẠI và cử chỉ, không bằng góc máy.")
+            if frame_insert(o):
+                cast_text += ("\nNGƯỜI DẪN ĐÃ ĐƯỢC GHÉP SẴN vào ảnh layout (ngồi ở vị trí người dẫn, nhìn vào máy): "
+                              "nhân vật cố định có mặt trên hình ở MỌI cảnh, đúng vị trí đó — chỉ nói, đổi biểu cảm, cử "
+                              "chỉ tay nhẹ; KHÔNG đứng dậy, KHÔNG đi lại, KHÔNG cầm / dời sản phẩm, KHÔNG thêm người khác.")
+            if frame_offscreen(o):
+                cast_text += ("\nKHUNG HÌNH KHÔNG CÓ NGƯỜI DẪN (ví dụ ghế trống, điện thoại trên chân máy): KHÔNG ai xuất "
+                              "hiện trên hình ở mọi cảnh. Lời thoại là GIỌNG NÓI NGOÀI KHUNG của người đang cầm máy "
+                              "livestream — mọi câu thoại để ‘ai’ = người dẫn đó, ‘cast’ của cảnh để trống; ‘prompt_anh’ / "
+                              "‘prompt_chuyen_dong’ KHÔNG tả người, tay, cử chỉ — chỉ tim bay, ánh sáng, cây lá lay nhẹ.")
+        if o.get("natural_look", True):
+            cast_text += ("\nPHONG CÁCH HÌNH ẢNH TỰ NHIÊN: ‘phong_cach’ phải là màu tươi sáng nhưng chân thật (ánh sáng ban ngày "
+                          "sạch, cân bằng trắng đúng), da người giữ kết cấu thật (lỗ chân lông, nếp nhăn nhẹ) — KHÔNG làm "
+                          "mịn da, KHÔNG filter làm đẹp, KHÔNG kiểu điện ảnh tối / màu phim / bóng mờ; như quay bằng điện "
+                          "thoại tốt ngoài đời thật.")
         direct = self._direct_frames(o, p)  # dùng thẳng ảnh ⭐ làm khung đầu → storyboard viết theo đúng các ảnh đó
         story_images = [str(x) for x in direct["all"][:DIRECT_STORY_IMAGES]]
         if direct["all"]:
@@ -1789,9 +2061,19 @@ CÁCH CHUYỂN THỂ (vật liệu đã được người dùng duyệt — dùn
         else:
             source = f"""Viết storyboard cho 1 video {ASPECTS[o['aspect']][3]} dài khoảng {o['length']} giây theo ý tưởng:
 <y_tuong>
-{(p.get('brief') or {}).get('idea_ai') or p['idea']}
-</y_tuong>"""  # nguồn ý tưởng: ý tưởng AI viết lại (bước 2, đã duyệt) hoặc ý tưởng gốc; không dùng video tham khảo
+{p['idea']}
+</y_tuong>"""  # nguồn ý tưởng: form ý tưởng (chủ đề + thông điệp + thoại mẫu) của người dùng
+            form = p.get("form") or {}
+            if form:
+                source += ("\nLƯU Ý: các dòng trong <y_tuong> là THÔNG TIN để viết (dạng video, sản phẩm / chủ đề, điều người xem "
+                           "cần nhớ) — KHÔNG chép nguyên văn các dòng đó làm lời thoại; lời thoại là câu nói tự nhiên của nhân vật "
+                           "(xưng hô, cảm xúc, hợp ngữ cảnh) truyền tải đúng thông điệp.")
+                if form.get("thoai_mau"):
+                    source += ("\nTHOẠI MẪU (người dùng viết — dùng NGUYÊN VĂN làm lời nhân vật nói, chỉ chia sang các cảnh cho vừa "
+                               f"thời lượng, không đổi chữ): «{form['thoai_mau']}»")
         prompt = f"""{source}
+{all_kinds().get(o.get("kind") or "story", ("", "", ""))[2]}
+{('MÔ TẢ SẢN PHẨM (PRODUCT LOCK — người dùng viết, KHÔNG viết lại): ' + o['product_lock']) if o.get('product_lock') else ''}
 {settings_text(o, p)}
 {('Phong cách hình ảnh mong muốn: ' + o['style']) if o['style'] else ''}
 {(f'Người dùng có {refs} ảnh tham chiếu (nhân vật / sản phẩm) — mô tả nhân vật khớp với ảnh, model ảnh sẽ nhận các ảnh này.') if refs else ''}
@@ -1826,11 +2108,13 @@ f'''- Đúng {count} cảnh, mạch truyện rõ: mở đầu gây chú ý (3 gi
   "co_canh": cỡ cảnh, đúng một mã {', '.join(k for k in SHOT_SIZES if k not in ('auto', 'mix'))};
   "goc_may": góc máy, đúng một mã {', '.join(k for k in CAMERA_ANGLES if k != 'auto')}.
   {shot_rule}
+  "muc_dich": mục đích cảnh, đúng một mã {', '.join(PURPOSES)} (cảnh 1 thường là hook, cảnh cuối là cta nếu là quảng cáo);
+  "co_san_pham": true nếu sản phẩm xuất hiện trong khung hình, false nếu không.
 - Không chữ, logo, watermark trong hình. Không nội dung nhạy cảm.
 - Bên trong các chuỗi JSON KHÔNG dùng dấu ngoặc kép " — trích dẫn / tên sản phẩm dùng ‘ ’ hoặc viết thường.
 
 Chỉ trả về MỘT object JSON (không markdown, không giải thích):
-{{"nhan_vat_ds":[{{"ten":"…","ngoai_hinh":"…","trang_phuc":"…","giong":"young_f"}}],"nhan_vat":"…","phong_cach":"…","canh":[{{"tieu_de":"…","nhan_vat_canh":["…"],"thoai":[{{"ai":"…","cau":"…","cam_xuc":"…"}}],"giong":"narrator_f","prompt_anh":"…","prompt_chuyen_dong":"…","co_canh":"medium","goc_may":"eye","giay":{allowed[-1]}}}]}}"""
+{{"nhan_vat_ds":[{{"ten":"…","ngoai_hinh":"…","trang_phuc":"…","giong":"young_f"}}],"nhan_vat":"…","phong_cach":"…","canh":[{{"tieu_de":"…","nhan_vat_canh":["…"],"thoai":[{{"ai":"…","cau":"…","cam_xuc":"…"}}],"giong":"narrator_f","prompt_anh":"…","prompt_chuyen_dong":"…","co_canh":"medium","goc_may":"eye","muc_dich":"hook","co_san_pham":true,"giay":{allowed[-1]}}}]}}"""
         self._log(f"Đang viết storyboard {count} cảnh (~{o['length']} giây)…")
         data, text = None, ""
         for attempt in (1, 2):
@@ -1850,6 +2134,10 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
             raise StudioError("Model không trả về storyboard hợp lệ"
                               + (" (trả lời rỗng — kiểm tra đăng nhập / profile của model)" if not str(text).strip()
                                  else " — thử lại hoặc đổi model (Claude / Gemini API viết JSON ổn định hơn)"))
+        self._save_storyboard(pid, o, data, cast, count)
+
+    def _save_storyboard(self, pid: str, o: dict, data: dict, cast: dict, count: int) -> None:
+        """JSON storyboard (model viết, hoặc người dùng dán lại) → hồ sơ nhân vật + các cảnh của dự án."""
         characters = clean_characters(data.get("nhan_vat_ds"))
         if cast["characters"]:  # nhân vật cố định: ngoại hình lấy nguyên mô tả đã duyệt
             characters = merge_cast(characters, cast["characters"])
@@ -1867,6 +2155,8 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
                            "image_prompt": str(raw.get("prompt_anh") or "").strip()[:1500],
                            "shot": raw.get("co_canh") if raw.get("co_canh") in SHOT_SIZES else "",
                            "angle": raw.get("goc_may") if raw.get("goc_may") in CAMERA_ANGLES else "",
+                           "purpose": raw.get("muc_dich") if raw.get("muc_dich") in PURPOSES else "",
+                           "product": raw.get("co_san_pham") is not False,
                            "motion_prompt": str(raw.get("prompt_chuyen_dong") or "").strip()[:600],
                            **({"overlay": clean_overlay(raw.get("noi_dung_layout"))}
                               if clean_overlay(raw.get("noi_dung_layout")) else {}),
@@ -1880,12 +2170,27 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
                                           for c in cast["characters"])[:1500]
         if characters:
             bible["characters"] = characters
-        self._set(pid, scenes=scenes, bible=bible, final={})
+        self._set(pid, scenes=scenes, bible=bible, final={}, prompts={})
         self._warn_long_speech(scenes, o["video_engine"])
         self._log(f"Storyboard xong: {len(scenes)} cảnh · ~{sum(s['seconds'] for s in scenes)} giây hình"
                   + (f" · {len(characters)} nhân vật: " + ", ".join(
                       f"{c['name']} ({ROLES.get(c['voice'] or '', ROLES[''])[0]})" for c in characters) if characters else ""),
                   "ok")
+
+    def import_storyboard(self, pid: str, text: str) -> dict:
+        """Dán JSON storyboard đã có (model viết xong nhưng app chưa lấy được câu trả lời) — không hỏi model lần nữa."""
+        if pid in self.running_ids():
+            raise StudioError("Dự án đang chạy — bấm Dừng trước rồi dán JSON")
+        try:
+            data = extract_json(str(text or ""))
+        except ValueError as exc:
+            raise StudioError(f"Không đọc được JSON: {exc}") from exc
+        if not isinstance(data, dict) or not isinstance(data.get("canh"), list) or not data["canh"]:
+            raise StudioError("JSON không có danh sách cảnh (\"canh\") — dán nguyên câu trả lời storyboard của model")
+        p = self.store.load(pid)
+        o = p["options"]
+        self._save_storyboard(pid, o, data, self._cast(o, 0), min(MAX_SCENES, len(data["canh"])))
+        return self.public(self._set(pid, status="ready", error=""))
 
     def _warn_long_speech(self, scenes: list, engine: str) -> None:
         longest = max(video_engine_durations(engine))
@@ -2000,6 +2305,7 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
             f"{ASPECTS.get(options.get('aspect') or '9:16', ASPECTS['9:16'])[2]} cinematic frame, scene {sc['index']} "
             "of a story video.",
             f"Visual style: {bible.get('phong_cach')}" if bible.get("phong_cach") else "",
+            natural_look(options),
             # có nhân vật / bối cảnh cố định: mô tả riêng của cảnh đặt TRƯỚC, ràng buộc cố định đặt SAU để thắng
             # các chi tiết trái ngược (quần áo, nơi chốn) do storyboard viết
             f"Scene action: {strip_outfit(sc['image_prompt']) if fixed_people and lock_outfit else sc['image_prompt']}"
@@ -2031,10 +2337,8 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
             ("SETTING LOCK: the scene happens in EXACTLY the location of the setting / scene reference image — same "
              "background, furniture, props, colours and lighting; only the camera angle and distance may change. Ignore "
              "any other location mentioned in the scene action.") if layout else "",
-            ("PRODUCT LOCK: the product looks 100% identical to the attached product reference — same shape, cap / lid, "
-             "label, colours and logo; never redraw, invent or warp the label text; show it at a medium distance (no "
-             "extreme close-up on small label text). Keep faces and outfits identical to their references.")
-            if has_refs else "",
+            product_lock(options, has_refs) if sc.get("product", True) else "",
+            "Keep faces and outfits identical to their references." if has_refs else "",
             ("The LAST attached image is the brand logo: reproduce it exactly — same shape, colours and lettering, never "
              "distorted or redrawn — only where a brand logo naturally appears in this scene (product packaging, signage, "
              "uniform). Do not invent any other logo.") if logo else "",
@@ -2126,14 +2430,6 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
             logo = None
         # thứ tự ảnh gửi model: ảnh dự án → nhân vật / layout cố định → logo (logo luôn CUỐI)
         cast = self._cast(o, spec["max_images"] - (1 if logo else 0))
-        master = master_path(p)
-        if master is not None and frame_mode(o) == "ai" and spec["max_images"] >= 1:
-            # AI tạo khung mới: ảnh tổng hợp ⓪ là tham chiếu CHÍNH (đứng đầu), bớt ảnh rời cho vừa giới hạn của model
-            budget = spec["max_images"] - (1 if logo else 0)
-            cast["refs"] = ([{"path": str(master), "role": "scene reference (the complete key visual: these people with "
-                                                            "this product in this setting)",
-                              "prompt": "keep the people, outfits, product and setting consistent with it"}]
-                            + cast["refs"])[:max(1, budget)]
         refs = [r for r in p.get("refs") or [] if Path(r).is_file()][
             :max(0, spec["max_images"] - (1 if logo else 0) - len(cast["refs"]))]
         if cast["characters"] or cast["layout"]:
@@ -2158,10 +2454,17 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
         if direct["all"]:
             self._log(f"Dùng thẳng {len(direct['all'])} ảnh ⭐ ({'bộ kết hợp' if direct['combo'] else 'nhân vật' if direct['chars'] else 'layout'})"
                       " làm khung đầu — không tạo ảnh nhân vật mới (đổi ở ⚙ dự án → Cách tạo khung đầu)")
+        products = [Path(r) for r in p.get("refs") or [] if Path(r).is_file()]  # ảnh sản phẩm thật của dự án
+        host = self._host_frame(pid, o, direct, spec, products, force=bool(indexes) and what in ("frame", "both")) \
+            if frame_locked(o) and direct["layout"] and (frame_insert(o) or products) else None
+        if host is not None:  # mọi cảnh dùng chung khung đã ghép người dẫn / sản phẩm thật
+            direct.update(combo=[host], all=[host])
         frame_tasks, clip_tasks, errors = {}, {}, []
+        clip_frames: dict[int, Path] = {}  # khung đầu đã giao cho từng clip (để giữ nét chi tiết khi khoá khung)
         try:
             for sc in targets:  # 1) ảnh khung đầu (song song)
-                if what == "clip" or (has(sc, "frame") and not (indexes and what in ("both", "frame"))):
+                stale = host is not None and sc.get("frame_src") != host.name  # khung cũ chưa ghép người dẫn / sản phẩm
+                if not stale and (what == "clip" or (has(sc, "frame") and not (indexes and what in ("both", "frame")))):
                     continue
                 if keep["base"] is not None:  # giữ layout: sửa ảnh layout (không có gì để đổi → dùng nguyên ảnh)
                     job = self._keep_job(o, keep, sc, spec) if spec["max_images"] >= 1 else None
@@ -2206,15 +2509,18 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
                     continue
                 if has(sc, "clip") and idx not in frame_tasks and not (indexes and what in ("both", "clip")):
                     continue
-                sc_refs = clip_refs(cast, str(keep["products"][0]) if keep["products"] else "")
+                # khoá khung: sản phẩm thật đã ghép vào khung đầu → gửi kèm ảnh sản phẩm + PRODUCT LOCK cho model video
+                product_ref = keep["products"][0] if keep["products"] else products[0] if frame_locked(o) and products else ""
+                sc_refs = clip_refs(cast, str(product_ref))
                 clip_tasks[idx] = self.videos.start({
                     "template": SCENE_TEMPLATE, "provider": o["video_engine"], "ai_duration": f"{sc['seconds']}s",
                     "ai_aspect": o["aspect"], "ai_resolution": o["quality"],
-                    "variables": clip_variables(sc, o, bible, sc_refs, product=bool(keep["products"]),
+                    "variables": clip_variables(sc, o, bible, sc_refs, product=bool(product_ref),
                                                 ui=bool((keep["ui"] or {}).get("elements"))),
                     # khung đầu + (nhân vật / sản phẩm hoặc bối cảnh cố định) → model video giữ đúng người, đồ, cảnh
                     "attachments": {"image": str(pdir / sc["frame"]), **sc_refs},
                     "show_browser": bool(o.get("show_browser")), "browser_profile": o.get("video_profile", "")})
+                clip_frames[idx] = pdir / sc["frame"]
                 self._scene_update(pid, idx, status="clip_running", error="")
             if clip_tasks:
                 self._log(f"Đã giao {len(clip_tasks)} clip cho Tạo video ({VIDEO_ENGINES[o['video_engine']]['name']})")
@@ -2234,6 +2540,8 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
                         result = self._wait(self.videos, task_id, f"Clip cảnh {idx}")
                         dest = pdir / "scenes" / scene_dir_name(idx) / "clip.mp4"
                         shutil.copy2(Path(self.settings.output_dir) / result["id"] / "final.mp4", dest)
+                        if frame_locked(o):
+                            self._restore_frame(idx, dest, clip_frames[idx], live=o.get("kind") == "live")
                         self._scene_update(pid, idx, clip=dest.relative_to(pdir).as_posix(), status="done")
                         self._log(f"Xong cảnh {idx} ({finished}/{len(clip_tasks)})", "ok")
                     except (StudioError, OSError, RuntimeError) as exc:
@@ -2256,6 +2564,81 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
             raise
         if errors:
             raise StudioError(f"{len(errors)} cảnh lỗi — bấm làm lại từng cảnh: " + "; ".join(errors[:3]))
+
+    def _host_frame(self, pid: str, o: dict, direct: dict, spec: dict, products: list[Path],
+                    force: bool = False) -> Path | None:
+        """Sửa ảnh layout 1 lần cho cả dự án (lưu lại dùng tiếp): ghép nhân vật ⭐ (khi bật người dẫn) + thay sản phẩm
+        trên bàn bằng ảnh sản phẩm thật, rồi dán lại điểm ảnh gốc của layout ngoài các vùng đã đổi.
+        None (dùng nguyên layout + cảnh báo) khi không có gì để ghép, model ảnh không nhận ảnh hoặc lỗi."""
+        pdir = self.store.dir(pid)
+        layout = direct["layout"][0]
+        room = max(0, spec["max_images"] - 1)  # ảnh 1 = layout
+        products = products[:min(2, room)]
+        chars = []
+        for cid in (o.get("cast_characters") or [])[:max(0, room - len(products))] if frame_insert(o) else []:
+            try:
+                item = self.cast.get("character", cid)
+            except Exception:  # nhân vật đã xoá — _cast đã ghi nhật ký
+                continue
+            starred = [im for im in item["starred"] if Path(im["path"]).is_file()]
+            pick = next((im for im in starred if im.get("preset") not in DIRECT_SKIP), None) or next(iter(starred), None)
+            if pick:
+                chars.append((item["name"], Path(pick["path"])))
+        if frame_insert(o) and not chars:
+            self._log("Người dẫn: nhân vật chưa có ảnh ⭐ hoặc model ảnh không nhận đủ ảnh — không ghép người", "warn")
+        if not (chars or products):
+            return None
+        dest = pdir / "host_frame.png"
+        key = {"layout": str(layout), "chars": [str(x) for _, x in chars], "products": [str(x) for x in products]}
+        if not force and dest.is_file() and self.store.load(pid).get("host_frame") == key:
+            return dest
+        names = ", ".join(n for n, _ in chars)
+        what = " + ".join(x for x in (f"người dẫn {names}" if chars else "", "sản phẩm thật" if products else "") if x)
+        self._log(f"Ghép {what} vào layout (1 ảnh dùng chung cho mọi cảnh)…")
+        task = self.images.start({
+            "engine": o["image_engine"], "prompt": host_prompt(names, bool(products)), "aspect": o["aspect"], "count": 1,
+            "quality": "high", "refs": [], "show_browser": bool(o.get("show_browser")),
+            "extra_refs": [{"path": str(layout), "role": "image to edit",
+                            "prompt": "keep everything identical; change only the listed parts"}]
+            + [{"path": str(x), "role": f"character reference — {n}",
+                "prompt": "this is the exact person: keep face, hair, body type and outfit identical"} for n, x in chars]
+            + [{"path": str(x), "role": "product photo",
+                "prompt": "keep this exact product — packaging, logo, label text, colours and proportions identical"}
+               for x in products],
+            "ref_note": True, "ref_prompt": o.get("ref_prompt") or REF_PROMPT, "browser_profile": o.get("image_profile", "")})
+        try:
+            result = self._wait(self.images, task, "Ảnh ghép khung đầu")
+        except StudioError as exc:
+            self._log(f"Ghép {what} lỗi — dùng nguyên ảnh layout: {exc}", "warn")
+            return None
+        src = Path(self.settings.output_dir) / IMAGES_DIR / result["id"] / result["files"][0]["name"]
+        try:
+            if frame_restore.restore_image(src, layout, dest):
+                self._log(f"Đã ghép {what} — mọi chi tiết khác giữ đúng điểm ảnh của layout gốc", "ok")
+            else:
+                shutil.copy2(src, dest)
+                self._log("Ảnh ghép khác tỉ lệ layout — dùng nguyên ảnh AI (chi tiết có thể lệch nhẹ)", "warn")
+        except (ffmpeg.FFmpegError, OSError) as exc:
+            shutil.copy2(src, dest)
+            self._log(f"Không dán lại được điểm ảnh gốc — dùng nguyên ảnh AI ({str(exc)[:120]})", "warn")
+        self.store.update(pid, lambda p: p.update(host_frame=key))
+        return dest
+
+    def _restore_frame(self, idx: int, clip: Path, frame: Path, live: bool = False) -> None:
+        """Khoá khung hình: model video vẽ lại cả khung (nhoè chữ, nhãn, giao diện) → vùng đứng yên lấy lại nét ảnh gốc.
+        Lỗi → giữ clip của model (không hỏng cảnh)."""
+        try:
+            zoom = frame_restore.undo_zoom(clip, frame)
+            if zoom:
+                self._log(f"Cảnh {idx}: model video phóng to khung {round((zoom - 1) * 100, 1)}% — đã đưa về đúng khung gốc "
+                          "(giao diện không tràn ra ngoài)")
+            bands = frame_restore.LIVE_UI_BANDS if live else ()  # livestream: giao diện luôn đứng yên
+            if frame_restore.restore_static(clip, frame, bands):
+                self._log(f"Cảnh {idx}: giữ nét chi tiết khung hình gốc (chữ, nhãn, giao diện)")
+            else:
+                self._log(f"Cảnh {idx}: ảnh layout khác tỉ lệ khung video — giữ clip của model", "warn")
+        except (ffmpeg.FFmpegError, OSError) as exc:
+            self._log(f"Cảnh {idx}: không giữ được nét khung gốc — dùng clip của model ({str(exc)[:120]})", "warn")
 
     # ---- 3. ghép
     def _post_ai(self, pid: str, p: dict, o: dict, job: dict, strict: bool = False, fresh: bool = False) -> dict:

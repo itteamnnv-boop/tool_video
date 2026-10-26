@@ -1,0 +1,2 @@
+# script chạy trên macOS / Linux (GitHub Actions) phải giữ xuống dòng LF
+*.sh text eol=lf

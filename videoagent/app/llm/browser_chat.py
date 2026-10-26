@@ -98,7 +98,10 @@ SITES = {
         name="ChatGPT",
         url="https://chatgpt.com/",
         input_selectors=("#prompt-textarea", "div[contenteditable='true']", "textarea"),
-        response_selector="[data-message-author-role='assistant']",
+        # giao diện 10/2026 bỏ data-message-author-role: tin trả lời là [data-chatgpt-search-unit-key="…:assistant"]
+        # (kiểm chứng trên trang thật); giữ selector cũ cho giao diện cũ / tài khoản chưa đổi
+        response_selector="[data-message-author-role='assistant'], [data-turn='assistant'], "
+                          "[data-chatgpt-search-unit-key$=':assistant']",
         bubbles_per_turn=1,
         stop_selector="button[data-testid='stop-button']",
         headless_ok=False,
@@ -178,6 +181,20 @@ ANSWER_TEXT_JS = """(e, sel) => {
     }
     return t.trim();
   }).filter(Boolean).join('\\n\\n');
+}"""
+# Tin trả lời đã viết xong? (claude.ai data-is-streaming="false"; ChatGPT 10/2026: khung lượt data-talvt-turn-state="complete")
+FINISHED_JS = """(e) => e.getAttribute('data-is-streaming') === 'false'
+  || ((e.closest('[data-talvt-turn-state]') || e).getAttribute('data-talvt-turn-state') === 'complete')"""
+# Chữ của lượt hội thoại cuối trên trang (ChatGPT: article[data-testid^=conversation-turn] / [data-turn] /
+# [data-chatgpt-search-unit-key]), bỏ nhãn .sr-only
+LAST_TURN_JS = """() => {
+  const SEL = '[data-testid^="conversation-turn"], [data-turn], [data-chatgpt-search-unit-key]';
+  const turns = [...document.querySelectorAll(SEL)].filter(t => !t.parentElement || !t.parentElement.closest(SEL));
+  const last = turns[turns.length - 1];
+  if (!last || last.getAttribute('data-turn') === 'user' || /:user$/.test(last.getAttribute('data-chatgpt-search-unit-key') || '')) return '';
+  let t = last.innerText || '';
+  for (const s of last.querySelectorAll('.sr-only')) { const x = (s.innerText || '').trim(); if (x) t = t.replace(x, ''); }
+  return t.trim();
 }"""
 FOCUSED_INPUT_JS = """() => {
   const el = document.activeElement;
@@ -525,11 +542,20 @@ class BrowserChatProvider(LLMProvider):
         except PWError:
             return ""
         flat = " ".join(text.split())
-        tail = " ".join(prompt.split())[-40:]
+        prompt_flat = " ".join(prompt.split())
+        tail = prompt_flat[-40:]
         at = flat.rfind(tail)
-        if at < 0:
-            return ""
-        answer = flat[at + len(tail):]
+        if at < 0:  # tin nhắn dài bị trang thu gọn ("Show more") → chỉ còn đoạn đầu: đọc lượt cuối nếu là câu trả lời
+            try:
+                last = page.evaluate(LAST_TURN_JS)
+            except PWError:
+                last = ""
+            last = " ".join(str(last or "").split())
+            if not last or last.startswith(prompt_flat[:40]) or prompt_flat[:40] in last[:200]:
+                return ""
+            answer = last
+        else:
+            answer = flat[at + len(tail):]
         for junk in PAGE_JUNK:  # chữ giao diện cố định ở cuối trang
             answer = re.split(junk, answer, flags=re.I)[0]
         return ANSWER_PREFIX.sub("", answer).strip()  # nhãn đọc màn hình "ChatGPT said:" đứng trước câu trả lời
@@ -594,7 +620,7 @@ class BrowserChatProvider(LLMProvider):
         last, stable_since = "", time.time()
         while time.time() < hold["deadline"]:
             try:  # chỉ phần trả lời thật (bỏ khối suy nghĩ, nhãn ẩn đọc màn hình)
-                text = responses.last.evaluate(ANSWER_TEXT_JS, site.answer_selector)
+                text = ANSWER_PREFIX.sub("", responses.last.evaluate(ANSWER_TEXT_JS, site.answer_selector))
             except PWError:  # phần tử bị vẽ lại giữa chừng → đọc lại vòng sau
                 text = last
             if text.strip().startswith(echo):  # vẫn là bong bóng câu hỏi của mình
@@ -606,8 +632,8 @@ class BrowserChatProvider(LLMProvider):
                 page.wait_for_timeout(700)
                 continue
             # trang báo tin đã viết xong (claude.ai: data-is-streaming="false") → nhận ngay khi đủ nội dung, khỏi chờ đứng yên
-            try:
-                finished = responses.last.get_attribute("data-is-streaming") == "false"
+            try:  # claude.ai: data-is-streaming="false" · ChatGPT (10/2026): lượt chứa tin có data-talvt-turn-state="complete"
+                finished = bool(responses.last.evaluate(FINISHED_JS))
             except PWError:
                 finished = False
             if text != last:

@@ -1,0 +1,81 @@
+# Build bộ cài VideoAgent cho macOS (bản chưa ký Apple) trên máy ảo của GitHub.
+#   - Chạy tay: tab Actions → "Build macOS" → Run workflow → tải .dmg ở mục Artifacts của lần chạy.
+#   - Đẩy tag v* (vd. git tag v1.0.2 && git push origin v1.0.2) → build rồi đính kèm .dmg vào GitHub Release của tag.
+# 2 bản: Apple Silicon (chip M, runner macos-14) và Intel (runner macos-13).
+name: Build macOS
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write  # đính kèm .dmg vào Release khi đẩy tag
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch: arm64
+          - runner: macos-13
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: videoagent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: videoagent/requirements.txt
+
+      - name: Kiểm tra nhanh trên macOS (import app, thư mục dữ liệu, mã máy, tìm Chrome)
+        run: |
+          python -m pip install -q -r requirements.txt
+          python - <<'EOF'
+          import sys, platform
+          from app.paths import DATA_DIR
+          from app.license import machine_id
+          from app.llm.chrome_pool import _chrome_exe
+          from app.osutil import open_path, reveal, kill_tree
+          import app.api, app.canvas, app.studio  # noqa: F401 — import được toàn bộ app
+          print("Python", sys.version.split()[0], platform.machine())
+          print("DATA_DIR:", DATA_DIR)
+          assert "Library/Application Support/VideoAgent" in str(DATA_DIR), DATA_DIR
+          print("machine_id:", machine_id()[:8])
+          try:
+              print("Chrome:", _chrome_exe("chrome"))
+          except RuntimeError as exc:
+              print("Chrome: chưa có trên máy build —", exc)
+          EOF
+
+      - name: Build .app + .dmg
+        run: bash build_mac.sh
+
+      - name: Kiểm tra gói
+        run: |
+          ls -la dist
+          test -x dist/VideoAgent.app/Contents/MacOS/VideoAgent
+          codesign --verify --deep --verbose=1 dist/VideoAgent.app
+          du -sh dist/VideoAgent.app dist/*.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoAgent-macOS-${{ matrix.arch }}
+          path: videoagent/dist/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Đính kèm vào Release (khi đẩy tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "VideoAgent $GITHUB_REF_NAME" --notes "Bộ cài macOS (chưa ký Apple): lần đầu mở → chuột phải VideoAgent → Mở."
+          gh release upload "$GITHUB_REF_NAME" dist/*.dmg --clobber

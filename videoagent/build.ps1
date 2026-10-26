@@ -45,6 +45,7 @@ VSVersionInfo(
     --collect-all pythonnet `
     --collect-all clr_loader `
     --collect-all yt_dlp `
+    --collect-all curl_cffi `
     --collect-data imageio_ffmpeg `
     main.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller lỗi" }

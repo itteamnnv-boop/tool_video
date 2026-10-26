@@ -446,3 +446,52 @@ button.st-io-tile:hover img,button.st-io-tile:hover i{border-color:var(--lime)}
 /* cỡ cảnh / góc máy từng cảnh */
 .st-sc-shot{gap:6px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--muted)}
 .st-sc-shot select{flex:1;min-width:120px;font-size:12px;padding:4px 6px}
+
+/* ===== Studio — chỉ sinh prompt: mẫu dự án, form ý tưởng, Bible khoá, kiểm tra, prompt từng cảnh ===== */
+.st-kinds{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px;margin-bottom:12px}
+.st-kinds>span{grid-column:1/-1;font-size:12px;color:var(--muted);font-weight:600}
+.st-kind{display:flex;flex-direction:column;gap:3px;text-align:left;padding:10px 12px;border-radius:10px;border:1px solid var(--line2);background:var(--card2);color:var(--text);cursor:pointer;font:inherit}
+.st-kind b{font-size:13px}.st-kind small{color:var(--muted);font-size:11.5px;line-height:1.35}
+.st-kind:hover{border-color:#4d5c3c}.st-kind.on{border-color:var(--lime);background:color-mix(in srgb,var(--lime) 9%,var(--card2))}
+.st-form{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}.st-form .field:last-child{grid-column:1/-1}
+.st-formview p{margin:0 0 3px;font-size:13px}.st-formview b{color:var(--muted);font-weight:600}
+.st-plock textarea{border-color:#4d5c3c}
+.st-check{margin-top:10px;padding:9px 12px;border-radius:9px;border:1px solid var(--line2);font-size:12.5px}
+.st-check>b{display:block;margin-bottom:4px}
+.st-check.ok{border-color:#3f5428;color:var(--lime)}.st-check.ok b{color:var(--text)}
+.st-check.bad{border-color:#7a3330;background:rgba(192,80,77,.07)}.st-check.warn{border-color:#7a6320;background:rgba(255,209,102,.05)}
+.st-check ul,.st-issues{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:2px}
+.st-check li.red,.st-issues li.red{color:#ff8a80}.st-check li.yellow,.st-issues li.yellow{color:#ffd166}
+.st-issues{font-size:11.5px}
+.st-stat.bad{border-color:#7a3330;color:#ff8a80}
+.st-board.st-pboard .st-scene{grid-template-columns:104px minmax(0,1.15fr) minmax(0,1fr)}
+.st-pnum{display:flex;flex-direction:column;align-items:center;gap:5px}
+.st-pnum em{font-style:normal;font-weight:800;font-size:15px;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:var(--card2);border:1px solid var(--line2)}
+.st-pbadge{font-size:10.5px;min-width:22px;text-align:center;padding:1px 6px;border-radius:99px}
+.st-pbadge.red{background:#7a3330;color:#fff}.st-pbadge.yellow{background:#7a6320;color:#fff}.st-pbadge.ok{color:var(--lime);border:1px solid #3f5428}
+.st-sc-meta{gap:8px;align-items:center;flex-wrap:wrap}.st-sc-meta select{flex:1;min-width:150px}
+.st-prompts{grid-column:1/-1;border-top:1px dashed var(--line2);padding-top:8px;display:flex;flex-direction:column;gap:6px}
+.st-ptabs{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.st-ptabs>button:not(.btn){padding:5px 11px;border-radius:99px;border:1px solid var(--line2);background:none;color:var(--muted);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.st-ptabs>button.on{color:#111;background:var(--lime);border-color:var(--lime)}
+.st-pbody{font-family:var(--mono);font-size:11.5px;line-height:1.5;max-height:260px;overflow:auto;padding:8px 10px;border-radius:8px;background:#0d110e;border:1px solid var(--line);user-select:text}
+.st-pline{white-space:pre-wrap;padding:1px 0}
+.st-pline.lock{color:#8d998c;background:rgba(141,153,140,.08);border-left:2px solid #5a6658;padding-left:6px}
+.st-pline.lock i{font-style:normal;margin-right:4px}
+.st-attach{font-size:11px}
+.st-lockline{font-size:11px;color:var(--muted)}
+textarea.locked{background:rgba(141,153,140,.08);color:#9aa59a;border-style:dashed;cursor:not-allowed}
+.st-io-in{grid-template-columns:1fr}
+@media (max-width:1250px){.st-board.st-pboard .st-scene{grid-template-columns:104px minmax(0,1fr)}.st-board.st-pboard .st-col-prompt{grid-column:2}}
+@media (max-width:720px){.st-form{grid-template-columns:1fr}.st-board.st-pboard .st-scene{grid-template-columns:1fr}.st-board.st-pboard .st-col-prompt{grid-column:auto}}
+.st-pnum img,.st-pnum video{width:100%;border-radius:7px;border:1px solid var(--line2);background:#0d110e}
+.st-pnum .st-badge{position:static;font-size:10px;text-align:center}
+/* mẫu dự án tự thêm / từ video trending */
+.st-kind-wrap{position:relative;display:flex}.st-kind-wrap .st-kind{flex:1;padding-right:56px}
+.st-kind-tools{position:absolute;top:6px;right:6px;display:flex;gap:3px}
+.st-kind-tools button{width:24px;height:24px;border-radius:6px;border:1px solid var(--line2);background:var(--card);color:var(--muted);cursor:pointer;font-size:12px;padding:0}
+.st-kind-tools button:hover{color:var(--text);border-color:#4d5c3c}
+.st-kind.st-kind-add{border-style:dashed;background:none}
+.st-kind.st-kind-add.trend b{color:#ffb648}
+.st-kind-trendbox{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px dashed #7a6320;border-radius:9px;margin-bottom:10px}
+.st-kind-trendbox .row{gap:6px}.st-kind-trendbox input{flex:1;min-width:0}

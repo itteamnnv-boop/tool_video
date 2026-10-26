@@ -1,0 +1,56 @@
+{
+  "type": "ai_video",
+  "hidden": true,
+  "name": "Canvas · Ảnh thành video",
+  "description": "Dùng nội bộ cho Canvas: ảnh nối vào làm khung đầu + prompt tự do của người dùng, model video theo node",
+  "tags": [
+    "canvas",
+    "image to video"
+  ],
+  "options": {
+    "aspect": "9:16",
+    "duration": "10s",
+    "resolution": "720p"
+  },
+  "variables": [
+    {
+      "key": "KhungDau",
+      "label": "Cách dùng ảnh / video đính kèm",
+      "required": false,
+      "max": 400
+    },
+    {
+      "key": "MoTa",
+      "label": "Prompt chuyển động",
+      "required": true,
+      "max": 4000
+    }
+  ],
+  "attachments": [
+    {
+      "key": "image",
+      "label": "Ảnh khung đầu",
+      "required": false,
+      "role": "first frame",
+      "prompt": "start the video from exactly this image — same people, products, text and background"
+    },
+    {"key": "ref1", "label": "Ảnh tham chiếu 1", "required": false, "role": "reference image",
+     "prompt": "keep this person / product / place exactly as shown (face, outfit, packaging, label text, colours)"},
+    {"key": "ref2", "label": "Ảnh tham chiếu 2", "required": false, "role": "reference image",
+     "prompt": "keep this person / product / place exactly as shown (face, outfit, packaging, label text, colours)"},
+    {"key": "ref3", "label": "Ảnh tham chiếu 3", "required": false, "role": "reference image",
+     "prompt": "keep this person / product / place exactly as shown (face, outfit, packaging, label text, colours)"},
+    {"key": "ref4", "label": "Ảnh tham chiếu 4", "required": false, "role": "reference image",
+     "prompt": "keep this person / product / place exactly as shown (face, outfit, packaging, label text, colours)"},
+    {"key": "ref5", "label": "Ảnh tham chiếu 5", "required": false, "role": "reference image",
+     "prompt": "keep this person / product / place exactly as shown (face, outfit, packaging, label text, colours)"},
+    {"key": "vref", "label": "Video tham chiếu", "required": false, "video": true, "send_video": true,
+     "role": "reference frame", "prompt": "follow the composition and action shown in this frame",
+     "video_role": "reference video", "video_prompt": "follow the motion, pacing and camera movement of this video"}
+  ],
+  "prompt": [
+    "{KhungDau}",
+    "{MoTa}",
+    "Keep every person's face and outfit, every product's packaging and label, and any text on the image exactly as they are. Bright, true-to-life colours, natural skin texture (no smoothing), natural motion."
+  ]
+}

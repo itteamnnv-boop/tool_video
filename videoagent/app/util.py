@@ -1,5 +1,6 @@
 import json
 import re
+import time
 import unicodedata
 from pathlib import Path
 
@@ -22,11 +23,28 @@ def unique_dir(path: Path) -> Path:
             candidate, n = path.with_name(f"{path.name}_{n}"), n + 1
 
 
+# Windows: đọc đúng lúc luồng khác đang thay file (tmp → file thật) gặp PermissionError, và ngược lại → thử lại ngắn
+RETRY_TRIES, RETRY_WAIT = 10, 0.05
+
+
 def write_json(path: Path, data) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
-    tmp.replace(path)
+    for attempt in range(RETRY_TRIES):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if attempt == RETRY_TRIES - 1:
+                raise
+            time.sleep(RETRY_WAIT)
 
 
 def read_json(path: Path):
-    return json.loads(path.read_text("utf-8"))
+    for attempt in range(RETRY_TRIES):
+        try:
+            return json.loads(path.read_text("utf-8"))
+        except (PermissionError, json.JSONDecodeError):
+            if attempt == RETRY_TRIES - 1:
+                raise
+            time.sleep(RETRY_WAIT)

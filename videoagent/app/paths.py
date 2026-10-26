@@ -15,6 +15,8 @@ def _data_dir() -> Path:
     if "WindowsApps" in sys.base_prefix:
         # Python bản Microsoft Store ảo hoá %APPDATA%: tiến trình con (ffmpeg, Chrome) không thấy file ghi vào đó.
         path = Path.home() / ".videoagent"
+    elif sys.platform == "darwin":  # macOS: chỗ chuẩn cho dữ liệu ứng dụng
+        path = Path.home() / "Library" / "Application Support" / APP_NAME
     else:
         path = Path(os.environ.get("APPDATA") or Path.home() / ".config") / APP_NAME
     path.mkdir(parents=True, exist_ok=True)

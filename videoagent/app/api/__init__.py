@@ -14,10 +14,12 @@ Mỗi nhóm tính năng 1 file (mixin), lớp Api ghép tất cả lại — JS 
   content.py — Tạo content bài viết (quản lý + tạo, lấy thông tin từ link)
   musehub.py — Studio Muse AI · dây chuyền (mhub_*): tài khoản, hàng đợi, tư liệu, kịch bản, LadiPage, video mẫu, hậu kỳ, thư viện
   system.py — Tiến trình chung của hệ thống (nút ⏳ trên thanh tiêu đề): system_progress / system_cancel
+  canvas.py — Canvas (canvas_*): bảng node ảnh / video kiểu Kling Canvas
   common.py — logger, _ok / _fail, _hub_call
 """
 from .ads import AdsApi
 from .campaign import CampaignApi
+from .canvas import CanvasApi
 from .cast import CastApi
 from .content import ContentApi
 from .core import CoreApi
@@ -32,7 +34,7 @@ from .workflow import WorkflowApi
 
 
 class Api(CoreApi, WorkflowApi, MediaApi, SeedanceApi, ProfilesApi, FacebookApi, AdsApi, CampaignApi, StudioApi,
-          CastApi, ContentApi, MuseHubApi, SystemApi):
+          CastApi, ContentApi, MuseHubApi, SystemApi, CanvasApi):
     """Đối tượng duy nhất đưa cho pywebview (js_api)."""
 
 

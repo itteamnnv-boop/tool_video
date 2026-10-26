@@ -52,6 +52,16 @@ def _vtt_text(path: Path) -> str:
     return " ".join(out)[:6000]
 
 
+def _impersonate():
+    """Giả lập trình duyệt Chrome cho yt-dlp (cần curl_cffi) — None nếu máy chưa có thư viện."""
+    try:
+        import curl_cffi  # noqa: F401
+        from yt_dlp.networking.impersonate import ImpersonateTarget
+    except ImportError:
+        return None
+    return ImpersonateTarget.from_str("chrome")
+
+
 def fetch(source: str, work: Path, log) -> dict:
     """Link → tải video (≤720p) + tiêu đề, mô tả, phụ đề; file → kiểm tra. Trả về {path, title, description, duration,
     subtitles, uploader}."""
@@ -77,12 +87,27 @@ def fetch(source: str, work: Path, log) -> dict:
             # (lỗi "requested merging of multiple formats but ffmpeg is not installed")
             "subtitlesformat": "vtt/srt/best", "ffmpeg_location": str(ffmpeg.FFMPEG)}
     clean = lambda exc: re.sub(r"\x1b\[[0-9;]*m|\[[0-9;]*m", "", str(exc)).strip()[-300:]  # noqa: E731 — bỏ mã màu
+    browser = _impersonate()
+    if browser is not None and re.search(r"tiktok\.com|douyin\.com", source, re.I):
+        opts["impersonate"] = browser  # TikTok chặn yêu cầu không giống trình duyệt thật ("Unexpected response…")
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(source, download=True)
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(source, download=True)
+        except Exception as exc:
+            if browser is None or "impersonate" in opts or re.search(r"subtitle|429|Too Many Requests", clean(exc), re.I):
+                raise
+            log("Trang chặn yêu cầu tải — thử lại giả lập trình duyệt Chrome…")
+            for f in work.glob("video*"):
+                f.unlink(missing_ok=True)
+            opts["impersonate"] = browser
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(source, download=True)
     except Exception as exc:  # yt-dlp ném nhiều kiểu lỗi (link riêng tư, cần đăng nhập, bị chặn…)
         if not re.search(r"subtitle|429|Too Many Requests", clean(exc), re.I):
-            raise RefVideoError(f"Không tải được video từ link: {clean(exc)}") from exc
+            raise RefVideoError(f"Không tải được video từ link: {clean(exc)}"
+                                + ("" if browser is not None else " — thiếu thư viện curl_cffi để giả lập trình duyệt "
+                                   "(pip install curl_cffi)")) from exc
         # chỉ phụ đề lỗi / bị chặn → tải lại video KHÔNG kèm phụ đề (phân tích vẫn chạy bằng hình)
         log("Không tải được phụ đề (máy chủ chặn tạm thời) — tải video không kèm phụ đề…")
         for f in work.glob("video*"):

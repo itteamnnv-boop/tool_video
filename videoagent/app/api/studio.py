@@ -224,6 +224,55 @@ class StudioApi:
     def studio_start(self, pid: str, action: str, indexes: list | None = None, what: str = "both") -> dict:
         return self._st("task", self._studio.start, pid, action, indexes or [], what)
 
+    # ---- mẫu dự án tự thêm (Bước 0) — kể cả mẫu tạo từ video trending
+    def studio_kinds_save(self, kind: dict) -> dict:
+        """Lưu (thêm / sửa) mẫu dự án của người dùng; trả về danh sách mẫu mới + mã mẫu vừa lưu."""
+        from .. import studio_kinds
+        from ..studio import kinds_meta
+
+        try:
+            _, key = studio_kinds.save(kind or {})
+        except (ValueError, OSError) as exc:
+            return _fail(exc)
+        return _ok(kinds=kinds_meta(), key=key)
+
+    def studio_kinds_delete(self, key: str) -> dict:
+        from .. import studio_kinds
+        from ..studio import kinds_meta
+
+        try:
+            studio_kinds.delete(str(key or ""))
+        except OSError as exc:
+            return _fail(exc)
+        return _ok(kinds=kinds_meta())
+
+    def studio_kind_from_video(self, source: str, model: str = "gemini_browser", profile: str = "",
+                               show_browser: bool = False) -> dict:
+        """🔥 Mẫu từ video trending: phân tích video (1 lượt model) → bản nháp mẫu (hook, cấu trúc cảnh, nhịp, phong cách)."""
+        from .. import studio_kinds
+        from ..studio import LENGTHS
+
+        res = self.studio_analyze_video(source, model, profile, show_browser)
+        if not res.get("ok"):
+            return res
+        return _ok(draft=studio_kinds.from_video(res["result"], LENGTHS))
+
+    def studio_import_storyboard(self, pid: str, text: str) -> dict:
+        """Dán JSON storyboard model đã viết (app chưa lấy được câu trả lời) → thành các cảnh, không hỏi model lại."""
+        return self._st("project", self._studio.import_storyboard, pid, text)
+
+    def studio_prompts(self, pid: str) -> dict:
+        """Bước 4: sinh prompt ảnh + prompt video cho mọi cảnh (lỗi đỏ ở bước kiểm tra → báo lỗi, không sinh)."""
+        return self._st("project", self._studio.prompts, pid)
+
+    def studio_export(self, pid: str, fmt: str = "json") -> dict:
+        """Bước 5: xuất JSON (schema cho dev) / Excel storyboard vào <dự án>/export/."""
+        return self._st("result", self._studio.export, pid, fmt)
+
+    def studio_open_export(self, pid: str) -> dict:
+        """Mở thư mục chứa file đã xuất."""
+        return self._st("folder", self._studio.open_export, pid)
+
     def studio_cancel(self, pid: str) -> dict:
         return _ok(cancelled=self._studio.cancel(pid))
 

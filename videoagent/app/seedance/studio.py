@@ -1,7 +1,6 @@
 """Persistent scheduler, isolated profile workers and streaming MP4/ZIP exports."""
 import hashlib
 import json
-import os
 import shutil
 import threading
 import time
@@ -10,6 +9,7 @@ from pathlib import Path
 
 import requests
 
+from ..osutil import open_path
 from .. import browser_profiles
 from ..paths import DATA_DIR
 from .domain import PRESETS, StudioError, distribute, normalize_config, parse_prompts
@@ -588,4 +588,4 @@ class Studio:
         record = self.store.get("media", id)
         if not record or not record.get("path") or not Path(record["path"]).is_file():
             raise ValueError("Tải video về máy trước khi mở file")
-        os.startfile(record.get("cleanPath") or record["path"])
+        open_path(record.get("cleanPath") or record["path"])

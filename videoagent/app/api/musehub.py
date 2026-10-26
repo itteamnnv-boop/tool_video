@@ -1,7 +1,7 @@
 """API · Studio Muse AI · dây chuyền (mhub_*): tài khoản, hàng đợi, tư liệu, kịch bản, LadiPage, video mẫu, hậu kỳ, thư viện."""
-import os
 import webview
 
+from ..osutil import open_path, reveal
 from ..config import settings
 
 from .common import _fail, _hub_call, _ok, log
@@ -71,7 +71,7 @@ class MuseHubApi:
             folder_dialog = getattr(getattr(webview, "FileDialog", None), "FOLDER", None) or webview.FOLDER_DIALOG
             res = self._window.create_file_dialog(folder_dialog)
             return _ok(state=self._muse_hub.set_settings({"bgm_dir": str(res[0])}) if res else self._muse_hub.state())
-        os.startfile(self._muse_hub.bgm_dir())
+        open_path(self._muse_hub.bgm_dir())
         return _ok()
 
     # ---- LadiPage → 3 kịch bản
@@ -150,13 +150,12 @@ class MuseHubApi:
 
     def mhub_post_open(self, path: str) -> dict:
         """Mở Explorer chọn sẵn video hậu kỳ (chỉ file final.mp4 trong thư mục lưu video)."""
-        import subprocess
         from pathlib import Path
 
         root, target = Path(settings.output_dir).resolve(), Path(str(path or "")).resolve()
         if not target.is_relative_to(root) or target.name != "final.mp4" or not target.is_file():
             return _fail(ValueError("Không tìm thấy video hậu kỳ"))
-        subprocess.Popen(["explorer", "/select,", str(target)])
+        reveal(target)
         return _ok()
 
     # ---- Video mẫu: phân tích video (file / link) → Muse viết kịch bản tương tự cho nội dung mới
@@ -199,7 +198,6 @@ class MuseHubApi:
 
     def mhub_open(self, path: str = "") -> dict:
         """Mở thư mục kết quả Studio Muse AI; có path → Explorer chọn sẵn đúng file (chỉ file trong thư mục kết quả)."""
-        import subprocess
         from pathlib import Path
 
         root = self._muse_hub.out_root().resolve()
@@ -207,7 +205,7 @@ class MuseHubApi:
         if not target.is_relative_to(root) or not target.exists():
             return _fail(ValueError("File không thuộc thư mục Studio Muse AI"))
         if target.is_file():
-            subprocess.Popen(["explorer", "/select,", str(target)])
+            reveal(target)
         else:
-            os.startfile(target)
+            open_path(target)
         return _ok()

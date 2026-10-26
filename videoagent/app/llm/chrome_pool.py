@@ -21,8 +21,27 @@ HIDDEN_POS = (-32000, -32000)
 SHOWN_POS = (80, 40)
 
 
+MAC_APPS = {"msedge": "Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "chrome": "Google Chrome.app/Contents/MacOS/Google Chrome"}
+LINUX_BINS = {"msedge": ("microsoft-edge", "microsoft-edge-stable"),
+              "chrome": ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")}
+
+
 def _chrome_exe(channel: str) -> str:
-    """Đường dẫn trình duyệt thật theo kênh (chrome / msedge)."""
+    """Đường dẫn trình duyệt thật theo kênh (chrome / msedge) — Windows, macOS (/Applications) hoặc Linux (PATH)."""
+    import shutil
+    import sys
+
+    key = "msedge" if channel == "msedge" else "chrome"
+    if sys.platform == "darwin":
+        for root in ("/Applications", str(Path.home() / "Applications")):
+            p = Path(root) / MAC_APPS[key]
+            if p.is_file():
+                return str(p)
+    elif sys.platform != "win32":
+        found = next((shutil.which(b) for b in LINUX_BINS[key] if shutil.which(b)), None)
+        if found:
+            return found
     roots = [os.environ.get(k, "") for k in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")]
     rel = "Microsoft/Edge/Application/msedge.exe" if channel == "msedge" else "Google/Chrome/Application/chrome.exe"
     for r in roots:

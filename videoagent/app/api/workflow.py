@@ -1,6 +1,6 @@
 """API · Workflow kéo thả block (wf_*)."""
-import os
 
+from ..osutil import open_path
 from ..config import settings
 from ..templates_registry import registry
 
@@ -145,7 +145,7 @@ class WorkflowApi:
 
         def run():
             store.get_run(settings.output_dir, wf_id, run_id)
-            os.startfile(store.runs_root(settings.output_dir, wf_id) / run_id)
+            open_path(store.runs_root(settings.output_dir, wf_id) / run_id)
             return True
 
         return self._wf("opened", run)

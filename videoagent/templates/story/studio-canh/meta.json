@@ -16,9 +16,9 @@
   "variables": [
     {
       "key": "ThongSo",
-      "label": "Thông số: tỉ lệ, số giây, chất lượng, 1 shot liên tục",
+      "label": "Thông số: tỉ lệ, số giây, chất lượng, 1 shot liên tục, kiểu hình tự nhiên",
       "required": false,
-      "max": 600
+      "max": 1200
     },
     {
       "key": "KhoaNhanVat",
@@ -30,7 +30,7 @@
       "key": "KhoaBoiCanh",
       "label": "Khoá bối cảnh + sản phẩm",
       "required": false,
-      "max": 800
+      "max": 1600
     },
     {
       "key": "MoTa",

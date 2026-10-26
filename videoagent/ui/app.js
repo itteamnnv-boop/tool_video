@@ -123,6 +123,8 @@ function navigate(view) {
   if (view === 'ads') refreshAds();
   $('#page-adbot').classList.toggle('hidden', view !== 'adbot');
   if (view === 'adbot') window.AdBotPage.show();
+  $('#page-canvas').classList.toggle('hidden', view !== 'canvas');
+  if (view === 'canvas') window.CanvasPage.show();
   $('#page-cast').classList.toggle('hidden', view !== 'cast');
   if (view === 'cast') window.CastPage.show();
   $('#page-posts').classList.toggle('hidden', view !== 'posts');
@@ -1961,6 +1963,7 @@ const OfferForm = (() => {
 window.__onBackend = ({ event, data }) => {
   if (event.startsWith('mstudio_')) return window.MuseStudioPage.update(`studio_${event.slice(8)}`, data);  // Studio Muse AI
   if (event.startsWith('mhub_')) return window.MuseHubPage.update(event, data);  // Studio Muse AI · dây chuyền
+  if (event.startsWith('canvas_')) return window.CanvasPage && window.CanvasPage.update(event, data);  // Canvas
   switch (event) {
     case 'seedance': window.SeedanceStudio.update(data); break;
     case 'studio_update': case 'studio_log': case 'studio_progress': case 'studio_done': case 'studio_error': case 'studio_cancelled':
