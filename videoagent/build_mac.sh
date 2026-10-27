@@ -46,16 +46,28 @@ PLIST="dist/VideoAgent.app/Contents/Info.plist"
 
 # ffmpeg / driver Playwright đóng gói kèm phải chạy được
 find dist/VideoAgent.app -type f \( -name "ffmpeg-*" -o -name "node" \) -exec chmod +x {} + || true
-# ký ad-hoc (không cần tài khoản Apple) — macOS chip M bắt buộc mọi file chạy phải có chữ ký
+# ký ad-hoc (không cần tài khoản Apple) — macOS chip M bắt buộc mọi file chạy phải có chữ ký.
+# Xoá thuộc tính mở rộng trước (com.apple.quarantine, FinderInfo…) — còn sót thì codesign báo
+# "resource fork, Finder information, or similar detritus not allowed".
+echo "== Ký app (ad-hoc)"
+xattr -cr dist/VideoAgent.app
 codesign --force --deep --sign - dist/VideoAgent.app
+codesign --verify --deep --verbose=1 dist/VideoAgent.app
 echo "Xong: dist/VideoAgent.app"
 
 if [ "${1:-}" = "--skip-dmg" ]; then exit 0; fi
+echo "== Tạo .dmg"
 STAGE=build/dmg
 rm -rf "$STAGE" && mkdir -p "$STAGE"
 cp -R dist/VideoAgent.app "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 DMG="dist/VideoAgent-$VERSION-macOS-$ARCH.dmg"
 rm -f "$DMG"
-hdiutil create -volname "VideoAgent $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+# hdiutil trên máy ảo GitHub hay lỗi chập chờn ("Resource busy") → thử lại tối đa 5 lần
+for i in 1 2 3 4 5; do
+  if hdiutil create -volname "VideoAgent $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG"; then break; fi
+  if [ "$i" = 5 ]; then echo "hdiutil create lỗi 5 lần liền" >&2; exit 1; fi
+  echo "hdiutil create lỗi (lần $i) — thử lại sau $((i * 5)) giây…"
+  sleep $((i * 5))
+done
 echo "Xong bộ cài: $DMG"

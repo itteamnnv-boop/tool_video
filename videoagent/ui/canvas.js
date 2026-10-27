@@ -98,10 +98,11 @@ window.CanvasPage = (() => {
         <div class="cv-chain">${chain || '<small class="muted">Chưa có node</small>'}</div></div>
       <div class="cv-bcard-body"><b>${esc(b.name)}</b>
         <small class="muted">${b.nodes} node · ${b.edges} dây · ${b.runs} lần chạy · Sửa ${esc(fmtTime(b.updated_at))}</small>
-        <div class="cv-bcard-st">${status}</div></div>
+        <div class="cv-bcard-st">${status}</div>${schedLine(b.schedule)}</div>
       <div class="cv-bcard-foot"><button class="btn ghost sm" data-act-b="open" type="button">Mở</button><span class="cv-sp"></span>
         ${b.running ? '<button class="btn ghost sm" data-act-b="stop" type="button">⏹ Dừng</button>'
           : '<button class="btn primary sm" data-act-b="run" type="button" title="Chạy cả quy trình (dùng lại kết quả không đổi)">▶ Chạy</button>'}
+        <button class="btn ghost sm ${b.schedule && b.schedule.on ? 'on' : ''}" data-act-b="sched" type="button" title="Lập lịch chạy tự động">⏰</button>
         <button class="btn ghost sm" data-act-b="dup" type="button" title="Nhân bản Canvas">⧉</button>
         <button class="btn ghost sm" data-act-b="del" type="button" title="Xoá Canvas">🗑</button></div></div>`;
   }
@@ -127,6 +128,10 @@ window.CanvasPage = (() => {
   async function boardAction(what, bid) {
     const b = C.boards.find(x => x.id === bid);
     if (what === 'open') return openBoard(bid);
+    if (what === 'sched') {
+      if (!(await window.requireAdmin('lập lịch chạy quy trình Canvas'))) return;
+      return scheduleDialog(bid, b ? b.name : bid, (b || {}).schedule, () => listBoards());
+    }
     if (what === 'dup') {
       if (!(await window.requireAdmin('nhân bản quy trình Canvas'))) return;
       if (await call('canvas_duplicate_board', bid)) { toast('Đã nhân bản Canvas', 'ok'); listBoards(); }
@@ -191,6 +196,75 @@ window.CanvasPage = (() => {
     document.body.appendChild(box);
   }
 
+  /* ---- ⏰ lập lịch chạy */
+  const SCHED_MODES = { daily: 'Hằng ngày', weekly: 'Các thứ trong tuần', interval: 'Cứ mỗi … (lặp lại)', once: 'Một lần' };
+  const SCHED_DAYS = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
+  const SCHED_EVERY = [[15, '15 phút'], [30, '30 phút'], [60, '1 giờ'], [120, '2 giờ'], [180, '3 giờ'], [360, '6 giờ'], [720, '12 giờ'], [1440, '24 giờ']];
+  const fmtAt = iso => (iso ? `${String(iso).slice(11, 16)} ${String(iso).slice(8, 10)}/${String(iso).slice(5, 7)}` : '');
+
+  function schedLine(s) {
+    if (!s || (!s.on && !s.last_note)) return '';
+    return `<div class="cv-bcard-sched ${s.on ? 'on' : ''}" title="${esc(s.last_note || '')}">⏰ ${s.on
+      ? `${esc(s.desc || '')}${s.next_at ? ` · lần tới <b>${esc(fmtAt(s.next_at))}</b>` : ''}` : 'Lịch đang tắt'}
+      ${s.last_note ? `<small>${esc(s.last_note)}</small>` : ''}</div>`;
+  }
+
+  function scheduleDialog(bid, name, cur, onSaved) {
+    const today = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const s = { on: true, mode: 'daily', time: '08:00', date: `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`,
+      days: [0, 1, 2, 3, 4], every_min: 60, fresh: true, ...(cur || {}) };
+    if (!cur) s.on = true;
+    const box = document.createElement('div');
+    box.className = 'cv-lightbox cv-import';
+    box.innerHTML = `<div class="cv-import-box cv-ask-box cv-sched-box"><div class="cv-side-head"><b>⏰ Lập lịch chạy · ${esc(name)}</b><button class="btn ghost sm" data-x type="button">✕</button></div>
+      <label class="cv-opt-check"><input type="checkbox" data-s="on" ${s.on ? 'checked' : ''}> <b>Bật lịch chạy tự động</b></label>
+      <div class="cv-sched-grid">
+        <label class="field"><span>Lặp lại</span><select data-s="mode">${Object.entries(SCHED_MODES).map(([k, v]) => `<option value="${k}" ${k === s.mode ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+        <label class="field" data-show="daily weekly once"><span>Giờ chạy</span><input type="time" data-s="time" value="${esc(s.time)}"></label>
+        <label class="field" data-show="once"><span>Ngày</span><input type="date" data-s="date" value="${esc(s.date || '')}"></label>
+        <label class="field" data-show="interval"><span>Mỗi</span><select data-s="every_min">${SCHED_EVERY.map(([v, l]) => `<option value="${v}" ${Number(s.every_min) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      </div>
+      <div class="field" data-show="weekly"><span>Các thứ</span><div class="cv-sched-days">${SCHED_DAYS.map((d, i) =>
+        `<label class="${(s.days || []).includes(i) ? 'on' : ''}"><input type="checkbox" data-day="${i}" ${(s.days || []).includes(i) ? 'checked' : ''}>${d}</label>`).join('')}</div></div>
+      <label class="cv-opt-check"><input type="checkbox" data-s="fresh" ${s.fresh !== false ? 'checked' : ''}> Làm lại từ đầu mỗi lần <small class="muted">(tạo nội dung mới — tốn lượt model; bỏ chọn = chỉ chạy khối có thay đổi)</small></label>
+      <small class="muted cv-sched-note">Chỉ chạy khi app đang mở; lỡ giờ vì tắt app thì bỏ qua lượt đó (không chạy bù). Khối Đăng bài vẫn chờ bạn duyệt (trừ khối đã bật tự đăng);
+        khối “Hỏi khi chạy” dùng giá trị đã lưu sẵn.</small>
+      ${cur && cur.last_note ? `<div class="cv-sched-last">Lượt trước: ${esc(cur.last_note)}</div>` : ''}
+      <div class="row" style="justify-content:flex-end;margin-top:8px">
+        ${cur && cur.on ? '<button class="btn danger sm" data-off type="button">Tắt lịch</button><span class="cv-sp"></span>' : ''}
+        <button class="btn ghost sm" data-x type="button">Huỷ</button>
+        <button class="btn primary sm" data-save type="button">Lưu lịch</button></div></div>`;
+    const q = sel => box.querySelector(sel);
+    const sync = () => {
+      const mode = q('[data-s="mode"]').value;
+      box.querySelectorAll('[data-show]').forEach(el => el.classList.toggle('hidden', !el.dataset.show.split(' ').includes(mode)));
+      box.querySelectorAll('.cv-sched-days label').forEach(l => l.classList.toggle('on', l.querySelector('input').checked));
+    };
+    box.onchange = sync;
+    sync();
+    const save = async cfg => {
+      const res = await call('canvas_schedule', bid, cfg);
+      if (!res) return;
+      box.remove();
+      const sc = res.board.schedule || {};
+      toast(sc.on ? `Đã lưu lịch — lần chạy tới: ${fmtAt(sc.next_at)}` : 'Đã tắt lịch chạy', 'ok');
+      if (onSaved) onSaved(res.board);
+    };
+    q('[data-save]').onclick = () => {
+      const cfg = { on: q('[data-s="on"]').checked, mode: q('[data-s="mode"]').value, time: q('[data-s="time"]').value,
+        date: q('[data-s="date"]').value, every_min: Number(q('[data-s="every_min"]').value), fresh: q('[data-s="fresh"]').checked,
+        days: [...box.querySelectorAll('[data-day]:checked')].map(x => Number(x.dataset.day)) };
+      if (cfg.on && cfg.fresh && !confirm('Mỗi lần chạy theo lịch sẽ TẠO LẠI toàn bộ quy trình (tốn lượt model ảnh / video / chữ). Lưu lịch?')) return;
+      save(cfg);
+    };
+    const off = q('[data-off]');
+    if (off) off.onclick = () => save({ on: false });
+    box.querySelectorAll('[data-x]').forEach(x => { x.onclick = () => box.remove(); });
+    box.onclick = e => { if (e.target === box) box.remove(); };
+    document.body.appendChild(box);
+  }
+
   function listFlowEvent(data) {
     // màn danh sách: cập nhật thẻ khi quy trình đang chạy / vừa xong
     const b = C.boards.find(x => x.id === data.board);
@@ -233,6 +307,7 @@ window.CanvasPage = (() => {
         <span class="cv-sp"></span>
         <button class="btn primary sm" data-cv="run" title="Chạy cả quy trình theo thứ tự dây nối — node đã có kết quả mà không đổi gì thì dùng lại (không tốn lượt)">▶ Chạy toàn bộ</button>
         <button class="btn ghost sm" data-cv="rerun" title="Làm lại MỌI node từ đầu (tạo mới hết — tốn lượt model)">⟳ Làm lại tất cả</button>
+        <button class="btn ghost sm" data-cv="sched" title="Lập lịch chạy tự động (một lần / hằng ngày / các thứ / cứ N phút)">⏰ Lịch</button>
         <button class="btn ghost sm" data-cv="assist" title="Trợ lý Claude: điều phối quy trình, đánh giá kết quả, đề xuất sửa (bạn bấm Áp dụng mới thay đổi)">🤖 Trợ lý</button>
         <button class="btn ghost sm" data-cv="history" title="Các lần chạy quy trình">🕘 Lịch sử</button>
         <button class="btn ghost sm" data-cv="folder" title="Mở thư mục lưu file của Canvas này">📁 Thư mục</button>
@@ -269,6 +344,10 @@ window.CanvasPage = (() => {
     root.querySelector('[data-cv="rerun"]').onclick = () => runFlow('all', '', true);
     root.querySelector('[data-cv="history"]').onclick = () => toggleHistory();
     root.querySelector('[data-cv="assist"]').onclick = () => toggleAssist();
+    root.querySelector('[data-cv="sched"]').onclick = async () => {
+      if (!(await window.requireAdmin('lập lịch chạy quy trình Canvas'))) return;
+      scheduleDialog(C.board.id, C.board.name, C.board.schedule, board => { if (C.board) C.board.schedule = board.schedule; });
+    };
     C.assist = { open: false, chat: null, sending: false, status: '' };
     const name = root.querySelector('.cv-name');
     name.onchange = async () => { const res = await call('canvas_rename', b.id, name.value); if (res) C.board.name = res.board.name; };
@@ -2029,6 +2108,12 @@ window.CanvasPage = (() => {
       const busy = (data.tasks || []).some(t => t.status === 'queued' || t.status === 'running');
       const item = document.querySelector('.sb-item[data-view="canvas"]');
       if (item) item.classList.toggle('cv-busy-dot', busy);
+      return;
+    }
+    if (event === 'canvas_schedule') {  // bộ hẹn giờ vừa chạy / lùi / bỏ lượt → cập nhật thẻ (lần tới, kết quả lượt trước)
+      if (C.board && data.board === C.board.id) C.board.schedule = { ...(C.board.schedule || {}), ...data.schedule };
+      const card = !C.board && C.boards.find(x => x.id === data.board);
+      if (card) { card.schedule = { ...(card.schedule || {}), ...data.schedule }; drawCards(); }
       return;
     }
     if (event === 'canvas_assist' && C.board && data.board === C.board.id) {  // trạng thái trợ lý (đang hỏi Claude…)

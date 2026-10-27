@@ -1,7 +1,8 @@
 # Build bộ cài VideoAgent cho macOS (bản chưa ký Apple) trên máy ảo của GitHub.
 #   - Chạy tay: tab Actions → "Build macOS" → Run workflow → tải .dmg ở mục Artifacts của lần chạy.
 #   - Đẩy tag v* (vd. git tag v1.0.2 && git push origin v1.0.2) → build rồi đính kèm .dmg vào GitHub Release của tag.
-# 2 bản: Apple Silicon (chip M, runner macos-14) và Intel (runner macos-13).
+# 2 bản: Apple Silicon (chip M, runner macos-14) và Intel (runner macos-15-intel — GitHub đã ngừng macos-13 từ 12/2025;
+# máy Intel của GitHub chỉ còn tới khoảng mùa thu 2027).
 name: Build macOS
 
 on:
@@ -20,16 +21,16 @@ jobs:
         include:
           - runner: macos-14
             arch: arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             arch: x86_64
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
         working-directory: videoagent
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -65,7 +66,7 @@ jobs:
           codesign --verify --deep --verbose=1 dist/VideoAgent.app
           du -sh dist/VideoAgent.app dist/*.dmg
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: VideoAgent-macOS-${{ matrix.arch }}
           path: videoagent/dist/*.dmg

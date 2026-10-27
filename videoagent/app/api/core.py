@@ -85,6 +85,9 @@ class CoreApi:
                                     facebook=self._facebook, ads=self._ads, studio=self._studio)  # Canvas
         # chạy quy trình xong → trợ lý Claude tự điều phối (chỉ khi Canvas đó bật): chấm theo tiêu chí, giao khối làm lại
         self._canvas.on_flow_done = lambda bid, rec: self._assist().after_run(bid, rec)
+        from ..canvas_schedule import CanvasScheduler  # ⏰ lập lịch chạy Canvas (chạy khi app đang mở)
+
+        self._canvas_scheduler = CanvasScheduler(self._canvas).start()
         # Studio Muse AI: cùng chức năng Studio, dự án riêng, mọi bước chỉ dùng Muse (sự kiện mstudio_*)
         self._studio_muse = StudioRunner(settings, self._license, self._emit, images=self._images, videos=self._runner,
                                          variant="muse")

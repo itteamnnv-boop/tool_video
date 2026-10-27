@@ -192,6 +192,12 @@ class CanvasApi:
     def canvas_open_folder(self, bid: str) -> dict:
         return self._cv("opened", lambda: open_path(self._canvas.dir(bid)) or True)
 
+    # ---- ⏰ lập lịch chạy (đặt lịch = sửa quy trình → cần mở khoá)
+    def canvas_schedule(self, bid: str, cfg: dict) -> dict:
+        from ..canvas_schedule import set_schedule
+
+        return self._cv_edit("board", lambda: set_schedule(self._canvas, bid, cfg or {}))
+
     # ---- 🤖 Trợ lý Canvas (Claude trình duyệt: điều phối + đánh giá; đề xuất chỉ chạy khi bạn bấm Áp dụng)
     def _assist(self):
         if not hasattr(self, "_canvas_assist"):

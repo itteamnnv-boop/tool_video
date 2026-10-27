@@ -245,8 +245,16 @@ class CanvasRunner:
                         "chain": [kinds[i] for i in self._topo(b)][:14],  # thứ tự chạy → chuỗi biểu tượng trên thẻ
                         "runs": len(runs), "runs_today": sum(1 for r in runs if str(r.get("at", ""))[:10] == now()[:10]),
                         "last_run": {k: last.get(k) for k in ("id", "label", "status", "at", "ended")} if last else None,
-                        "running": any(n.get("status") in ACTIVE for n in b["nodes"])})
+                        "running": any(n.get("status") in ACTIVE for n in b["nodes"]),
+                        "schedule": self._schedule_info(b.get("schedule"))})
         return sorted(out, key=lambda x: x["updated_at"], reverse=True)
+
+    @staticmethod
+    def _schedule_info(s: dict | None) -> dict | None:
+        """Lịch chạy cho thẻ ở màn danh sách (kèm mô tả bằng chữ)."""
+        from .canvas_schedule import describe
+
+        return {**s, "desc": describe(s)} if s else None
 
     def duplicate_board(self, bid: str) -> dict:
         """Nhân bản cả Canvas (node, dây nối, ảnh / video đã tạo) — bản sao chưa có lịch sử chạy."""

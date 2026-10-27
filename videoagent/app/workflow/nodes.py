@@ -737,7 +737,6 @@ def _dub_plan(ctx, cfg, video: Path, hint: str) -> list[dict]:
     """Phân tích video (ảnh lưới khung hình có mốc giây + mốc đổi cảnh) → model nhìn hình viết lời đọc theo từng đoạn
     khớp cảnh: [{start, end, text}], đã sắp xếp, nằm trong video, số chữ vừa thời lượng."""
     from .. import ffmpeg
-    from ..llm.base import extract_json
     from ..pipeline import ref_video
     from ..studio import ask_model
 
@@ -754,26 +753,27 @@ def _dub_plan(ctx, cfg, video: Path, hint: str) -> list[dict]:
     model = cfg.get("analyze_model") or "claude_browser"
     ctx.log(f"Đang nhờ {model.split('_')[0].title()} xem video ({len(info['frames'])} khung) và viết lời đọc theo cảnh…")
 
-    def parse(t):
-        try:
-            data = extract_json(t)
-        except ValueError:
-            return None
-        return data if isinstance(data, dict) and isinstance(data.get("doan"), list) and data["doan"] else None
-
-    raw = ask_model(ctx.settings, {"model": model, "text_profile": "", "show_browser": False, "timeout": 600}, prompt,
-                    complete=lambda t: parse(t) is not None, what="xem video và viết lời đọc", log=ctx.log,
-                    check_cancel=ctx.check_cancel, images=[sheet])
-    data = parse(raw)
-    if not data:
-        raise ValueError("Model không trả về lời đọc theo cảnh hợp lệ — thử lại hoặc đổi model")
+    options = {"model": model, "text_profile": "", "show_browser": False, "timeout": 600}
+    raw = ask_model(ctx.settings, options, prompt, complete=lambda t: bool(_dub_items(t)), what="xem video và viết lời đọc",
+                    log=ctx.log, check_cancel=ctx.check_cancel, images=[sheet])
+    (work / "tra-loi-model.txt").write_text(str(raw or ""), "utf-8")  # câu trả lời gốc — để xem lại khi lỗi
+    items = _dub_items(raw)
+    if not items:  # trả lời sai định dạng (viết chữ, thiếu JSON…) → hỏi lại 1 lần, chỉ xin JSON
+        ctx.log("Câu trả lời chưa đúng định dạng — hỏi lại model, chỉ xin JSON lời đọc theo cảnh…", "warn")
+        retry = (prompt + "\n\nLƯU Ý: lần trước bạn chưa trả đúng định dạng. CHỈ trả về đúng 1 khối ```json "
+                 '{"doan": [{"bat_dau": số giây, "ket_thuc": số giây, "loi": "câu đọc"}]} — không viết gì khác.')
+        raw = ask_model(ctx.settings, dict(options), retry, complete=lambda t: bool(_dub_items(t)),
+                        what="viết lại lời đọc (JSON)", log=ctx.log, check_cancel=ctx.check_cancel, images=[sheet])
+        (work / "tra-loi-model-lan-2.txt").write_text(str(raw or ""), "utf-8")
+        items = _dub_items(raw)
+    if not items:
+        raise ValueError("Model không trả về lời đọc theo cảnh hợp lệ (đã hỏi lại 1 lần) — xem câu trả lời ở "
+                         f"{work / 'tra-loi-model.txt'}; thử lại hoặc đổi model")
     segs = []
-    for d in data["doan"]:
-        if not isinstance(d, dict) or not str(d.get("loi") or "").strip():
-            continue
-        start = max(0.0, min(dur - 0.3, _num(d.get("bat_dau"), 0.0)))
-        end = max(start + 0.5, min(dur, _num(d.get("ket_thuc"), start + 3)))
-        segs.append({"start": round(start, 2), "end": round(end, 2), "text": " ".join(str(d["loi"]).split())[:600]})
+    for start, end, text in items:
+        start = max(0.0, min(dur - 0.3, start if start is not None else 0.0))
+        end = max(start + 0.5, min(dur, end if end is not None else start + 3))
+        segs.append({"start": round(start, 2), "end": round(end, 2), "text": " ".join(text.split())[:600]})
     segs.sort(key=lambda s: s["start"])
     if not segs:
         raise ValueError("Model không viết được lời đọc nào cho video này")
@@ -781,6 +781,63 @@ def _dub_plan(ctx, cfg, video: Path, hint: str) -> list[dict]:
     for s in segs:
         ctx.log(f"  {s['start']:5.1f}–{s['end']:5.1f}s: {s['text']}")
     return segs
+
+
+def _secs(value):
+    """Mốc giờ model viết: 3.5 / "3,5" / "3.5s" / "0:03" / "00:01:02.5" → giây (None nếu không đọc được)."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value or "").strip().lower().replace(",", ".").rstrip("s").strip()
+    if not s:
+        return None
+    try:
+        if ":" in s:
+            total = 0.0
+            for part in s.split(":"):
+                total = total * 60 + float(part)
+            return total
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _dub_items(text: str) -> list[tuple]:
+    """Lời đọc theo cảnh từ câu trả lời của model → [(bắt đầu, kết thúc, câu)]. Chấp nhận nhiều dạng: {"doan": […]},
+    mảng gốc, khoá tiếng Việt / tiếng Anh (bat_dau / start, ket_thuc / end, loi / text…), mốc "0:03";
+    không có JSON thì đọc các dòng "0:00 – 0:04: câu đọc"."""
+    import re
+
+    from ..llm.base import extract_json
+
+    try:
+        data = extract_json(text)
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        data = next((v for k, v in data.items() if isinstance(v, list) and k.lower() in (
+            "doan", "đoạn", "doans", "segments", "segment", "scenes", "canh", "cảnh", "loi_doc", "items")), None) \
+            or next((v for v in data.values() if isinstance(v, list)), None)
+    out = []
+    for d in data if isinstance(data, list) else []:
+        if not isinstance(d, dict):
+            continue
+        low = {str(k).lower(): v for k, v in d.items()}
+        line = next((low[k] for k in ("loi", "lời", "loi_doc", "text", "noi_dung", "nội dung", "cau", "câu", "voiceover",
+                                      "narration") if str(low.get(k) or "").strip()), "")
+        if not line:
+            continue
+        start = next((_secs(low[k]) for k in ("bat_dau", "bắt đầu", "start", "tu", "từ", "from", "begin") if k in low), None)
+        end = next((_secs(low[k]) for k in ("ket_thuc", "kết thúc", "end", "den", "đến", "to", "stop") if k in low), None)
+        if start is None and isinstance(low.get("thoi_gian") or low.get("time"), str):  # "0:00-0:04"
+            times = re.findall(r"\d+(?::\d+)*(?:[.,]\d+)?", low.get("thoi_gian") or low.get("time"))
+            start, end = (_secs(times[0]) if times else None), (_secs(times[1]) if len(times) > 1 else None)
+        out.append((start, end, str(line)))
+    if out:
+        return out
+    for m in re.finditer(r"^\W*(\d+(?::\d+)?(?:[.,]\d+)?)\s*s?\s*[-–—~→]+\s*(\d+(?::\d+)?(?:[.,]\d+)?)\s*s?\s*[:：\]\)]\s*(.+)$",
+                         str(text or ""), re.M):  # không có JSON: dòng "0:00 – 0:04: câu đọc"
+        out.append((_secs(m.group(1)), _secs(m.group(2)), m.group(3).strip().strip('"“”')))
+    return out
 
 
 def _voice_track(segs: list[dict], wavs: list[Path], dest: Path, log) -> Path:
