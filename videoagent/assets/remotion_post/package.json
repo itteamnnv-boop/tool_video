@@ -1,0 +1,17 @@
+{
+  "name": "videoagent-remotion-post",
+  "private": true,
+  "version": "1.0.0",
+  "description": "VideoAgent · Hậu kỳ Remotion: lớp đồ hoạ động (phụ đề, hook, tiêu đề cảnh, nhấn, zoom, thẻ kết) trên video đã ghép",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts PostVideo"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.533",
+    "@remotion/fonts": "4.0.533",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "remotion": "4.0.533"
+  }
+}

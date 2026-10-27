@@ -41,6 +41,8 @@
 <link rel="stylesheet" href="posts.css">
 <link rel="stylesheet" href="cast.css">
 <link rel="stylesheet" href="canvas.css">
+<link rel="stylesheet" href="settings.css">
+<link rel="stylesheet" href="imglib.css">
 </head>
 <body>
 <div id="splash" role="status" aria-label="Đang khởi động VideoAgent">
@@ -78,15 +80,15 @@
       <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg></span>
       <span class="sb-label">Thư viện video</span><span class="sb-badge" id="sbVideoCount">0</span>
     </button>
+    <button class="sb-item top-item" data-view="imglib" title="Thư viện hình ảnh">
+      <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="14" height="14" rx="2"/><path d="M7 3h12a2 2 0 0 1 2 2v12"/><circle cx="8.5" cy="11" r="1.6"/><path d="M17 16.5l-4-4-7 7"/></svg></span>
+      <span class="sb-label">Thư viện hình ảnh</span><span class="sb-badge" id="sbImgLibCount">0</span>
+    </button>
     <button class="sb-item top-item" data-view="images" title="Tạo hình ảnh">
       <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 9"/></svg></span>
       <span class="sb-label">Tạo hình ảnh</span><span class="sb-badge" id="sbImageCount">0</span><i class="sb-dot hidden" id="sbImgRunning" title="Đang tạo ảnh"></i>
     </button>
     <span class="top-sep"></span>
-    <button class="sb-item top-item top-sys" data-view="profiles" title="Profile trình duyệt">
-      <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.2A4.5 4.5 0 0 1 21 18.5"/></svg></span>
-      <span class="sb-label">Profile trình duyệt</span><span class="sb-badge" id="sbProfileCount">1</span>
-    </button>
     <button class="sb-item top-item top-sys" data-view="settings" title="Cài đặt">
       <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg></span>
       <span class="sb-label">Cài đặt</span>
@@ -749,6 +751,7 @@
     <p class="muted">Mỗi profile là một Chrome riêng với tài khoản đăng nhập riêng. Gán profile cho model (Gemini, Grok, ChatGPT, Dola) —
       khi tạo video/ảnh, app tự chọn profile <b>rảnh</b> của model đó, nên nhiều profile = nhiều tác vụ chạy song song.</p>
   </div>
+  <div id="profPane"><!-- nội dung này được chuyển vào Cài đặt → khối Profile trình duyệt -->
   <div class="prof-sites" id="profSites"></div>
   <div class="card prof-new">
     <div class="card-title">THÊM PROFILE</div>
@@ -760,6 +763,7 @@
     </div>
   </div>
   <div class="prof-list" id="profList"></div>
+  </div>
 </section>
 
 <!-- ============================== CHIẾN DỊCH ============================== -->
@@ -875,6 +879,48 @@
   <div class="page-body" id="tplPageBody"></div>
 </section>
 
+<section class="panel page il-page hidden" id="page-imglib">
+  <div class="il-head">
+    <div><small class="eyebrow">THƯ VIỆN HÌNH ẢNH</small><h2>Ảnh đã tạo</h2>
+      <span class="muted" id="ilCount">0 bộ ảnh</span> <span class="muted" id="ilShown"></span></div>
+    <div class="il-tools">
+      <input id="ilSearch" type="search" placeholder="Tìm theo prompt / tên…" autocomplete="off">
+      <select id="ilEngine" title="Lọc theo model"></select>
+      <select id="ilSort" title="Sắp xếp"><option value="new">Mới nhất trước</option><option value="old">Cũ nhất trước</option></select>
+      <button class="btn ghost" id="ilOpenRoot" type="button">📂 Mở thư mục ảnh</button>
+      <button class="btn ghost" id="ilReload" type="button">Tải lại</button>
+      <button class="btn primary" id="ilNew" type="button">+ Tạo ảnh</button>
+    </div>
+  </div>
+  <div class="il-body">
+    <div class="il-grid" id="ilGrid"></div>
+    <div class="il-view" id="ilView"><div class="empty">Chọn một ảnh để xem</div></div>
+  </div>
+</section>
+
+<section class="panel page set-page hidden" id="page-settings">
+  <aside class="set-side">
+    <div class="set-side-head"><small class="eyebrow">CÀI ĐẶT</small><h2>Cài đặt</h2></div>
+    <label class="set-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+      <input id="setSearch" type="search" placeholder="Tìm cài đặt… (VD: khoá, Chrome, FPS)" autocomplete="off"></label>
+    <nav class="set-nav" id="setNav"></nav>
+  </aside>
+  <div class="set-main">
+    <div class="set-bar">
+      <span class="set-bar-txt"><b>Cài đặt chung cho toàn app</b> <small class="muted">Ctrl + S để lưu nhanh</small></span>
+      <span class="set-dirty hidden" id="setDirty">● Có thay đổi chưa lưu</span>
+      <button class="btn ghost" id="setLockNow" type="button" title="Khoá Cài đặt ngay — lần sau phải nhập mật khẩu">🔒 Khoá</button>
+      <button class="btn ghost" id="setReload" type="button" title="Bỏ thay đổi chưa lưu, tải lại">↺ Hoàn tác</button>
+      <button class="btn primary" id="setSave" type="button">Lưu cài đặt</button>
+    </div>
+    <div class="set-scroll" id="setScroll">
+      <div class="set-grid" id="setBody"></div>
+      <p class="set-empty hidden" id="setEmpty">Không có cài đặt nào khớp từ khoá.</p>
+    </div>
+  </div>
+  <div class="set-gate hidden" id="setGate"></div>
+</section>
+
 <section class="panel page hidden" id="page-help">
   <div class="page-head">
     <small class="eyebrow">HƯỚNG DẪN</small>
@@ -917,6 +963,8 @@
 </div>
 <div class="toast hidden" id="toast"></div>
 <script src="app.js"></script>
+<script src="settings.js"></script>
+<script src="imglib.js"></script>
 <script src="minivideo.js"></script>
 <script src="jobs.js"></script>
 <script src="notify.js"></script>

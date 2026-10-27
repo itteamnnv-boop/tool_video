@@ -1136,9 +1136,8 @@ def ask_model(settings, options: dict, prompt: str, *, complete=None, what: str 
             provider.start_url = str(options.get("chat_url") or "")  # tiếp tục đúng cuộc trò chuyện cũ (nếu có)
             log(f"Đang chờ {provider.site.name} {what} (tối đa {provider.timeout_s // 60} phút)"
                 + (" — đang hiện cửa sổ trình duyệt" if options.get("show_browser") else ""))
-            if images:  # ảnh đính kèm (vd. lưới khung hình video mẫu cho Muse) — chỉ khi bên gọi truyền vào
-                return provider.generate(system + "\n\n" + prompt, images=images, complete=complete)
-            text = provider.generate(system + "\n\n" + prompt, complete=complete)
+            # ảnh đính kèm (vd. lưới khung hình video mẫu cho Muse, ảnh kết quả cho trợ lý Canvas) — chỉ khi bên gọi truyền vào
+            text = provider.generate(system + "\n\n" + prompt, images=images or None, complete=complete)
             options["_last_url"] = provider.last_url  # bên gọi lưu lại để lần sau nhắn tiếp đúng cuộc trò chuyện
             return text
         return provider.generate(system + "\n\n" + prompt, images=images or None)

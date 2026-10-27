@@ -1,0 +1,31 @@
+/* ---------- Thư viện hình ảnh (lưới trái + khung xem phải, như Thư viện video) ---------- */
+.panel.page.il-page{display:flex;flex-direction:column;gap:12px;overflow:hidden}
+.il-page.hidden{display:none!important}
+.il-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.il-head h2{font-size:20px;margin:3px 0 2px}
+.il-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.il-tools input[type=search]{width:240px}
+.il-tools select{width:auto;min-width:150px}
+.il-tools>*{flex:none}
+.il-body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(360px,440px);gap:13px}
+.il-grid{overflow-y:auto;min-height:0;padding-right:3px}
+.il-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.il-tile{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;background:#0d110e;border:2px solid var(--line);padding:0}
+.il-tile img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .2s}
+.il-tile:hover{border-color:#566a3c}
+.il-tile:hover img{transform:scale(1.03)}
+.il-tile.active{border-color:var(--lime);box-shadow:0 0 0 2px #d4f06a33}
+.il-tile-meta{position:absolute;left:0;right:0;bottom:0;padding:14px 6px 4px;font-size:10.5px;color:#dfe6dc;text-align:left;
+  background:linear-gradient(transparent,#000c);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity .15s}
+.il-tile:hover .il-tile-meta,.il-tile.active .il-tile-meta{opacity:1}
+.il-more{height:1px}
+.il-view{border:1px solid var(--line);border-radius:var(--radius);background:#0b0e0b;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.il-view>.empty{margin:auto}
+.il-stage{position:relative;flex:1;min-height:200px;display:grid;place-items:center;padding:10px}
+.il-stage img{position:absolute;inset:10px;width:calc(100% - 20px);height:calc(100% - 20px);object-fit:contain;cursor:zoom-in}
+.il-stage .iv-nav{z-index:1}
+.il-info{flex:none;border-top:1px solid var(--line);padding:11px 12px 12px;display:flex;flex-direction:column;gap:8px;max-height:46%;overflow-y:auto;background:var(--card)}
+.il-title{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.il-info .iv-prompt p{max-height:120px;overflow-y:auto}
+.il-actions{display:flex;flex-wrap:wrap;gap:6px}
+@media (max-width:1100px){.il-body{grid-template-columns:minmax(0,1fr) 320px}}

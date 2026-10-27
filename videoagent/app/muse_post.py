@@ -29,6 +29,12 @@ AUDIO_MODES = {"tts": "Lồng tiếng AI (giọng đọc máy)", "original": "Gi
                "mute": "Không lời (chỉ nhạc + âm)"}
 MAX_CLIPS = 40
 KIND = "muse_post"
+# model hậu kỳ AI / thiết kế HyperFrames (chat trình duyệt đã đăng nhập) — tab Hậu kỳ mặc định Muse, khối Canvas Claude
+POST_MODELS = {"claude_browser": "Claude", "muse_browser": "Muse", "chatgpt_browser": "ChatGPT", "gemini_browser": "Gemini"}
+# kiểu hậu kỳ: như Studio + Remotion (model chỉ chọn kế hoạch dựng, thành phần React cố định → dựng ổn định)
+STYLES = {**POST_STYLES, "remotion": "Remotion — phụ đề động, hook, tiêu đề cảnh, chữ nhấn, zoom nhấn, thẻ kết "
+                                     "(dựng trên máy, cần Node.js 18+)"}
+OVERLAYS = ("hyperframes", "remotion")  # kiểu dựng lớp đồ hoạ riêng → compose không chèn phụ đề ASS
 
 
 class PostError(RuntimeError):
@@ -39,7 +45,7 @@ def meta() -> dict:
     """Lựa chọn cho giao diện tab Hậu kỳ."""
     return {"aspects": [{"value": k, "label": v[0]} for k, v in ASPECTS.items()],
             "voices": VOICES, "rates": RATES, "audio_modes": [{"value": k, "label": v} for k, v in AUDIO_MODES.items()],
-            "post_styles": [{"value": k, "label": v} for k, v in POST_STYLES.items()],
+            "post_styles": [{"value": k, "label": v} for k, v in STYLES.items()],
             "logo_corners": [{"value": k, "label": v} for k, v in LOGO_CORNERS.items() if k != "none"],
             **transitions.options()}
 
@@ -70,8 +76,9 @@ def clean(form: dict) -> dict:
             "rate": form.get("rate") if form.get("rate") in RATES else "+0%",
             "subtitles": bool(form.get("subtitles", True)), "bgm": bool(form.get("bgm", True)), "bgm_volume": bgm_volume,
             "post_ai": bool(form.get("post_ai")),
-            "post_style": form.get("post_style") if form.get("post_style") in POST_STYLES else "basic",
+            "post_style": form.get("post_style") if form.get("post_style") in STYLES else "basic",
             "post_subs": bool(form.get("post_subs", True)), "post_audio": bool(form.get("post_audio", True)),
+            "post_model": form.get("post_model") if form.get("post_model") in POST_MODELS else "muse_browser",
             "show_browser": bool(form.get("show_browser")),
             # đóng logo (PNG nền trong suốt đẹp nhất) lên 1 góc video, sau cùng
             "logo": _logo(form.get("logo")),
@@ -195,7 +202,8 @@ class PostRunner:
                 self._log(jid, f"Lỗi: {exc}", "error")
 
     def _ask(self, o: dict, prompt: str, *, complete, what: str, jid: str) -> str:
-        return ask_model(self.settings, {"model": "muse_browser", "text_profile": "", "show_browser": o["show_browser"]},
+        return ask_model(self.settings, {"model": o.get("post_model") or "muse_browser", "text_profile": "",
+                                         "show_browser": o["show_browser"]},
                          prompt, complete=complete, what=what, log=lambda m, *a, **k: self._log(jid, m),
                          check_cancel=lambda: self._check(jid))
 
@@ -253,7 +261,7 @@ class PostRunner:
             f"âm: {transitions.SOUNDS[o['transition_sound']][0]} {round(o['transition_volume'] * 100)}%")
         info = self._post_ai(jid, o, job) if o["post_ai"] else {}
         # HyperFrames chạy độc lập với phần chọn từ khoá (video không lời vẫn có đồ hoạ động: hook, tiêu đề cảnh, thẻ kết)
-        hf = o["post_ai"] and o["post_style"] == "hyperframes"
+        hf = o["post_ai"] and o["post_style"] in OVERLAYS
         subtitles = job["subtitles"]
         music = self._music_dir() or self.settings.get("music_dir") or ""
         cleanup = bool(self.settings.get("cleanup_temp"))
@@ -262,12 +270,15 @@ class PostRunner:
         self._progress(jid, 70, "Đang ghép giọng đọc, chuyển cảnh, phụ đề, nhạc nền")
         compose(job_dir, job, log=say, check_cancel=check, music_dir=music, cleanup=cleanup)
         if hf:
+            style = o["post_style"]
+            label = "Remotion" if style == "remotion" else "HyperFrames"
             try:
-                info["hyperframes"] = self._hyperframes(jid, o, job, job_dir, show_captions=subtitles)
+                run = self._remotion if style == "remotion" else self._hyperframes
+                info[style] = run(jid, o, job, job_dir, show_captions=subtitles)
             except Cancelled:
                 raise
-            except Exception as exc:  # HyperFrames lỗi → phụ đề nổi bật thường (ASS), video vẫn ra
-                say(f"HyperFrames lỗi ({exc}) — dùng phụ đề nổi bật thường", "warn")
+            except Exception as exc:  # dựng đồ hoạ lỗi → phụ đề nổi bật thường (ASS), video vẫn ra
+                say(f"{label} lỗi ({exc}) — dùng phụ đề nổi bật thường", "warn")
                 job["subtitles"] = subtitles
                 compose(job_dir, job, log=say, check_cancel=check, music_dir=music, cleanup=cleanup)
             job["subtitles"] = subtitles
@@ -291,12 +302,13 @@ class PostRunner:
         scenes = job["scenes"]
         has_text = any(s["narration"] for s in scenes)
         subs, audio = bool(o["post_subs"] and job["subtitles"]), bool(o["post_audio"])
+        who = POST_MODELS.get(o.get("post_model"), "Muse")
         if not has_text:
-            self._log(jid, "Hậu kỳ AI: các cảnh chưa có lời đọc / lời thoại → không tô từ khoá; Muse làm hook + hiệu ứng "
+            self._log(jid, f"Hậu kỳ AI: các cảnh chưa có lời đọc / lời thoại → không tô từ khoá; {who} làm hook + hiệu ứng "
                            "âm thanh + mức nhạc theo nội dung cảnh", "warn")
         # mô tả cho Muse: tên + nội dung cảnh (prompt gốc của video) — để hiểu cảnh cả khi không lời
         brief = [{**s, "headline": " — ".join(x for x in (s.get("headline"), s.get("desc")) if x)[:300]} for s in scenes]
-        self._progress(jid, 64, "Hậu kỳ AI: Muse đang chọn hook, từ khoá, hiệu ứng")
+        self._progress(jid, 64, f"Hậu kỳ AI: {who} đang chọn hook, từ khoá, hiệu ứng")
         try:
             data = extract_json(self._ask(o, post_ai.build_prompt(brief), complete=post_ai.complete, jid=jid,
                                           what="chọn hook + từ khoá nổi bật + hiệu ứng âm thanh (hậu kỳ AI)"))
@@ -316,7 +328,7 @@ class PostRunner:
             job["subtitles"] = True  # chỉ có dòng hook (các cảnh không có chữ)
             self._log(jid, f"Hậu kỳ AI: hiện hook “{hook}” ở đầu video")
         job.update(extra)
-        return {"model": "muse_browser", "hook": extra.get("subtitle_hook", "") or hook,
+        return {"model": o.get("post_model") or "muse_browser", "hook": extra.get("subtitle_hook", "") or hook,
                 "words": sum(len(s.get("highlight") or []) for s in scenes), "cues": len(extra.get("sfx_cues") or [])}
 
     def _hyperframes(self, jid: str, o: dict, job: dict, job_dir: Path, *, show_captions: bool) -> dict:
@@ -334,14 +346,15 @@ class PostRunner:
         layout = dict(captions=captions, scenes=scenes, width=width, height=height, duration=duration, logo=None)
         prompt = hfm.build_prompt(scenes, captions, width=width, height=height, duration=duration,
                                   hook=job.get("subtitle_hook", ""), logo=False, brand=o["name"])
-        self._progress(jid, 84, "HyperFrames: Muse đang thiết kế đồ hoạ động")
-        self._log(jid, "HyperFrames: đang nhờ Muse thiết kế đồ hoạ động (hook, tiêu đề cảnh, phụ đề động, thẻ kết)…")
+        who = POST_MODELS.get(o.get("post_model"), "Muse")
+        self._progress(jid, 84, f"HyperFrames: {who} đang thiết kế đồ hoạ động")
+        self._log(jid, f"HyperFrames: đang nhờ {who} thiết kế đồ hoạ động (hook, tiêu đề cảnh, phụ đề động, thẻ kết)…")
         design = hfm.parse_design(extract_json(self._ask(o, prompt, complete=complete, jid=jid,
                                                          what="thiết kế đồ hoạ động HyperFrames")))
         hfm.write_project(folder, job_dir / "final.mp4", design, **layout)
         errors = hfm.lint(folder)
         if errors:  # mỗi lần hỏi là 1 cuộc chat mới → gửi lại đề + bản trước + lỗi
-            self._log(jid, f"HyperFrames: thiết kế có {len(errors)} lỗi — nhờ Muse sửa", "warn")
+            self._log(jid, f"HyperFrames: thiết kế có {len(errors)} lỗi — nhờ {who} sửa", "warn")
             retry = (prompt + "\n\nBản trước của bạn:\n```json\n" + json.dumps(design, ensure_ascii=False)
                      + "\n```\n\n" + hfm.fix_prompt(errors))
             design = hfm.parse_design(extract_json(self._ask(o, retry, complete=complete, jid=jid,
@@ -358,3 +371,66 @@ class PostRunner:
         out.replace(job_dir / "final.mp4")
         self._log(jid, f"HyperFrames: xong · {len(captions)} dòng phụ đề động", "ok")
         return {"captions": len(captions)}
+
+    def _remotion(self, jid: str, o: dict, job: dict, job_dir: Path, *, show_captions: bool) -> dict:
+        """Đồ hoạ động Remotion trên nền final.mp4: model chọn kế hoạch dựng (JSON), app kiểm + dựng bằng dự án cố định."""
+        from .pipeline import remotion_post as rp
+
+        rp.ensure_installed(lambda m, *a, **k: self._log(jid, m, *a))
+        brief = [{**s, "headline": " — ".join(x for x in (s.get("headline"), s.get("desc")) if x)[:300]} for s in job["scenes"]]
+        captions, scenes = rp.timeline_data(brief, float(job.get("voice_lead", VOICE_LEAD)))
+        if not show_captions:
+            captions = []
+        width, height, duration = job["width"], job["height"], float(job["duration"])
+        hook = job.get("subtitle_hook", "")
+        who = POST_MODELS.get(o.get("post_model"), "Muse")
+        self._progress(jid, 84, f"Remotion: {who} đang lên kế hoạch dựng")
+        self._log(jid, f"Remotion: đang nhờ {who} chọn màu, kiểu phụ đề, hook, tiêu đề cảnh, chữ nhấn, zoom, thẻ kết…")
+        prompt = rp.build_prompt(scenes, captions, width=width, height=height, duration=duration, hook=hook, brand=o["name"])
+        complete = lambda t: isinstance(extract_json(t), dict)  # noqa: E731
+        try:
+            plan = rp.parse_plan(extract_json(self._ask(o, prompt, complete=complete, jid=jid,
+                                                        what="kế hoạch dựng hậu kỳ Remotion")), duration, hook=hook)
+        except Cancelled:
+            raise
+        except Exception as exc:  # model lỗi → vẫn dựng Remotion với kế hoạch mặc định (phụ đề karaoke + hook)
+            self._log(jid, f"Remotion: không lấy được kế hoạch từ {who} ({exc}) — dùng kiểu mặc định", "warn")
+            plan = rp.parse_plan({}, duration, hook=hook)
+        folder = job_dir / "remotion"
+        rp.write_project(folder, job_dir / "final.mp4", plan, captions=captions, scenes=scenes, width=width,
+                         height=height, fps=int(job.get("fps") or FPS), duration=duration)
+        (folder / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), "utf-8")
+        minutes = max(1, round(duration * 2 / 60))
+        self._progress(jid, 88, f"Đang dựng đồ hoạ động Remotion (~{minutes} phút)")
+        self._log(jid, f"Remotion: {plan['caption_style']} · hook {plan['hook']['style']} · {len(plan['titles'])} tiêu đề · "
+                       f"{len(plan['callouts'])} chữ nhấn · {len(plan['zooms'])} zoom — đang dựng {duration:.0f} giây (~{minutes} phút)…")
+        out = rp.render(folder, job_dir / "remotion-render.mp4", check_cancel=lambda: self._check(jid))
+        (folder / "base.mp4").unlink(missing_ok=True)
+        out.replace(job_dir / "final.mp4")
+        self._log(jid, f"Remotion: xong · {len(captions)} dòng phụ đề động", "ok")
+        return {"captions": len(captions), "caption_style": plan["caption_style"], "hook": plan["hook"]["text"],
+                "titles": len(plan["titles"]), "callouts": len(plan["callouts"]), "zooms": len(plan["zooms"])}
+
+
+class _Inline(PostRunner):
+    """Chạy pipeline hậu kỳ 1 lần cho bên gọi (khối Hậu kỳ video của Canvas / Workflow): nhật ký, tiến độ, dừng do bên
+    gọi cấp — không hàng đợi, không sự kiện mhub_post."""
+
+    def __init__(self, settings, *, log, progress, check_cancel, music_dir="") -> None:
+        super().__init__(settings, lambda *a, **k: None, music_dir=lambda: music_dir)
+        self._say, self._prog, self._chk = log, progress, check_cancel
+
+    def _log(self, jid: str, msg: str, level: str = "info") -> None:
+        self._say(msg, level)
+
+    def _progress(self, jid: str, pct: float, stage: str) -> None:
+        self._prog(pct, stage)
+
+    def _check(self, jid: str) -> None:
+        self._chk()
+
+
+def produce(settings, form: dict, *, log, progress, check_cancel, music_dir: str = "") -> tuple[Path, dict]:
+    """Hậu kỳ 1 lần (ghép + lồng tiếng / tiếng gốc + chuyển cảnh + phụ đề + nhạc + hậu kỳ AI + HyperFrames + logo).
+    Trả (final.mp4, thông tin hậu kỳ); video cũng nằm trong Thư viện video như tab Hậu kỳ."""
+    return _Inline(settings, log=log, progress=progress, check_cancel=check_cancel, music_dir=music_dir)._run("inline", clean(form))

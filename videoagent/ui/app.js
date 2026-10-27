@@ -84,6 +84,8 @@ async function boot() {
   setRunning(state.boot.running);
   splashStep('Đang tải thư viện…');
   await refreshVideos();
+  // mở app → vào Thư viện video (tắt ở Cài đặt → Chức năng thì Tạo video, không thì mục đầu tiên còn bật)
+  navigate(window.SettingsPage.firstView('library', 'create'));
 }
 
 /* ------------------------------------------------------------------ sidebar & điều hướng */
@@ -102,12 +104,14 @@ function initSidebar() {
     requestAnimationFrame(fitFrame);
   };
   // menu trái + các mục chính trên thanh tiêu đề (Tạo video, Thư viện, Tạo ảnh, Profile, Cài đặt…) dùng chung navigate()
-  $$('.sb-item[data-view]').forEach(item => { item.onclick = () => navigate(item.dataset.view); });
+  $$('.sb-item[data-view]').forEach(item => { item.onclick = () => (item.dataset.view === 'settings' ? openSettings() : navigate(item.dataset.view)); });
+  window.SettingsPage.init();
+  window.SettingsPage.applyMenus();  // Cài đặt → Chức năng: ẩn các mục menu đã tắt
 }
 
 function navigate(view) {
-  if (view === 'settings') return openSettings();
   if (view === 'folder') return api('open_output_dir');
+  if (view === 'profiles') return openSettings('profiles');  // Profile trình duyệt nằm trong Cài đặt (cần mật khẩu)
   const previous = state.view;
   state.view = view;
   if (view === 'create' && previous === 'library') switchTab('progress');
@@ -147,6 +151,9 @@ function navigate(view) {
   if (view === 'profiles') refreshProfiles();
   if (view === 'images') refreshImages();
   $('#page-help').classList.toggle('hidden', view !== 'help');
+  $('#page-settings').classList.toggle('hidden', view !== 'settings');
+  $('#page-imglib').classList.toggle('hidden', view !== 'imglib');
+  if (view === 'imglib') window.ImageLibrary.show();
   if (view === 'library') switchTab('results');
   if (view === 'templates') {
     const current = findTemplate(state.form.template);
@@ -432,6 +439,8 @@ function setImageRunning(running) {
 async function refreshImages() {
   state.images = await api('list_images');
   $('#sbImageCount').textContent = state.images.length;
+  $('#sbImgLibCount').textContent = state.images.reduce((n, s) => n + s.files.length, 0);  // số ảnh (không phải số bộ)
+  if (state.view === 'imglib') window.ImageLibrary.render();
   $('#imgTabCount').textContent = state.images.length;
   $('#imgTotal').textContent = `${state.images.length} bộ ảnh`;
   // lưới ảnh: mỗi ô 1 ảnh (bộ nhiều ảnh có nhãn 1/3…); thông tin chi tiết chỉ hiện khi bấm xem
@@ -529,7 +538,7 @@ async function onImageGalleryClick(e) {
 
 /* ------------------------------------------------------------------ fanpage Facebook */
 function initFacebook() {
-  $('#fbOpenSettings').onclick = () => openSettings();
+  $('#fbOpenSettings').onclick = () => openSettings('facebook');
   $('#fbLoadPages').onclick = () => fbAction($('#fbLoadPages'), 'Đang tải…', 'fb_load_pages', [], 'Đã tải danh sách Fanpage');
   $('#fbPages').onclick = onFbPageClick;
   $('#fbSearch').oninput = renderFbPages;
@@ -817,7 +826,7 @@ async function refreshProfiles() {
 
 function renderProfiles(profiles) {
   state.profiles = profiles;
-  $('#sbProfileCount').textContent = profiles.length;
+  if ($('#sbProfileCount')) $('#sbProfileCount').textContent = profiles.length;
   const sites = state.profileSites;
   $('#profSites').innerHTML = Object.entries(sites).map(([s, n]) => {
     const list = profiles.filter(p => p.sites.includes(s));
@@ -2488,154 +2497,7 @@ async function renderModelSettings(scroll) {
   if (scroll) box.previousElementSibling.scrollIntoView({ block: 'start' });
 }
 
-function openSettings(section) {
-  const s = state.boot.settings;
-  const lic = state.boot.license;
-  const opt = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${String(cur) === String(v) ? 'selected' : ''}>${l}</option>`).join('');
-  openModal('CÀI ĐẶT', 'Cài đặt', `
-    <div class="form">
-      <div class="sec">LƯU TRỮ</div>
-      <div class="field"><span>Thư mục lưu video</span>
-        <div class="inline"><input id="setOut" value="${esc(s.output_dir)}" readonly><button class="btn ghost" id="setOutPick">Chọn…</button></div></div>
-      <label class="check"><input type="checkbox" id="setCleanup" ${s.cleanup_temp ? 'checked' : ''}> Dọn file tạm sau khi render</label>
-      <div class="sec">🤖 MODEL AI (DÙNG CHUNG)</div>
-      <div id="setModels"><p class="hint">Đang tải danh sách model…</p></div>
-      <p class="hint">Cài 1 lần — Studio, Nhân vật &amp; Layout, Viết content, Chiến dịch, Trợ lý quảng cáo dùng chung bộ model này (dự án Studio cũ cũng theo).
-        Trang đặc thù giữ lựa chọn riêng: Studio Muse AI (luôn Muse), Seedance, Workflow (từng nút). Tạo hình ảnh / Tạo video mặc định theo bộ này, vẫn đổi được từng lần.</p>
-      <div class="sec">GIAO DIỆN</div>
-      <label class="field"><span>Thời gian màn Loading khi mở app</span><select id="setSplash">
-        ${[[0, 'Tắt — vào app ngay khi tải xong'], [1, '1 giây (mặc định)'], [2, '2 giây'], [3, '3 giây'], [5, '5 giây'], [8, '8 giây']]
-          .map(([v, l]) => `<option value="${v}" ${Number(s.splash_seconds ?? 1) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
-        <small class="muted">Thời gian tối thiểu tính từ lúc mở app — nếu app tải lâu hơn, màn Loading vẫn hiện tới khi tải xong. Áp dụng từ lần mở sau.</small></label>
-      <div class="sec">ZALO — NHẬN YÊU CẦU QUẢNG CÁO</div>
-      <div id="zaloBox" class="zl-box"></div>
-      <div class="sec">TRÌNH DUYỆT</div>
-      <label class="field"><span>Cách điều khiển Chrome</span><select id="setBrowserEngine">
-        <option value="cdp" ${(s.browser_engine || 'cdp') === 'cdp' ? 'selected' : ''}>Chrome thật (CDP) — Chrome của máy, ít cờ tự động hoá, không chạy headless (khuyên dùng)</option>
-        <option value="playwright" ${s.browser_engine === 'playwright' ? 'selected' : ''}>Playwright — cách cũ (nhiều cờ tự động hoá, có thể chạy headless)</option>
-      </select></label>
-      <p class="hint">Cả hai đều điều khiển Chrome qua đường ống nội bộ (không mở cổng mạng), mỗi tài khoản một profile. Chrome thật giữ “vân tay” giống Chrome bạn dùng hằng ngày nên ít bị trang web (Muse, Grok, Gemini…) nghi là bot. Gặp lỗi thì chuyển về Playwright.</p>
-      <label class="check"><input type="checkbox" id="setKeepAlive" ${s.browser_keepalive ? 'checked' : ''}> Giữ Chrome mở sẵn cho mỗi tài khoản (kiểu HaoHao)</label>
-      <p class="hint">Chỉ áp dụng khi chọn Chrome thật (CDP). Bật: mỗi profile giữ một Chrome chạy liên tục, các lượt sau dùng lại nên nhanh hơn, phiên đăng nhập luôn sẵn; Chrome rảnh 20 phút tự đóng, thoát app thì đóng hết. Task nối vào Chrome qua cổng gỡ lỗi chỉ trên máy này (127.0.0.1). Tắt: quay về cách cũ, mỗi lượt mở rồi đóng Chrome.</p>
-      <label class="check"><input type="checkbox" id="setShowBrowser" ${s.show_browser ? 'checked' : ''}> Hiện cửa sổ Chrome khi model chạy qua trình duyệt</label>
-      <p class="hint">Dùng chung cho mọi màn hình (Tạo video, Tạo ảnh, Studio, Studio Muse AI, Trợ lý quảng cáo…). Tắt: Chrome chạy ngầm ngoài màn hình, không hiện icon trên thanh taskbar. Cửa sổ đăng nhập luôn hiện.</p>
-      <div class="sec">API &amp; KẾT NỐI</div>
-      <p class="hint">Mọi khoá API và kết nối chỉ nhập tại đây — các màn hình khác chỉ hiện trạng thái.</p>
-      <label class="field"><span>Anthropic API key — Claude (Chiến dịch, Tạo content, Workflow)</span><input id="setAnthropicKey" type="password" value="${esc(s.anthropic_api_key || '')}" placeholder="sk-ant-…" autocomplete="off"></label>
-      <label class="field"><span>OpenAI API key — GPT Image (Tạo hình ảnh) + GPT viết bài</span><input id="setOpenAIKey" type="password" value="${esc(s.openai_api_key || '')}" placeholder="sk-…" autocomplete="off"></label>
-      <label class="field"><span>Gemini API key — Gemini / Veo / Nano Banana</span><input id="setKey" type="password" value="${esc(s.gemini_api_key)}" placeholder="AIza…" autocomplete="off"></label>
-      <div class="sub-title fb-gap">FACEBOOK · META GRAPH API</div>
-      <div class="fb-user" id="setFbUser"></div>
-      <div class="fb-perms" id="setFbPerms"></div>
-      <p class="hint">Graph API Explorer → chọn Meta App → User Token với quyền <code>pages_show_list</code> <code>pages_read_engagement</code> <code>pages_manage_posts</code>
-        (Quảng cáo: thêm <code>ads_read</code> <code>ads_management</code>) → Generate Access Token → dán vào ô dưới.</p>
-      <label class="field"><span>User Access Token</span><textarea class="mono" id="fbToken" rows="2" spellcheck="false" placeholder="EAA…"></textarea></label>
-      <div class="row fb-gap"><button class="btn ghost" id="fbOpenExplorer" type="button">Mở Graph API Explorer ↗</button>
-        <button class="btn primary" id="fbConnect" type="button">Kết nối & tải Fanpage</button>
-        <button class="btn ghost" id="fbLogout" type="button">Ngắt kết nối</button></div>
-      <p class="hint">App ID + App Secret của đúng app đã chọn trong Explorer → app tự đổi sang token dài hạn (~60 ngày).</p>
-      <div class="grid2">
-        <label class="field"><span>App ID</span><input id="fbAppId" placeholder="1234567890123456"></label>
-        <label class="field"><span>Graph API version</span><input id="fbVersion" placeholder="v21.0"></label>
-      </div>
-      <label class="field"><span>App Secret</span><input id="fbAppSecret" type="password" placeholder="App Secret" autocomplete="off"></label>
-      <button class="btn ghost fb-gap" id="fbSaveApp" type="button">Lưu & kiểm tra App</button>
-      <div class="sec">AI</div>
-      <div class="grid2">
-        <label class="field"><span>Trình duyệt cho Gemini/Grok/Dola Browser</span>
-          <select id="setChannel">${opt([['chrome', 'Google Chrome'], ['msedge', 'Microsoft Edge'], ['chromium', 'Chromium (Playwright)']], s.browser_channel)}</select></label>
-        <label class="field"><span>Gemini model (API)</span><input id="setModel" value="${esc(s.gemini_model)}"></label>
-      </div>
-      <label class="field"><span>Veo model (tạo video AI bằng Gemini API)</span><input id="setVeoModel" value="${esc(s.veo_model || '')}" placeholder="veo-3.1-generate-preview"></label>
-      <div class="sec">TẠO HÌNH ẢNH</div>
-      <div class="grid2">
-        <label class="field"><span>OpenAI image model</span><input id="setOpenAIModel" value="${esc(s.openai_image_model || '')}" placeholder="gpt-image-1"></label>
-        <label class="field"><span>Gemini image model (API)</span><input id="setGeminiImgModel" value="${esc(s.gemini_image_model || '')}" placeholder="gemini-2.5-flash-image"></label>
-      </div>
-      <div class="sec">VIDEO &amp; ÂM THANH</div>
-      <div class="grid2">
-        <label class="field"><span>FPS</span><select id="setFps">${opt([[24, '24 fps'], [30, '30 fps'], [60, '60 fps']], s.fps)}</select></label>
-        <label class="field"><span>Số video tạo song song</span><select id="setParVideo">${opt([1, 2, 3, 4, 5, 6, 8, 10].map(n => [n, `${n} luồng (${n} Chrome)`]), s.max_parallel_video || 2)}</select></label>
-        <label class="field"><span>Số tác vụ ảnh song song</span><select id="setParImage">${opt([1, 2, 3, 4, 5, 6].map(n => [n, `${n} luồng`]), s.max_parallel_image || 2)}</select></label>
-        <label class="field"><span>Âm lượng nhạc nền (0–1)</span><input id="setBgmVol" type="number" min="0" max="1" step="0.01" value="${s.bgm_volume}"></label>
-        <label class="field" style="grid-column:1/-1"><span>Khi model trình duyệt (Muse, ChatGPT…) đề xuất phương án khác thay vì tạo ảnh / video</span>
-          <select id="setOfferMode">${opt([['ask', 'Hỏi tôi — hiện form duyệt (không trả lời sau 3 phút thì tự đồng ý)'], ['auto', 'Tự đồng ý đề xuất']], s.offer_mode || 'ask')}</select></label>
-      </div>
-      <div class="field"><span>Thư mục nhạc nền (trống = nhạc nền tự tổng hợp)</span>
-        <div class="inline"><input id="setMusic" value="${esc(s.music_dir)}" readonly><button class="btn ghost" id="setMusicPick">Chọn…</button><button class="btn ghost" id="setMusicClear">Xoá</button></div></div>
-      <div class="sec">LICENSE ITNNV</div>
-      <label class="field"><span>License server (trống = chế độ phát triển)</span><input id="setServer" value="${esc(s.license_server)}" placeholder="https://…"></label>
-      <div class="lic-row"><span>${esc(lic.dev ? 'Chế độ phát triển — bỏ qua license' : (lic.active ? `Đã kích hoạt · ${lic.user?.email || ''}` : lic.message))}</span>
-        <div class="row"><button class="btn ghost" id="licLogin">Đăng nhập Google</button><button class="btn ghost" id="licLogout">Đăng xuất</button></div></div>
-      <div class="modal-foot"><button class="btn primary" id="setSave">Lưu cài đặt</button></div>
-    </div>`, true);
-  $('#modalBody').onclick = null;
-  $('#setOutPick').onclick = async () => {
-    state.boot.settings = await api('pick_output_dir');
-    $('#setOut').value = state.boot.settings.output_dir;
-    renderHeader();
-    refreshVideos();
-  };
-  $('#setMusicPick').onclick = async () => {
-    state.boot.settings = await api('pick_music_dir');
-    $('#setMusic').value = state.boot.settings.music_dir;
-  };
-  $('#setMusicClear').onclick = () => { $('#setMusic').value = ''; };
-  $('#licLogin').onclick = async () => { await saveSettings(false); licenseLogin(); };
-  $('#licLogout').onclick = async () => { const r = await api('license_logout'); renderLicense(r.license); };
-  $('#setSave').onclick = () => saveSettings(true);
-  bindFbSettings();
-  if (window.ZaloSettings) window.ZaloSettings.mount();  // mục Zalo (áp dụng ngay, không cần bấm Lưu)
-  renderModelSettings(section === 'models');
-}
-
-async function saveSettings(close) {
-  // khoá API dán dính khoảng trắng / chữ thừa (VD dán 2 lần) → backend chỉ giữ phần sk-… / AIza… đầu tiên; báo để người dùng biết
-  const messy = [['#setOpenAIKey', 'OpenAI'], ['#setAnthropicKey', 'Anthropic'], ['#setKey', 'Gemini']]
-    .filter(([id]) => $(id) && /\s/.test($(id).value.trim())).map(([, name]) => name);
-  if (messy.length) toast(`Khoá ${messy.join(', ')} có khoảng trắng / chữ thừa — đã tự lấy phần khoá đầu tiên. Kiểm tra lại nếu vẫn báo sai khoá.`, 'warn');
-  const values = {
-    cleanup_temp: $('#setCleanup').checked,
-    splash_seconds: Number($('#setSplash').value),
-    show_browser: $('#setShowBrowser').checked,
-    browser_engine: $('#setBrowserEngine').value,
-    browser_keepalive: $('#setKeepAlive').checked,
-    browser_channel: $('#setChannel').value,
-    gemini_model: $('#setModel').value.trim(),
-    veo_model: $('#setVeoModel').value.trim() || 'veo-3.1-generate-preview',
-    openai_api_key: $('#setOpenAIKey').value.trim(),
-    anthropic_api_key: $('#setAnthropicKey').value.trim(),
-    openai_image_model: $('#setOpenAIModel').value.trim() || 'gpt-image-1',
-    gemini_image_model: $('#setGeminiImgModel').value.trim() || 'gemini-2.5-flash-image',
-    gemini_api_key: $('#setKey').value.trim(),
-    fps: parseInt($('#setFps').value, 10),
-    max_parallel_video: parseInt($('#setParVideo').value, 10),
-    max_parallel_image: parseInt($('#setParImage').value, 10),
-    offer_mode: $('#setOfferMode').value,
-    bgm_volume: Math.max(0, Math.min(1, parseFloat($('#setBgmVol').value) || 0)),
-    music_dir: $('#setMusic').value,
-    license_server: $('#setServer').value.trim(),
-    ...readModelSettings(),
-  };
-  const before = sharedModels();
-  state.boot.settings = await api('save_settings', values);
-  $('#geminiModel').value = values.gemini_model;
-  const r = await api('license_refresh');
-  renderLicense(r.license);
-  renderHeader();
-  if (close) { closeModal(); toast('Đã lưu cài đặt', 'ok'); }
-  document.dispatchEvent(new CustomEvent('va:settings'));  // các màn hình vẽ lại nhãn model dùng chung
-  // Tạo hình ảnh / Tạo video: đổi model dùng chung → chọn luôn model đó (vẫn đổi được từng lần)
-  const g = sharedModels();
-  if (g.image !== before.image && $('#imgEngine') && state.boot.image_engines[g.image]) {
-    $('#imgEngine').value = g.image;
-    $('#imgEngine').dispatchEvent(new Event('change', { bubbles: true }));
-  }
-  if (g.video !== before.video && $(`#provider option[value="${g.video}"]`)) {
-    $('#provider').value = g.video;
-    $('#provider').dispatchEvent(new Event('change', { bubbles: true }));
-  }
-}
+// openSettings / saveSettings: màn Cài đặt riêng — xem settings.js
 
 /* ------------------------------------------------------------------ actions */
 async function onCreate() {
@@ -2653,7 +2515,7 @@ async function onCreate() {
     if (!form.topic.trim()) { toast('Hãy nhập nội dung video', 'warn'); $('#topic').focus(); return; }
     if (form.genre === PRODUCT_GENRE && !(form.product_files || []).length) { toast('Hãy chọn ít nhất 1 ảnh/video sản phẩm', 'warn'); return; }
   }
-  if (form.provider === 'gemini_api' && !state.boot.settings.gemini_api_key) { toast('Chưa có Gemini API key — nhập ở Cài đặt → API & kết nối', 'warn'); openSettings(); return; }
+  if (form.provider === 'gemini_api' && !state.boot.settings.gemini_api_key) { toast('Chưa có Gemini API key — nhập ở Cài đặt → Khoá API', 'warn'); openSettings('api'); return; }
   const res = await api('start_job', form);
   if (!res.ok) return toast(res.error, 'error');
   if (state.view !== 'create') navigate('create');

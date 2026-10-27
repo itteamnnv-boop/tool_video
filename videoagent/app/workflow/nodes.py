@@ -14,6 +14,26 @@ from ..content_writer import FIELDS as CONTENT_FIELDS, OPENAI_MODELS as CONTENT_
 from ..llm.image_engines import ENGINES as IMAGE_ENGINES
 from ..llm.video_engines import ENGINES as VIDEO_ENGINES
 from ..pipeline.tts import RATES as TTS_RATES, VOICES as TTS_VOICES
+from ..pipeline.vieneu_tts import PRESET_VOICES as VIENEU_VOICES
+
+# khối Lồng tiếng VieNeu → phân tích video: phong cách lời đọc model viết
+DUB_TONES = {"ban_hang": "Bán hàng — hook, lợi ích, kêu gọi mua", "review": "Review / trải nghiệm thật",
+             "ke_chuyen": "Kể chuyện cảm xúc", "huong_dan": "Hướng dẫn / giải thích từng bước", "tin_tuc": "Tin tức / thông báo"}
+DUB_WPS = 2.8  # chữ / giây khi lồng tiếng tiếng Việt (chừa thở, đọc rõ)
+DUB_PROMPT = """Bạn là biên kịch lồng tiếng video ngắn (TikTok / Reels / Facebook). Ảnh lưới đính kèm là các khung hình của video,
+mỗi khung ghi mốc thời gian (phút:giây) ở góc trên-trái.
+Video dài {dur:.1f} giây. Mốc đổi cảnh (giây): {cuts}.
+{hint}
+Phong cách: {tone}.
+
+Viết LỜI ĐỌC tiếng Việt để lồng vào video, chia thành các đoạn khớp với cảnh:
+- Mỗi đoạn nói về đúng thứ đang hiện trên hình trong khoảng thời gian của đoạn; đoạn đầu bắt đầu từ 0.3 giây.
+- Tốc độ đọc khoảng {wps} chữ / giây: đoạn dài t giây tối đa t × {wps} chữ. Không cần lấp kín mọi giây — chừa nghỉ tự nhiên.
+- Đoạn đầu là câu mở gây chú ý; đoạn cuối chốt ý / kêu gọi hành động nếu hợp phong cách.
+- Không bịa giá / số liệu / thông tin không có trên hình hoặc trong thông tin được cung cấp.
+- Viết số, đơn vị, từ viết tắt thành chữ dễ đọc (VD: "20kg" → "hai mươi ký", "BOSS 1" → "BOSS một").
+Trả về đúng MỘT khối ```json:
+{{"doan": [{{"bat_dau": 0.3, "ket_thuc": 3.5, "loi": "câu đọc"}}]}}"""
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v"}
@@ -155,8 +175,6 @@ NODE_TYPES = {
             {"key": "prompt", "label": "Yêu cầu (dùng {{input}} để chèn văn bản đầu vào)", "type": "textarea",
              "default": "Viết 1 prompt tạo video quảng cáo ngắn, dọc 9:16, lời thoại tiếng Việt, cho nội dung sau:\n{{input}}\n\n"
                         "Chỉ trả về prompt, không giải thích."},
-            {"key": "show_browser", "label": "Hiện trình duyệt", "type": "check", "default": False,
-             "when": {"provider": ["gemini_browser", "grok_browser", "chatgpt_browser", "claude_browser", "muse_browser"]}},
         ],
     },
     "content_post": {
@@ -175,8 +193,6 @@ NODE_TYPES = {
             {"key": "extra", "label": "Yêu cầu thêm (tuỳ chọn)", "type": "text", "default": ""},
             {"key": "strict", "label": "Dừng workflow nếu bài vẫn sai thông tin sau 1 lần viết lại", "type": "check",
              "default": True},
-            {"key": "show_browser", "label": "Hiện trình duyệt", "type": "check", "default": False,
-             "when": {"model": [k for k in CONTENT_MODELS if k.endswith("_browser")]}},
         ],
     },
     # ------------------------------------------------------------------ tạo nội dung
@@ -204,7 +220,6 @@ NODE_TYPES = {
             {"key": "pin_count", "label": "Số ảnh tham khảo", "type": "select", "default": "3", "when": {"pinterest": [True]},
              "options": [{"value": str(n), "label": str(n)} for n in range(1, 7)]},
             {"key": "pin_urls", "label": "Ảnh Pinterest đã chọn", "type": "pinterest", "default": [], "when": {"pinterest": [True]}},
-            {"key": "show_browser", "label": "Hiện trình duyệt", "type": "check", "default": False},
         ],
     },
     "gen_video": {
@@ -231,7 +246,6 @@ NODE_TYPES = {
              "options": [{"value": d, "label": d} for d in sorted(_union("durations"), key=lambda s: int(s.rstrip("s")))]},
             {"key": "resolution", "label": "Độ phân giải", "type": "select", "default": "720p",
              "options": [{"value": r, "label": r} for r in _union("resolutions")]},
-            {"key": "show_browser", "label": "Hiện trình duyệt", "type": "check", "default": False},
         ],
     },
     "concat_video": {
@@ -249,6 +263,85 @@ NODE_TYPES = {
                     "options": _transition_opts("sounds")},
                    {"key": "transition_volume", "label": "Âm lượng âm chuyển cảnh (0–1.5)", "type": "number", "default": "0.6",
                     "when": {"transition_sound": [k for k in _sound_keys() if k != "none"]}}],
+    },
+    "dub_vieneu": {
+        "name": "Lồng tiếng VieNeu", "group": "create", "icon": "🎙",
+        "desc": "Đọc lời thoại tiếng Việt bằng VieNeu-TTS (chạy trên máy, giọng có sẵn hoặc nhân bản từ file giọng mẫu) "
+                "rồi ghép vào video — thay tiếng gốc hoặc giữ tiếng gốc nhỏ làm nền",
+        "inputs": [{"key": "video", "type": "video", "label": "Video cần lồng tiếng"},
+                   {"key": "text", "type": "text", "label": "Lời đọc (tuỳ chọn)", "multi": True}],
+        "outputs": [{"key": "video", "type": "video", "label": "Video đã lồng tiếng"}],
+        "fields": [
+            {"key": "script_mode", "label": "Lời đọc lấy từ", "type": "select", "default": "manual",
+             "options": [{"value": "manual", "label": "Lời đọc nhập / chữ từ khối nối vào"},
+                         {"value": "analyze", "label": "🎬 Phân tích video → viết lời đọc khớp từng cảnh"}]},
+            {"key": "analyze_model", "label": "Model xem video & viết lời", "type": "select", "default": "claude_browser",
+             "options": [{"value": "claude_browser", "label": "Claude (trình duyệt)"},
+                         {"value": "gemini_browser", "label": "Gemini (trình duyệt)"},
+                         {"value": "chatgpt_browser", "label": "ChatGPT (trình duyệt)"}],
+             "when": {"script_mode": ["analyze"]}},
+            {"key": "tone", "label": "Phong cách lời đọc", "type": "select", "default": "ban_hang",
+             "options": [{"value": k, "label": v} for k, v in DUB_TONES.items()], "when": {"script_mode": ["analyze"]}},
+            {"key": "script", "label": "Lời đọc — hoặc ý chính / thông tin sản phẩm khi phân tích video (ghép sau chữ khối nối vào)",
+             "type": "textarea", "default": ""},
+            {"key": "voice", "label": "Giọng đọc VieNeu", "type": "select", "default": "Ngọc Huyền",
+             "options": [{"value": v, "label": f"{v} — {d}"} for v, d in VIENEU_VOICES]},
+            {"key": "ref_audio", "label": "Hoặc nhân bản giọng từ file mẫu (3–15 giây, rõ tiếng, không nhạc — có file thì dùng thay giọng trên)",
+             "type": "files", "kind": "audio", "default": [], "single": True},
+            {"key": "mix", "label": "Tiếng gốc của video", "type": "select", "default": "replace",
+             "options": [{"value": "replace", "label": "Thay bằng giọng đọc"},
+                         {"value": "duck", "label": "Giữ tiếng gốc nhỏ làm nền"}]},
+            {"key": "orig_volume", "label": "Âm lượng tiếng gốc (0–1)", "type": "number", "default": "0.15",
+             "when": {"mix": ["duck"]}},
+            {"key": "fit", "label": "Lời đọc dài hơn video", "type": "select", "default": "extend",
+             "options": [{"value": "extend", "label": "Giữ khung cuối cho đủ lời"},
+                         {"value": "cut", "label": "Cắt theo độ dài video"}]},
+            {"key": "lead", "label": "Bắt đầu đọc sau (giây)", "type": "number", "default": "0.3"},
+        ],
+    },
+    "post_video": {
+        "name": "Hậu kỳ video", "group": "create", "icon": "🎞",
+        "desc": "Ghép các video nối vào + lồng tiếng AI / giữ tiếng gốc + chuyển cảnh + phụ đề + nhạc nền; hậu kỳ AI "
+                "(Claude chọn hook, từ khoá nổi bật, hiệu ứng âm thanh) + đồ hoạ động Remotion / HyperFrames",
+        "inputs": [{"key": "videos", "type": "video", "label": "Video (theo thứ tự nối)", "multi": True},
+                   {"key": "text", "type": "text", "label": "Lời đọc / kịch bản (tuỳ chọn)", "multi": True}],
+        "outputs": [{"key": "video", "type": "video", "label": "Video hậu kỳ"}],
+        "fields": [
+            {"key": "name", "label": "Tên video", "type": "text", "default": ""},
+            {"key": "script", "label": "Lời đọc / phụ đề từng video (mỗi đoạn cách 1 dòng trống = 1 video, theo thứ tự nối)",
+             "type": "textarea", "default": ""},
+            {"key": "audio", "label": "Âm thanh", "type": "select", "default": "original",
+             "options": [{"value": "original", "label": "Giữ tiếng gốc của video"},
+                         {"value": "tts", "label": "Lồng tiếng AI theo lời đọc"},
+                         {"value": "mute", "label": "Không lời (chỉ nhạc + âm)"}]},
+            {"key": "voice", "label": "Giọng đọc AI", "type": "select", "default": "vi-VN-HoaiMyNeural",
+             "options": [{"value": v["id"], "label": v["name"]} for v in TTS_VOICES], "when": {"audio": ["tts"]}},
+            {"key": "rate", "label": "Tốc độ đọc", "type": "select", "default": "+0%",
+             "options": [{"value": r, "label": r} for r in TTS_RATES], "when": {"audio": ["tts"]}},
+            {"key": "aspect", "label": "Khung hình", "type": "select", "default": "9:16",
+             "options": [{"value": a, "label": a} for a in ("9:16", "16:9", "1:1", "4:5")]},
+            {"key": "transition", "label": "Chuyển cảnh", "type": "select", "default": "fade",
+             "options": _transition_opts("transitions")},
+            {"key": "transition_duration", "label": "Thời lượng chuyển cảnh", "type": "select", "default": "0.5",
+             "options": [{"value": str(d), "label": f"{d} giây"} for d in (0.3, 0.5, 0.8, 1.0)],
+             "when": {"transition": [k for k in _transition_keys() if k != "none"]}},
+            {"key": "transition_sound", "label": "Âm chuyển cảnh", "type": "select", "default": "whoosh",
+             "options": _transition_opts("sounds")},
+            {"key": "subtitles", "label": "Phụ đề (từ lời đọc)", "type": "check", "default": True},
+            {"key": "bgm", "label": "Nhạc nền", "type": "check", "default": True},
+            {"key": "bgm_volume", "label": "Âm lượng nhạc nền (0–0.5)", "type": "number", "default": "0.12", "when": {"bgm": [True]}},
+            {"key": "post_ai", "label": "✨ Hậu kỳ AI (hook, từ khoá nổi bật, hiệu ứng âm thanh)", "type": "check", "default": True},
+            {"key": "post_model", "label": "Model hậu kỳ", "type": "select", "default": "claude_browser",
+             "options": [{"value": "claude_browser", "label": "Claude (trình duyệt)"}, {"value": "muse_browser", "label": "Meta · Muse (trình duyệt)"},
+                         {"value": "chatgpt_browser", "label": "ChatGPT (trình duyệt)"}, {"value": "gemini_browser", "label": "Gemini (trình duyệt)"}],
+             "when": {"post_ai": [True]}},
+            {"key": "post_style", "label": "Kiểu hậu kỳ", "type": "select", "default": "remotion",
+             "options": [{"value": "remotion", "label": "Remotion — phụ đề động, hook, tiêu đề cảnh, chữ nhấn, zoom nhấn, thẻ kết (cần Node.js 18+)"},
+                         {"value": "hyperframes", "label": "HyperFrames — đồ hoạ động do model tự thiết kế (cần Node.js 22+)"},
+                         {"value": "basic", "label": "Cơ bản — phụ đề tô nổi từ khoá"}], "when": {"post_ai": [True]}},
+            {"key": "post_subs", "label": "Tô nổi từ khoá trên phụ đề", "type": "check", "default": True, "when": {"post_ai": [True]}},
+            {"key": "post_audio", "label": "Hiệu ứng âm thanh AI chọn", "type": "check", "default": True, "when": {"post_ai": [True]}},
+        ],
     },
     "studio_video": {
         "name": "Video dài từ storyboard", "group": "create", "icon": "🎬",
@@ -302,7 +395,6 @@ NODE_TYPES = {
              "options": [{"value": "basic", "label": "Cơ bản — phụ đề tô nổi từ khoá"},
                          {"value": "hyperframes", "label": "HyperFrames — đồ hoạ động (cần Node.js 22+)"}],
              "when": {"preset": [""], "post_ai": [True]}},
-            {"key": "show_browser", "label": "Hiện trình duyệt", "type": "check", "default": False},
         ],
     },
     "whiteboard_video": {
@@ -332,7 +424,6 @@ NODE_TYPES = {
             {"key": "hint", "label": "Gợi ý phong cách hình (tuỳ chọn)", "type": "text", "default": ""},
             {"key": "hand", "label": "Hiện bàn tay cầm bút", "type": "check", "default": True},
             {"key": "subtitles", "label": "Chèn phụ đề", "type": "check", "default": True},
-            {"key": "show_browser", "label": "Hiện trình duyệt", "type": "check", "default": False},
         ],
     },
     # ------------------------------------------------------------------ đầu ra: Facebook
@@ -493,6 +584,10 @@ def run_node(ctx: NodeContext, inputs: dict) -> dict:
         return _studio_video(ctx, cfg, _text(inputs.get("idea", [])), _files(inputs.get("images", [])))
     if kind == "whiteboard_video":
         return _whiteboard_video(ctx, cfg, _text(inputs.get("text", [])))
+    if kind == "dub_vieneu":
+        return {"video": _dub_vieneu(ctx, cfg, _files(inputs.get("video", [])), inputs.get("text", []))}
+    if kind == "post_video":
+        return {"video": _post_video(ctx, cfg, _files(inputs.get("videos", [])), inputs.get("text", []))}
     if kind == "concat_video":
         return {"video": _concat(ctx, cfg, _files(inputs.get("videos", [])))}
     if kind == "output":
@@ -575,6 +670,190 @@ def _studio_video(ctx, cfg, idea_in: str, refs: list) -> dict:
     (ctx.dir / "loi-dan.txt").write_text(narration, "utf-8")
     ctx.log(f"Video {round(float(project['final'].get('duration') or 0))} giây · {len(project.get('scenes') or [])} cảnh", "ok")
     return {"video": str(dest), "text": narration}
+
+
+def _dub_vieneu(ctx, cfg, videos: list[Path], texts: list) -> str:
+    """Khối Lồng tiếng VieNeu: lời đọc → giọng VieNeu (WAV 48 kHz) → ghép vào video (thay / giữ nhỏ tiếng gốc)."""
+    from .. import ffmpeg
+    from ..pipeline import vieneu_tts
+
+    if not videos:
+        raise ValueError("Khối Lồng tiếng chưa có video — nối node Video / Ghép video / Video đầu vào vào")
+    src = videos[0]
+    text = "\n\n".join(str(t).strip() for t in [*texts, cfg.get("script") or ""] if str(t or "").strip())
+    analyze = cfg.get("script_mode") == "analyze"
+    if not text and not analyze:
+        raise ValueError("Chưa có lời đọc — nhập ở ô Lời đọc, nối khối chữ (Văn bản, AI viết…) vào, "
+                         "hoặc chọn “Phân tích video → viết lời đọc”")
+    ref = next(iter(_files(cfg.get("ref_audio") or [])), None)
+    segs = _dub_plan(ctx, cfg, src, text) if analyze else None  # lời đọc theo từng cảnh (có mốc giờ)
+    if segs:
+        text = "\n".join(s["text"] for s in segs)
+    ctx.log(f"VieNeu: {len(text.split())} chữ" + (f" · {len(segs)} đoạn theo cảnh" if segs else "") + " · "
+            + (f"nhân bản giọng từ {ref.name}" if ref else f"giọng {cfg.get('voice') or 'mặc định'}"))
+    ctx.progress(0.35 if segs else 0.05)
+    try:
+        if segs:
+            wavs = vieneu_tts.synthesize_many([(s["text"], ctx.dir / "doan" / f"{i + 1:02d}.wav") for i, s in enumerate(segs)],
+                                              voice=str(cfg.get("voice") or ""), ref_audio=str(ref or ""),
+                                              log=ctx.log, check_cancel=ctx.check_cancel)
+        else:
+            voice = vieneu_tts.synthesize(text, ctx.dir / "giong-doc.wav", voice=str(cfg.get("voice") or ""),
+                                          ref_audio=str(ref or ""), log=ctx.log, check_cancel=ctx.check_cancel)
+    except vieneu_tts.VieNeuError as exc:
+        raise ValueError(str(exc)) from exc
+    (ctx.dir / "loi-doc.txt").write_text(text, "utf-8")
+    ctx.progress(0.8)
+    lead = max(0.0, min(5.0, _num(cfg.get("lead"), 0.3)))
+    if segs:  # ghép các đoạn đúng mốc cảnh thành 1 track giọng (mốc đã tính sẵn → không cộng thêm độ trễ)
+        voice = _voice_track(segs, wavs, ctx.dir / "giong-doc.wav", ctx.log)
+        lead = 0.0
+    vdur = ffmpeg.media_duration(src)
+    adur = ffmpeg.media_duration(voice) + lead
+    extend = cfg.get("fit", "extend") == "extend" and adur > vdur + 0.05
+    total = adur + 0.3 if extend else vdur
+    ms = int(round(lead * 1000))
+    chains = [f"[1:a]aresample=48000,aformat=channel_layouts=stereo,adelay={ms}|{ms},apad[v1]"]
+    if cfg.get("mix") == "duck" and ffmpeg.has_audio(src):
+        vol = max(0.0, min(1.0, _num(cfg.get("orig_volume"), 0.15)))
+        chains += [f"[0:a]aresample=48000,aformat=channel_layouts=stereo,volume={vol:.3f},apad[v0]",
+                   "[v0][v1]amix=inputs=2:duration=longest:normalize=0[aout]"]
+    else:
+        chains.append("[v1]anull[aout]")
+    vmap = "0:v:0"
+    if extend:  # lời dài hơn video → giữ khung cuối cho đủ lời
+        chains.append(f"[0:v]tpad=stop_mode=clone:stop_duration={total - vdur + 0.1:.2f}[vout]")
+        vmap = "[vout]"
+    dest = ctx.dir / "video.mp4"
+    ffmpeg.run(["-i", src, "-i", voice, "-filter_complex", ";".join(chains), "-map", vmap, "-map", "[aout]",
+                *(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "18"] if extend else ["-c:v", "copy"]),
+                "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.2f}", "-movflags", "+faststart", dest])
+    ctx.progress(1.0)
+    ctx.log(f"Đã lồng tiếng: {adur - lead:.1f} giây lời đọc" + (f" · kéo dài video tới {total:.1f} giây" if extend else ""), "ok")
+    return str(dest)
+
+
+def _dub_plan(ctx, cfg, video: Path, hint: str) -> list[dict]:
+    """Phân tích video (ảnh lưới khung hình có mốc giây + mốc đổi cảnh) → model nhìn hình viết lời đọc theo từng đoạn
+    khớp cảnh: [{start, end, text}], đã sắp xếp, nằm trong video, số chữ vừa thời lượng."""
+    from .. import ffmpeg
+    from ..llm.base import extract_json
+    from ..pipeline import ref_video
+    from ..studio import ask_model
+
+    dur = ffmpeg.media_duration(video)
+    work = ctx.dir / "phan-tich"
+    work.mkdir(parents=True, exist_ok=True)
+    ctx.log("Đang cắt khung hình + dò mốc đổi cảnh để phân tích video…")
+    sheet, info = ref_video.contact_sheet(video, work, dur)
+    cuts = [round(t, 1) for t in ref_video._scene_times(video, dur)][:40]
+    hint_block = (f"Thông tin / ý chính người dùng cung cấp (bám theo, viết lại cho khớp hình):\n{hint[:3000]}"
+                  if hint else "Không có thông tin thêm — viết theo những gì thấy trên hình.")
+    prompt = DUB_PROMPT.format(dur=dur, cuts=", ".join(map(str, cuts)) or "không rõ (1 cảnh liền)", hint=hint_block,
+                               tone=DUB_TONES.get(cfg.get("tone"), DUB_TONES["ban_hang"]), wps=DUB_WPS)
+    model = cfg.get("analyze_model") or "claude_browser"
+    ctx.log(f"Đang nhờ {model.split('_')[0].title()} xem video ({len(info['frames'])} khung) và viết lời đọc theo cảnh…")
+
+    def parse(t):
+        try:
+            data = extract_json(t)
+        except ValueError:
+            return None
+        return data if isinstance(data, dict) and isinstance(data.get("doan"), list) and data["doan"] else None
+
+    raw = ask_model(ctx.settings, {"model": model, "text_profile": "", "show_browser": False, "timeout": 600}, prompt,
+                    complete=lambda t: parse(t) is not None, what="xem video và viết lời đọc", log=ctx.log,
+                    check_cancel=ctx.check_cancel, images=[sheet])
+    data = parse(raw)
+    if not data:
+        raise ValueError("Model không trả về lời đọc theo cảnh hợp lệ — thử lại hoặc đổi model")
+    segs = []
+    for d in data["doan"]:
+        if not isinstance(d, dict) or not str(d.get("loi") or "").strip():
+            continue
+        start = max(0.0, min(dur - 0.3, _num(d.get("bat_dau"), 0.0)))
+        end = max(start + 0.5, min(dur, _num(d.get("ket_thuc"), start + 3)))
+        segs.append({"start": round(start, 2), "end": round(end, 2), "text": " ".join(str(d["loi"]).split())[:600]})
+    segs.sort(key=lambda s: s["start"])
+    if not segs:
+        raise ValueError("Model không viết được lời đọc nào cho video này")
+    (ctx.dir / "loi-doc-theo-canh.json").write_text(json.dumps({"doan": segs}, ensure_ascii=False, indent=2), "utf-8")
+    for s in segs:
+        ctx.log(f"  {s['start']:5.1f}–{s['end']:5.1f}s: {s['text']}")
+    return segs
+
+
+def _voice_track(segs: list[dict], wavs: list[Path], dest: Path, log) -> Path:
+    """Đặt từng đoạn giọng vào đúng mốc cảnh: đoạn dài hơn chỗ trống → đọc nhanh tối đa 1.3×; vẫn tràn → đẩy đoạn sau lùi."""
+    from .. import ffmpeg
+
+    t, parts = 0.0, []
+    for i, (s, w) in enumerate(zip(segs, wavs)):
+        a = ffmpeg.media_duration(w)
+        start = max(s["start"], t + 0.12) if i else s["start"]
+        last = i + 1 == len(segs)  # đoạn cuối: không có đoạn sau để nhường chỗ → đọc tốc độ thường (khung cuối giữ đủ lời)
+        room = float("inf") if last else max(0.6, segs[i + 1]["start"] - start - 0.1)
+        tempo = min(1.3, a / room) if a > room else 1.0
+        parts.append((w, start, tempo))
+        t = start + a / tempo
+        if tempo > 1.0:
+            log(f"Đoạn {i + 1} hơi dài so với cảnh → đọc nhanh {tempo:.2f}×" + (" (vẫn lấn sang cảnh sau)" if a / tempo > room else ""))
+    args, chains = [], []
+    for i, (w, start, tempo) in enumerate(parts):
+        args += ["-i", w]
+        ms = int(round(start * 1000))
+        chains.append(f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo{f',atempo={tempo:.3f}' if tempo > 1.0 else ''},"
+                      f"adelay={ms}|{ms}[s{i}]")
+    mix = "".join(f"[s{i}]" for i in range(len(parts)))
+    chains.append(f"{mix}amix=inputs={len(parts)}:duration=longest:normalize=0[out]" if len(parts) > 1 else "[s0]anull[out]")
+    ffmpeg.run([*args, "-filter_complex", ";".join(chains), "-map", "[out]", "-ar", "48000", dest])
+    return dest
+
+
+def _num(value, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def split_script(texts: list, count: int) -> list[str]:
+    """Lời đọc cho từng video: các đoạn cách dòng trống (hoặc từng dòng nếu số dòng = số video), theo thứ tự nối;
+    thừa đoạn → gộp vào video cuối; 1 đoạn → video đầu."""
+    import re
+
+    text = "\n\n".join(str(t).strip() for t in texts if str(t or "").strip())
+    parts = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    lines = [x.strip() for x in text.splitlines() if x.strip()]
+    if len(parts) == 1 and len(lines) == count > 1:
+        parts = lines
+    if len(parts) > count:
+        parts = parts[:count - 1] + [" ".join(parts[count - 1:])]
+    return [" ".join(p.split()) for p in parts] + [""] * (count - len(parts))
+
+
+def _post_video(ctx, cfg, videos: list[Path], texts: list) -> str:
+    """Khối Hậu kỳ video: chạy đúng pipeline Hậu kỳ (Studio Muse AI) với model chọn được (mặc định Claude trình duyệt)."""
+    from .. import muse_post
+
+    if not videos:
+        raise ValueError("Khối Hậu kỳ video chưa có video — nối node Video / Ghép video / Video đầu vào vào")
+    script = split_script([*texts, cfg.get("script") or ""], len(videos))
+    if cfg.get("audio") == "tts" and not any(script):
+        ctx.log("Lồng tiếng AI nhưng chưa có lời đọc — video sẽ không lời (nhập lời đọc hoặc nối node chữ vào)", "warn")
+    form = {**cfg, "name": str(cfg.get("name") or "").strip() or "Hậu kỳ video",
+            "clips": [{"path": str(v), "text": script[i], "title": f"Cảnh {i + 1}"} for i, v in enumerate(videos)]}
+    ctx.log(f"Hậu kỳ {len(videos)} video · âm thanh: {cfg.get('audio')} · "
+            + (f"hậu kỳ AI {muse_post.POST_MODELS.get(cfg.get('post_model'), '')} + {cfg.get('post_style')}" if cfg.get("post_ai") else "không hậu kỳ AI"))
+    try:
+        final, info = muse_post.produce(ctx.settings, form, log=ctx.log, check_cancel=ctx.check_cancel,
+                                        progress=lambda pct, stage: ctx.progress(float(pct) / 100))
+    except muse_post.PostError as exc:
+        raise ValueError(str(exc)) from exc
+    dest = ctx.dir / "video.mp4"
+    shutil.copy2(final, dest)
+    (ctx.dir / "hau-ky.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), "utf-8")
+    return str(dest)
 
 
 def whiteboard_source(cfg: dict, text_in: str = "") -> str:

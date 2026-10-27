@@ -390,7 +390,7 @@
       if (t.dataset.arf) { R.filter = t.dataset.arf; return render(); }
       const ac = t.dataset.ac;
       if (ac === 'send') return send($('#acInput').value);
-      if (ac === 'zalo-settings') return openSettings();
+      if (ac === 'zalo-settings') return openSettings('zalo');
       if (ac === 'zalo-toggle') { R.zaloOpen = !R.zaloOpen; return render(); }
       if (ac === 'zalo-send') {
         R.zaloSending = true; render();

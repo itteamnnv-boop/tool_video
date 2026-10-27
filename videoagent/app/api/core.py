@@ -22,8 +22,9 @@ from ..templates_registry import registry
 from .common import _fail, _ok, log
 
 
-def _popup_rect() -> tuple[int, int, int, int]:
-    """Khung cửa sổ popup cho link ngoài: ~70% vùng làm việc (trừ taskbar), căn giữa. Trả về (x, y, rộng, cao)."""
+def _popup_rect(compact: bool = False) -> tuple[int, int, int, int]:
+    """Khung cửa sổ popup cho link ngoài: ~70% vùng làm việc (trừ taskbar), căn giữa. Trả về (x, y, rộng, cao).
+    compact = khung dọc nhỏ (~520×920, như điện thoại) sát mép phải — xem bài đăng mà vẫn thấy app."""
     try:
         import ctypes
         from ctypes import wintypes
@@ -33,6 +34,9 @@ def _popup_rect() -> tuple[int, int, int, int]:
         left, top, sw, sh = area.left, area.top, area.right - area.left, area.bottom - area.top
     except (AttributeError, OSError):
         left, top, sw, sh = 0, 0, 1600, 900
+    if compact:
+        w, h = min(520, sw), min(920, int(sh * 0.92))
+        return left + sw - w - 16, top + (sh - h) // 2, w, h
     w, h = max(900, int(sw * 0.7)), max(640, int(sh * 0.78))
     w, h = min(w, sw), min(h, sh)
     return left + (sw - w) // 2, top + (sh - h) // 2, w, h
@@ -79,6 +83,8 @@ class CoreApi:
         from ..canvas import CanvasRunner
         self._canvas = CanvasRunner(settings, self._emit, images=self._images, videos=self._runner,
                                     facebook=self._facebook, ads=self._ads, studio=self._studio)  # Canvas
+        # chạy quy trình xong → trợ lý Claude tự điều phối (chỉ khi Canvas đó bật): chấm theo tiêu chí, giao khối làm lại
+        self._canvas.on_flow_done = lambda bid, rec: self._assist().after_run(bid, rec)
         # Studio Muse AI: cùng chức năng Studio, dự án riêng, mọi bước chỉ dùng Muse (sự kiện mstudio_*)
         self._studio_muse = StudioRunner(settings, self._license, self._emit, images=self._images, videos=self._runner,
                                          variant="muse")
@@ -191,7 +197,39 @@ class CoreApi:
             "running": self._runner.running,
         }
 
+    # ------------------------------------------------------------------ khoá màn Cài đặt (mật khẩu quản trị)
+    def _admin_lock(self):
+        if not hasattr(self, "_admin"):
+            from ..admin_lock import AdminLock
+            self._admin = AdminLock()
+        return self._admin
+
+    def settings_lock_state(self) -> dict:
+        lock = self._admin_lock()
+        lock.touch()  # mở / quay lại màn Cài đặt = còn thao tác → gia hạn mở khoá
+        return _ok(lock=lock.state())
+
+    def settings_unlock(self, password: str) -> dict:
+        from ..admin_lock import LockError
+        try:
+            return _ok(lock=self._admin_lock().unlock(password))
+        except LockError as exc:
+            return _fail(exc)
+
+    def settings_set_password(self, new: str, old: str = "") -> dict:
+        from ..admin_lock import LockError
+        try:
+            return _ok(lock=self._admin_lock().set_password(new, old))
+        except LockError as exc:
+            return _fail(exc)
+
+    def settings_lock(self) -> dict:
+        return _ok(lock=self._admin_lock().lock())
+
     def save_settings(self, values: dict) -> dict:
+        lock = self._admin_lock()
+        values = lock.guard(values)  # Cài đặt đang khoá → không đổi khoá API / license / menu
+        lock.touch()
         before = (settings.get("browser_engine"), settings.get("browser_keepalive"))
         result = settings.update(values)
         if before != (settings.get("browser_engine"), settings.get("browser_keepalive")):
@@ -241,9 +279,10 @@ class CoreApi:
         open_path(settings.output_dir)
         return _ok()
 
-    def open_url(self, url: str) -> dict:
+    def open_url(self, url: str, compact: bool = False) -> dict:
         """Mở link ngoài thành cửa sổ popup gọn (~70% màn hình, căn giữa) bằng Chrome của người dùng (--app: không thanh
-        tab / địa chỉ, giữ đăng nhập Facebook…). Không có Chrome → trình duyệt mặc định như cũ."""
+        tab / địa chỉ, giữ đăng nhập Facebook…). compact = cửa sổ dọc nhỏ sát mép phải (xem bài / Reels vừa đăng).
+        Không có Chrome → trình duyệt mặc định như cũ."""
         import subprocess
         import webbrowser
 
@@ -257,7 +296,7 @@ class CoreApi:
         except RuntimeError:
             webbrowser.open(url)
             return _ok()
-        x, y, w, h = _popup_rect()
+        x, y, w, h = _popup_rect(compact)
         subprocess.Popen([exe, f"--app={url}", f"--window-size={w},{h}", f"--window-position={x},{y}"])
         return _ok()
 

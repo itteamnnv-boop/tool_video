@@ -24,6 +24,12 @@
       "label": "Prompt chuyển động",
       "required": true,
       "max": 4000
+    },
+    {
+      "key": "LoiThoai",
+      "label": "Lời thoại",
+      "required": false,
+      "max": 2000
     }
   ],
   "attachments": [
@@ -51,6 +57,7 @@
   "prompt": [
     "{KhungDau}",
     "{MoTa}",
+    "{LoiThoai}",
     "Keep every person's face and outfit, every product's packaging and label, and any text on the image exactly as they are. Bright, true-to-life colours, natural skin texture (no smoothing), natural motion."
   ]
 }

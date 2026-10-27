@@ -38,7 +38,8 @@ DEFAULTS = {
     "music_dir": "",
     "bgm_volume": 0.12,
     "cleanup_temp": True,
-    "splash_seconds": 1,  # màn Loading khi mở app: hiện tối thiểu bấy nhiêu giây (0 = vào ngay khi tải xong)
+    "splash_seconds": 1,
+    "menus": {},  # Cài đặt → Chức năng: {view: true/false} bật / tắt từng mục menu (thiếu = theo mặc định)  # màn Loading khi mở app: hiện tối thiểu bấy nhiêu giây (0 = vào ngay khi tải xong)
     "adreq_account": "",  # Trợ lý quảng cáo → Chat với Claude: tài khoản quảng cáo dùng lần trước
     # Zalo (zca-js, không chính thức): nghe tin nhóm → yêu cầu quảng cáo chờ duyệt
     "zalo_listen": False,
