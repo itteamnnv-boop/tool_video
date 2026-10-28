@@ -35,6 +35,17 @@
     const sets = Math.max(1, k.images.length);
     return `${vids.length} video · ${vids.reduce((n, v) => n + v.length, 0)} cảnh${sets > 1 ? ` × ${sets} ảnh` : ''}${k.versions > 1 ? ` × ${k.versions} bản` : ''}`;
   }
+  // ảnh app TỰ gửi kèm mọi lệnh (cài ở tab Tư liệu) — hiện ở đây để biết vì sao Muse nhận nhiều ảnh hơn số ảnh đã chọn
+  function autoRefs() {
+    const s = H.s, hero = MH.modelHero ? MH.modelHero() : null;
+    const nModel = (hero ? hero.images : s.model.images).length;
+    const items = [];
+    if (s.model.on && nModel) items.push(['model', `👤 Người mẫu cố định${hero ? ` “${esc(hero.name)}”` : ''} · ${nModel} ảnh`]);
+    if (s.rotate.on && s.rotate.images.length) items.push(['rotate', `🔁 Ảnh luân phiên · 1 ảnh / lệnh`]);
+    if (!items.length) return '';
+    return `<div class="mk-autorefs"><small class="muted">Tự gửi kèm mọi lệnh (tab Tư liệu):</small>
+      ${items.map(([kind, label]) => `<label class="mh-switch" title="Bỏ chọn = không gửi ảnh này nữa"><input type="checkbox" data-hub-toggle="${kind}" checked><i></i> ${label}</label>`).join('')}</div>`;
+  }
   function renderKForm() {
     const k = H.k;
     const script = k.mode === 'script';
@@ -68,7 +79,8 @@
       <div class="mk-bottom">
         <div class="mk-drop" id="mhKDrop">
           <div class="mk-drop-text"><b>Ảnh sản phẩm ${script ? '(tuỳ chọn)' : ''}</b>
-            <small>Kéo thả hoặc chọn nhiều ảnh: ${script ? 'mỗi ảnh làm ra 1 bộ video riêng' : 'mỗi ảnh = 1 video'}.</small></div>
+            <small>Kéo thả hoặc chọn nhiều ảnh: ${script ? 'mỗi ảnh làm ra 1 bộ video riêng' : 'mỗi ảnh = 1 video'}.</small>
+            ${autoRefs()}</div>
           ${k.images.length ? `<div class="mh-thumbs">${k.images.map((im, i) => `<span class="mh-thumb"><img src="${esc(im.url)}" alt="" title="${esc(im.name || '')}"><button data-krm="${i}" type="button" title="Bỏ">✕</button></span>`).join('')}</div>
             <button class="link" data-act="k-clear-img" type="button">Bỏ hết</button>` : ''}
           <button class="btn ghost sm" data-act="k-add-img" type="button">Chọn ảnh</button>

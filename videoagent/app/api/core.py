@@ -105,7 +105,6 @@ class CoreApi:
         from ..workflow.runner import WorkflowRunner
         self._workflows = WorkflowRunner(settings, self._license, self._emit, facebook=self._facebook, ads=self._ads,
                                          studio=self._studio)
-
     def attach(self, window) -> None:
         self._window = window
         self._win_max = False

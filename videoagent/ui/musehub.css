@@ -298,6 +298,7 @@
 .mk-drop-text{display:flex;flex-direction:column;gap:2px;margin-right:auto;min-width:0}
 .mk-drop-text b{font-size:12.5px}
 .mk-drop-text small{color:var(--muted);font-size:11px}
+.mk-autorefs{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin-top:4px;font-size:11.5px;color:var(--amber,#f5b942)}
 .mk-drop .mh-thumbs{flex-wrap:nowrap;overflow-x:auto;max-width:50%}
 .mk-drop .mh-thumb{width:40px;height:40px;flex:none}
 .mk-drop{min-height:58px}

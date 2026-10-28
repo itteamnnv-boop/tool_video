@@ -30,6 +30,8 @@
 .set-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:14px;align-items:start}
 .set-block{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);min-width:0;transition:border-color .3s,box-shadow .3s}
 .set-block.wide{grid-column:1/-1}
+.set-grid.tabbed .set-block{grid-column:1/-1}  /* tab: chỉ 1 khối → dùng hết bề ngang */
+.set-grid.tabbed .set-block:not(.wide){max-width:980px}
 .set-block.flash{animation:setFlash 1.2s ease-out}
 @keyframes setFlash{0%{border-color:var(--lime);box-shadow:0 0 0 3px #d4f06a33}100%{border-color:var(--line);box-shadow:none}}
 .set-block-head{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}

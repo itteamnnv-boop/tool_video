@@ -103,6 +103,8 @@ class GroupsMixin:
                     for scenes in videos:
                         refs, _ = compose_images(" ".join(scenes), self.hub,
                                                  ([product] if product else []) + shared + char_imgs, self._take_rotate)
+                        # vai trò từng ảnh: người mẫu / nhân vật dẫn / sản phẩm tách riêng (ảnh sản phẩm có người → không lấy người đó)
+                        roles = {**{p: "lead" for p in char_imgs}, **{p: "product" for p in ([product] if product else []) + shared}}
                         for v in range(versions):
                             title = str(form.get("title") or "").strip() or scenes[0]
                             g = new_group(title=title[:70], method=method, duration=duration, version=v + 1,
@@ -110,10 +112,17 @@ class GroupsMixin:
                                           is not False, voice=voice, presenter=presenter)
                             sb = None
                             if method in ("storyboard", "review"):
+                                note = _c.ref_roles(refs, self.hub, roles)
                                 sb = new_task(g, role="storyboard", kind="image", images=list(refs),
-                                              prompt=ms.storyboard_prompt(scenes, prefix=prefix, presenter=presenter))
-                            extra = {"status": "waiting" if sb else "queued", "after": sb["id"] if sb else "",
-                                     "refs_note": ms.STORYBOARD_REFS if sb else (ms.PRODUCT_REFS if refs else None)}
+                                              prompt=ms.storyboard_prompt(scenes, prefix=prefix, presenter=presenter)
+                                              + (f"\n{note}" if note else ""))
+                            if sb:  # video: ảnh 1 = storyboard (gắn vào đầu khi storyboard xong) → các ảnh sau đánh số từ 2
+                                note = _c.ref_roles(refs[:MAX_IMAGES - 1], self.hub, roles, start=2)
+                                refs_note = ms.STORYBOARD_HEAD + (f" {note}" if note else "")
+                            else:
+                                note = _c.ref_roles(refs, self.hub, roles)
+                                refs_note = (note + " Không vẽ lại sản phẩm hay gương mặt.") if note else None
+                            extra = {"status": "waiting" if sb else "queued", "after": sb["id"] if sb else "", "refs_note": refs_note}
                             if per_scene:
                                 for i, scene in enumerate(scenes, 1):
                                     new_task(g, role="scene", scene=i, duration=10, images=list(refs), **extra,
@@ -142,7 +151,8 @@ class GroupsMixin:
                                                                 presenter=presenter, storyboard=bool(sb),
                                                                 product=bool(product or shared)))
             if dry:  # chỉ xem lệnh: trả prompt rồi bỏ các task / nhóm vừa dựng
-                preview = [{"role": t.get("role"), "scene": t.get("scene", 0), "kind": t["kind"], "prompt": t["prompt"],
+                preview = [{"role": t.get("role"), "scene": t.get("scene", 0), "kind": t["kind"],
+                            "prompt": t["prompt"] + (f"\n\n[Ghi chú ảnh gửi kèm] {t['refs_note']}" if t.get("refs_note") else ""),
                             "images": len(t["images"]), "duration": t.get("duration", 0), "status": t["status"]}
                            for t in self.tasks[n_tasks:]]
                 self.tasks, self.groups = self.tasks[:n_tasks], self.groups[:n_groups]

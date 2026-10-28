@@ -29,6 +29,8 @@ VOICE_HINT = {"male_warm": "giọng nam trưởng thành, ấm và đáng tin", 
               "female_bright": "giọng nữ tươi sáng, rõ ràng", "female_fast": "giọng nữ nhanh nhẹn, sôi nổi kiểu TikTok"}
 MOTIONS = {"zoom": "máy quay zoom chậm vào cận cảnh sản phẩm", "orbit": "máy quay xoay 360° quanh sản phẩm",
            "slide": "máy trượt ngang cinematic qua sản phẩm", "smoke": "khói sương nhẹ bay quanh sản phẩm, ánh sáng điện ảnh"}
+STORYBOARD_HEAD = ("Ảnh đính kèm ĐẦU TIÊN (ảnh 1) là STORYBOARD (lưới các khung đánh số) — dựng video theo đúng thứ tự khung, "
+                   "không đưa khung lưới vào video.")
 STORYBOARD_REFS = ("Ảnh đính kèm ĐẦU TIÊN là STORYBOARD (lưới các khung đánh số) — dựng video theo đúng thứ tự khung, "
                    "không đưa khung lưới vào video. Các ảnh sau là ảnh tham chiếu nhân vật / sản phẩm — giữ nguyên khuôn mặt "
                    "và sản phẩm.")

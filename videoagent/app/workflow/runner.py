@@ -107,6 +107,14 @@ def validate(wf: dict) -> list:
 
                 if not key_status().get("openai" if "gpt" in str(cfg.get("model")) else "anthropic"):
                     issues.append({"node": nid, "level": "error", "message": "Model viết storyboard cần API key — nhập ở Cài đặt"})
+        if kind == "storyboard_video":
+            if "request" not in wired and len(str(cfg.get("request") or "").strip()) < 10:
+                issues.append({"node": nid, "level": "error", "message": "Nhập yêu cầu video hoặc nối dây vào cổng Yêu cầu"})
+            if str(cfg.get("model") or "").startswith("api:"):
+                from ..campaign.ai import key_status
+
+                if not key_status().get("openai" if "gpt" in str(cfg.get("model")) else "anthropic"):
+                    issues.append({"node": nid, "level": "error", "message": "Model viết storyboard cần API key — nhập ở Cài đặt"})
         if kind == "fb_ad":
             if not cfg.get("account_id"):
                 issues.append({"node": nid, "level": "error", "message": "Chưa chọn tài khoản quảng cáo"})
@@ -414,8 +422,7 @@ class WorkflowRunner:
                 def node_progress(frac, i=idx, s=spec):
                     self.pool.progress(100 * (i + max(0.0, min(1.0, frac))) / total, f"{s['name']} {round(frac * 100)}%", "run")
 
-                services = {"facebook": self.facebook, "ads": self.ads, "studio": self.studio, "workflow_name": wf.get("name", ""),
-                            "approve": lambda payload, n=nid: self._wait_approval(run_dir, data, n, payload)}
+                services = {"facebook": self.facebook, "ads": self.ads, "studio": self.studio, "workflow_name": wf.get("name", ""),                            "approve": lambda payload, n=nid: self._wait_approval(run_dir, data, n, payload)}
                 ctx = NodeContext(self.settings, run_dir, node, self.pool.log, self.pool.check_cancel, node_progress, services)
                 try:
                     outputs = run_node(ctx, inputs)

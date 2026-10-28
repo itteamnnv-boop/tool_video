@@ -241,9 +241,53 @@ def _wait_for_video(page, before: set, timeout_s: int, check_cancel, on_progress
 
 
 def _download(ctx, page, src: str) -> bytes:
+    """Tải video kết quả: HTTP qua phiên trình duyệt (thử 3 lần — CDN hay ngắt giữa chừng "aborted" khi file vừa tạo xong)
+    → dự phòng tải thẳng bằng Python với cookie phiên, tải nối tiếp (Range) khi rớt kết nối."""
     if src.startswith("blob:"):
         return base64.b64decode(page.evaluate(FETCH_BLOB_JS, src))
-    resp = ctx.request.get(src, headers={"Referer": "https://grok.com/"}, timeout=180_000)
-    if not resp.ok:
-        raise LLMError(f"Không tải được video từ Grok (HTTP {resp.status})")
-    return resp.body()
+    last = ""
+    for attempt in range(3):
+        try:
+            resp = ctx.request.get(src, headers={"Referer": "https://grok.com/"}, timeout=180_000)
+            if resp.ok:
+                return resp.body()
+            last = f"HTTP {resp.status}"
+            if resp.status < 500 and resp.status != 429:
+                break  # 403 / 404: thử lại vô ích → sang cách dự phòng
+        except PWError as exc:
+            last = str(exc).splitlines()[0][:120]
+        page.wait_for_timeout(3000 * (attempt + 1))
+    try:
+        return _http_download(ctx, page, src)
+    except (OSError, ValueError) as exc:
+        raise LLMError(f"Không tải được video ({last}; dự phòng: {exc}) — video vẫn nằm trong tài khoản, thử chạy lại sau") \
+            from exc
+
+
+def _http_download(ctx, page, src: str, tries: int = 4) -> bytes:
+    import urllib.error
+    import urllib.request
+
+    cookies = "; ".join(f"{c['name']}={c['value']}" for c in ctx.cookies(src))
+    headers = {"Referer": "https://grok.com/", "User-Agent": page.evaluate("navigator.userAgent")}
+    if cookies:
+        headers["Cookie"] = cookies
+    data, err = b"", None
+    for _ in range(tries):
+        req = urllib.request.Request(src, headers={**headers, **({"Range": f"bytes={len(data)}-"} if data else {})})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                if data and resp.status != 206:  # máy chủ không hỗ trợ tải nối tiếp → tải lại từ đầu
+                    data = b""
+                while chunk := resp.read(1 << 20):
+                    data += chunk
+            return data
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500 and exc.code != 429:
+                raise OSError(str(exc)) from exc  # 403 / 404: thử lại vô ích
+            err = exc
+            time.sleep(3)
+        except (urllib.error.URLError, OSError) as exc:  # rớt giữa chừng → giữ phần đã tải, nối tiếp
+            err = exc
+            time.sleep(3)
+    raise OSError(str(err))

@@ -157,6 +157,13 @@ class CanvasApi:
     def canvas_duplicate(self, bid: str, nid: str) -> dict:
         return self._cv_edit("result", self._canvas.duplicate, bid, nid)
 
+    # ---- nhiều node đang quét chọn
+    def canvas_duplicate_nodes(self, bid: str, ids: list) -> dict:
+        return self._cv_edit("result", self._canvas.duplicate_nodes, bid, list(ids or []))
+
+    def canvas_delete_nodes(self, bid: str, ids: list) -> dict:
+        return self._cv_edit("board", self._canvas.delete_nodes, bid, list(ids or []))
+
     def canvas_generate(self, bid: str, nid: str) -> dict:
         return self._cv("board", self._canvas.generate, bid, nid)
 

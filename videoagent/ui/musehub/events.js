@@ -371,7 +371,11 @@
       }
       if (t.dataset.hubToggle) {
         const r = await api('mhub_asset', t.dataset.hubToggle, { on: t.checked });
-        if (r.ok) { H.s = r.state; if (H.tab === 'assets') renderAssets(); else renderCompose(); }
+        if (r.ok) {
+          H.s = r.state;
+          if (H.tab === 'assets') renderAssets(); else if (H.tab === 'script') MH.renderKForm(); else renderCompose();
+          if (!t.checked) toast(t.dataset.hubToggle === 'model' ? 'Đã tắt Người mẫu cố định — lệnh mới không gửi kèm ảnh này nữa' : 'Đã tắt Ảnh luân phiên');
+        }
         return;
       }
       if (t.dataset.sel) { if (t.checked) H.sel.add(t.dataset.sel); else H.sel.delete(t.dataset.sel); return renderQueue(); }

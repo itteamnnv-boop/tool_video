@@ -397,6 +397,33 @@ NODE_TYPES = {
              "when": {"preset": [""], "post_ai": [True]}},
         ],
     },
+    "storyboard_video": {
+        "name": "Storyboard (phân cảnh)", "group": "ai", "icon": "🧭",
+        "desc": "AI phân tích yêu cầu (mục tiêu, người xem, thông điệp) → viết storyboard từng cảnh: mô tả, prompt video, "
+                "lời thoại. Trên Canvas: chạy xong tự tách mỗi cảnh thành 1 node Video riêng + 1 khối Ghép video",
+        "inputs": [{"key": "request", "type": "text", "label": "Yêu cầu", "multi": True},
+                   {"key": "images", "type": "images", "label": "Vật liệu ảnh (sản phẩm / nhân vật / bối cảnh)", "multi": True},
+                   {"key": "videos", "type": "video", "label": "Vật liệu video", "multi": True}],
+        "outputs": [{"key": "storyboard", "type": "text", "label": "Storyboard"},
+                    {"key": "text", "type": "text", "label": "Lời dẫn"}],
+        "fields": [
+            {"key": "request", "label": "Yêu cầu video (thêm sau văn bản nối vào cổng Yêu cầu)", "type": "textarea", "default": ""},
+            {"key": "model", "label": "Model phân tích & viết storyboard", "type": "select", "default": "claude_browser",
+             "options": [{"value": k, "label": v} for k, v in CONTENT_MODELS.items()]},
+            {"key": "scenes", "label": "Số cảnh", "type": "select", "default": "auto",
+             "options": [{"value": "auto", "label": "AI tự chọn (3–6)"}] + [{"value": str(n), "label": f"{n} cảnh"} for n in range(2, 9)]},
+            {"key": "style", "label": "Phong cách hình ảnh (tuỳ chọn)", "type": "text", "default": ""},
+            {"key": "speech", "label": "Lời thoại từng cảnh (lấy từ storyboard)", "type": "select", "default": "character",
+             "options": [{"value": "character", "label": "Nhân vật trong cảnh nói lời thoại của cảnh"},
+                         {"value": "narrator", "label": "Lời dẫn ngoài khung (model video đọc)"},
+                         {"value": "none", "label": "Clip không lời — lời dẫn ra cổng Lời dẫn để lồng tiếng"}]},
+            {"key": "aspect", "label": "Tỉ lệ khung hình", "type": "select", "default": "9:16",
+             "options": [{"value": a, "label": a} for a in _union("aspects")]},
+            {"key": "duration", "label": "Thời lượng mỗi cảnh (node Video tách ra dùng thời lượng này)", "type": "select",
+             "default": "6s",
+             "options": [{"value": d, "label": d} for d in sorted(_union("durations"), key=lambda s: int(s.rstrip("s")))]},
+        ],
+    },
     "whiteboard_video": {
         "name": "Whiteboard từ SRT / kịch bản", "group": "create", "icon": "✍",
         "desc": "Phụ đề SRT hoặc kịch bản → tranh line-art vẽ tay, bàn tay vẽ từng ý đúng lúc lời đọc "
@@ -584,6 +611,9 @@ def run_node(ctx: NodeContext, inputs: dict) -> dict:
         return _studio_video(ctx, cfg, _text(inputs.get("idea", [])), _files(inputs.get("images", [])))
     if kind == "whiteboard_video":
         return _whiteboard_video(ctx, cfg, _text(inputs.get("text", [])))
+    if kind == "storyboard_video":
+        return _storyboard_video(ctx, cfg, _text(inputs.get("request", [])), _files(inputs.get("images", [])),
+                                 _files(inputs.get("videos", [])))
     if kind == "dub_vieneu":
         return {"video": _dub_vieneu(ctx, cfg, _files(inputs.get("video", [])), inputs.get("text", []))}
     if kind == "post_video":
@@ -670,6 +700,182 @@ def _studio_video(ctx, cfg, idea_in: str, refs: list) -> dict:
     (ctx.dir / "loi-dan.txt").write_text(narration, "utf-8")
     ctx.log(f"Video {round(float(project['final'].get('duration') or 0))} giây · {len(project.get('scenes') or [])} cảnh", "ok")
     return {"video": str(dest), "text": narration}
+
+
+STORY_WPS = 2.8  # chữ / giây lời thoại mỗi cảnh (chừa 1 giây đầu / cuối clip)
+STORY_PROMPT = """Bạn là đạo diễn kiêm biên kịch video ngắn (quảng cáo, TikTok / Reels / Facebook).
+YÊU CẦU CỦA NGƯỜI DÙNG:
+{request}
+{materials}
+Bước 1 — PHÂN TÍCH yêu cầu: mục tiêu video, người xem, thông điệp chính, giọng điệu, nhân vật / sản phẩm / bối cảnh phải giữ
+nhất quán, điều cần tránh. Chỗ nào yêu cầu không nói rõ thì tự chọn hợp lý và ghi vào "gia_dinh".
+Bước 2 — STORYBOARD {count} cảnh. Mỗi cảnh là 1 clip {secs} giây do model video AI quay, khung {aspect}{style}:
+- Cảnh 1 là hook gây chú ý ngay 2 giây đầu; cảnh cuối chốt thông điệp / kêu gọi hành động nếu hợp mục tiêu.
+- Mỗi cảnh 1 hành động chính, diễn vừa trong {secs} giây; các cảnh nối mạch thành 1 câu chuyện.
+- "prompt": prompt TIẾNG ANH tự đủ nghĩa cho model video (chủ thể, hành động, bối cảnh, ánh sáng, góc máy, chuyển động máy);
+  mô tả nhân vật / sản phẩm y hệt nhau ở mọi cảnh để giữ nhất quán; không có chữ trên hình trừ khi yêu cầu ghi rõ.
+- "loi_thoai": lời nói tiếng Việt CỦA ĐÚNG CẢNH ĐÓ, khớp với việc đang diễn ra trên hình của cảnh, khoảng {words} chữ
+  (nói kịp trong {secs} giây); số / đơn vị viết thành chữ; "" nếu cảnh không cần lời.
+  NẾU YÊU CẦU ĐÃ CÓ SẴN LỜI THOẠI / LỜI ĐỌC: chia ĐÚNG NGUYÊN VĂN lời đó cho các cảnh theo thứ tự (không viết lại, không bỏ,
+  không thêm câu; không lặp 1 câu ở 2 cảnh) và dựng hình mỗi cảnh minh hoạ đúng câu được chia — lời dài thì tăng số cảnh.
+{materials_rule}- Không bịa giá, số liệu, thông tin không có trong yêu cầu.
+Trả về đúng MỘT khối ```json:
+{{"phan_tich": {{"muc_tieu": "", "nguoi_xem": "", "thong_diep": "", "giong_dieu": "", "giu_nhat_quan": "", "gia_dinh": ""}},
+ "tieu_de": "tên ngắn của video",
+ "nhan_vat": "mô tả tiếng Anh nhân vật / sản phẩm xuất hiện xuyên suốt (\\"\\" nếu không có)",
+ "canh": [{{"so": 1, "noi_dung": "cảnh này diễn ra gì (tiếng Việt)", "prompt": "English video prompt", "loi_thoai": "lời tiếng Việt", "vat_lieu": ["Ảnh 1"]}}]}}"""
+STORY_ANALYSIS = {"muc_tieu": "Mục tiêu", "nguoi_xem": "Người xem", "thong_diep": "Thông điệp", "giong_dieu": "Giọng điệu",
+                  "giu_nhat_quan": "Giữ nhất quán", "gia_dinh": "Giả định"}
+
+
+def _story_parse(text: str) -> tuple[dict, list[dict]]:
+    """Storyboard từ câu trả lời của model → (dữ liệu gốc, [{noi_dung, prompt, loi}]). Chấp nhận khoá tiếng Việt /
+    tiếng Anh, mảng gốc hoặc nằm trong canh / scenes / storyboard."""
+    from ..llm.base import extract_json
+
+    try:
+        data = extract_json(text)
+    except ValueError:
+        return {}, []
+    items = data
+    if isinstance(data, dict):
+        items = next((v for k, v in data.items() if isinstance(v, list) and str(k).lower() in (
+            "canh", "cảnh", "scenes", "scene", "storyboard", "shots")), None) \
+            or next((v for v in data.values() if isinstance(v, list) and v and isinstance(v[0], dict)), [])
+    else:
+        data = {}
+    scenes = []
+    for d in items if isinstance(items, list) else []:
+        if not isinstance(d, dict):
+            continue
+        low = {str(k).lower(): v for k, v in d.items()}
+
+        def pick(*keys):
+            return next((" ".join(str(low[k]).split()) for k in keys if str(low.get(k) or "").strip()), "")
+        prompt = pick("prompt", "prompt_video", "video_prompt", "visual", "hinh_anh", "mo_ta_en")
+        if not prompt:
+            continue
+        scene = {"noi_dung": pick("noi_dung", "nội dung", "mo_ta", "mô tả", "description", "summary") or prompt[:120],
+                 "prompt": prompt[:2000],
+                 "loi": pick("loi_thoai", "lời thoại", "loi", "lời", "loi_doc", "dialogue", "narration", "voiceover")[:600]}
+        used = next((low[k] for k in ("vat_lieu", "vật liệu", "materials", "assets", "refs") if k in low), None)
+        if used is not None:  # có khoá vật liệu (kể cả []) → node cảnh chỉ nối đúng vật liệu này
+            scene.update(_story_materials(used))
+        scenes.append(scene)
+    return data, scenes
+
+
+def _story_materials(value) -> dict:
+    """["Ảnh 1", "Video 2"] / [1, 3] / "Ảnh 1, Ảnh 2" → {"anh": [1], "video": [2]} (số thứ tự bắt đầu từ 1)."""
+    import re
+
+    items = value if isinstance(value, list) else re.split(r"[,;]", str(value or ""))
+    out = {"anh": [], "video": []}
+    for it in items:
+        text = str(it).strip().lower()
+        num = re.search(r"\d+", text)
+        if not num:
+            continue
+        key = "video" if "video" in text or "clip" in text else "anh"
+        if int(num.group()) not in out[key]:
+            out[key].append(int(num.group()))
+    return out
+
+
+def _story_material_text(cfg: dict, refs: list, videos: list) -> dict:
+    """Danh sách vật liệu gửi model (đánh số đúng thứ tự ảnh đính kèm) + quy tắc chọn vật liệu cho từng cảnh.
+    Tên vật liệu: Canvas truyền tên khối nối vào (cfg["_materials"]); không có thì dùng tên file."""
+    names = cfg.get("_materials") or {}
+    if not refs and not videos:
+        return {"materials": "", "materials_rule": ""}
+    lines = ["VẬT LIỆU ĐÍNH KÈM (ảnh gửi kèm theo đúng thứ tự dưới đây — nhìn kỹ để mô tả đúng sản phẩm / nhân vật):"]
+    lines += [f"- Ảnh {i}: {(names.get('anh') or [])[i - 1] if i <= len(names.get('anh') or []) else p.stem}"
+              for i, p in enumerate(refs, 1)]
+    lines += [f"- Video {i}: {(names.get('video') or [])[i - 1] if i <= len(names.get('video') or []) else p.stem}"
+              " (chỉ biết tên, không xem được)" for i, p in enumerate(videos, 1)]
+    rule = ('- "vat_lieu": các vật liệu cảnh đó cần (VD ["Ảnh 1", "Video 1"]) — chỉ chọn thứ thực sự xuất hiện / được dùng '
+            'trong cảnh (sản phẩm cận cảnh → ảnh sản phẩm; người nói → ảnh nhân vật); [] nếu cảnh không cần vật liệu nào.')
+    return {"materials": "\n".join(lines), "materials_rule": rule}
+
+
+def _story_markdown(data: dict, scenes: list[dict], secs: int) -> str:
+    analysis = data.get("phan_tich") if isinstance(data.get("phan_tich"), dict) else {}
+    lines = [f"# {str(data.get('tieu_de') or 'Storyboard').strip()}", "", "## Phân tích yêu cầu"]
+    lines += [f"- **{label}:** {' '.join(str(analysis[k]).split())}" for k, label in STORY_ANALYSIS.items()
+              if str(analysis.get(k) or "").strip()] or ["- (model không ghi phân tích)"]
+    if str(data.get("nhan_vat") or "").strip():
+        lines += ["", f"**Nhân vật / sản phẩm xuyên suốt:** {data['nhan_vat']}"]
+    lines += ["", "## Storyboard"]
+    for i, s in enumerate(scenes):
+        lines += ["", f"### Cảnh {i + 1} · {i * secs}–{(i + 1) * secs}s", s["noi_dung"],
+                  f"- Lời thoại: {s['loi'] or '(không lời)'}", f"- Prompt: {s['prompt']}"]
+        if "anh" in s:
+            used = [f"Ảnh {k}" for k in s["anh"]] + [f"Video {k}" for k in s["video"]]
+            lines.append(f"- Vật liệu: {', '.join(used) or '(không dùng)'}")
+    return "\n".join(lines) + "\n"
+
+
+def _storyboard_video(ctx, cfg, request_in: str, refs: list[Path], videos: list[Path] = ()) -> dict:
+    """Block Storyboard (phân cảnh): model phân tích yêu cầu + viết storyboard (JSON). Chỉ viết storyboard — quay video do
+    các node Video từng cảnh làm (Canvas tự tách: canvas.CanvasRunner._split_scenes). Hỏng định dạng → hỏi lại 1 lần.
+    Trả về storyboard (markdown), text (lời dẫn), scenes [{noi_dung, prompt đầy đủ cho model video, loi}]."""
+    from ..studio import ask_model
+
+    request = _text([request_in, cfg.get("request")])
+    if len(request) < 10:
+        raise ValueError("Cần yêu cầu video (ít nhất 1 câu) — nối dây vào cổng Yêu cầu hoặc nhập ở ô Yêu cầu video")
+    options = {"aspect": str(cfg.get("aspect") or "9:16"), "duration": str(cfg.get("duration") or "6s")}
+    secs = int(options["duration"].rstrip("s") or 6)
+    count = str(cfg.get("scenes") or "auto")
+    words = max(4, int((secs - 1) * STORY_WPS))
+    style = str(cfg.get("style") or "").strip()
+    prompt = STORY_PROMPT.format(
+        request=request[:6000], secs=secs, aspect=options["aspect"], words=words,
+        count=f"đúng {count}" if count.isdigit() else "từ 3 đến 6 (tự chọn theo độ phức tạp của yêu cầu)",
+        style=f", phong cách hình ảnh: {style}" if style else "", **_story_material_text(cfg, refs, videos))
+    model = str(cfg.get("model") or "claude_browser")
+    ctx.log(f"Đang nhờ {CONTENT_MODELS.get(model, model)} phân tích yêu cầu và viết storyboard…")
+    ctx.progress(0.02)
+    ask = {"model": model, "text_profile": "", "show_browser": False, "timeout": 900}
+    system = "Bạn là đạo diễn video ngắn. Làm đúng định dạng được yêu cầu."
+    images = [str(p) for p in refs[:4]] or None
+    raw = ask_model(ctx.settings, ask, prompt, complete=lambda t: bool(_story_parse(t)[1]), what="viết storyboard",
+                    log=ctx.log, check_cancel=ctx.check_cancel, system=system, images=images)
+    (ctx.dir / "tra-loi-model.txt").write_text(str(raw or ""), "utf-8")
+    data, scenes = _story_parse(str(raw or ""))
+    if not scenes:
+        ctx.log("Câu trả lời chưa đúng định dạng — hỏi lại model, chỉ xin JSON storyboard…", "warn")
+        raw = ask_model(ctx.settings, dict(ask), prompt + "\n\nLƯU Ý: lần trước bạn chưa trả đúng định dạng. CHỈ trả về "
+                        "đúng 1 khối ```json như mẫu trên — không viết gì khác.", complete=lambda t: bool(_story_parse(t)[1]),
+                        what="viết lại storyboard (JSON)", log=ctx.log, check_cancel=ctx.check_cancel, system=system,
+                        images=images)
+        (ctx.dir / "tra-loi-model-lan-2.txt").write_text(str(raw or ""), "utf-8")
+        data, scenes = _story_parse(str(raw or ""))
+    if not scenes:
+        raise ValueError(f"Model không trả về storyboard hợp lệ (đã hỏi lại 1 lần) — xem {ctx.dir / 'tra-loi-model.txt'}; "
+                         "thử lại hoặc đổi model")
+    scenes = scenes[:int(count)] if count.isdigit() else scenes[:8]
+    board = _story_markdown(data, scenes, secs)
+    narration = "\n\n".join(s["loi"] for s in scenes if s["loi"])
+    (ctx.dir / "storyboard.md").write_text(board, "utf-8")
+    (ctx.dir / "storyboard.json").write_text(json.dumps({**data, "canh": scenes}, ensure_ascii=False, indent=2), "utf-8")
+    (ctx.dir / "loi-dan.txt").write_text(narration, "utf-8")
+    ctx.log(f"Storyboard “{str(data.get('tieu_de') or '').strip() or 'không tên'}”: {len(scenes)} cảnh × {secs}s", "ok")
+    for i, s in enumerate(scenes):
+        ctx.log(f"  Cảnh {i + 1}: {s['noi_dung']}")
+    # prompt đầy đủ từng cảnh cho node Video: + nhân vật xuyên suốt + phong cách. Lời thoại KHÔNG ghép vào prompt —
+    # node Video lấy lời thoại của đúng cảnh ở ô 💬 (Canvas: _dialogue_text) và tự dặn model nói / không nói
+    subject = " ".join(str(data.get("nhan_vat") or "").split())
+    full = []
+    for s in scenes:
+        parts = [s["prompt"]]
+        if subject and subject.lower() not in s["prompt"].lower():
+            parts.append(f"Consistent subject across all scenes: {subject}.")
+        if style:
+            parts.append(f"Visual style: {style}.")
+        full.append({**s, "prompt": "\n\n".join(parts)})
+    ctx.progress(1.0)
+    return {"storyboard": board, "text": narration, "scenes": full}
 
 
 def _dub_vieneu(ctx, cfg, videos: list[Path], texts: list) -> str:

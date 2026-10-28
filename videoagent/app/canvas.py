@@ -34,8 +34,8 @@ EDITABLE = ("x", "y", "title", "prompt", "engine", "aspect", "count", "duration"
 NODE_W = (120, 800)  # cỡ node Ảnh / Video / Ảnh tải lên kéo được (px, theo chiều rộng); w = 0 → cỡ mặc định
 VIDEO_REF_SLOTS = ("ref1", "ref2", "ref3", "ref4", "ref5")  # ô ảnh tham chiếu của template canvas-video
 # block của Workflow dùng được trên Canvas (chạy bằng chính workflow.nodes.run_node). Tạo ảnh / video là node riêng.
-WF_TYPES = ("input_text", "ai_text", "content_post", "input_video", "concat_video", "dub_vieneu", "post_video", "studio_video", "whiteboard_video",
-            "fb_post", "fb_schedule", "fb_ad", "output")
+WF_TYPES = ("input_text", "ai_text", "content_post", "input_video", "concat_video", "dub_vieneu", "post_video", "studio_video", "storyboard_video",
+            "whiteboard_video", "fb_post", "fb_schedule", "fb_ad", "output")
 MAX_RUNS = 20  # lịch sử chạy giữ trong board.json
 POST_TYPES = ("fb_post", "fb_schedule", "fb_ad")  # khối đăng / lên lịch / quảng cáo: không bao giờ tự chạy lại khi làm lại
 # khối Nhóm / ghi chú (kiểu sticky note n8n): chỉ để gom + ghi chú, không tham gia chạy quy trình
@@ -171,6 +171,9 @@ class CanvasRunner:
         self.pool = TaskPool("canvas_", emit, lambda: settings.get("max_parallel_canvas") or 4)
         self._lock = threading.RLock()
         self._approvals: dict[tuple, dict] = {}  # (bảng, node) → {"event", "decision"} — đăng bài chờ duyệt
+        # lượt chạy quy trình đang chạy được nối dài (Storyboard tách cảnh → node Video mới chạy luôn trong lượt đó)
+        self._grow: dict[str, bool] = {}  # bảng → lượt sắp chạy có được nối dài không (Chạy toàn bộ / Chạy từ đây)
+        self._live: dict[str, tuple] = {}  # bảng → (mã lượt, danh sách node theo thứ tự — nối thêm được khi đang chạy)
 
     # ------------------------------------------------------------------ lưu trữ
     @property
@@ -545,6 +548,53 @@ class CanvasRunner:
         board = self.update_nodes(bid, [{"id": res["node"]["id"], **keep}])
         return {"board": board, "node": next(n for n in board["nodes"] if n["id"] == res["node"]["id"])}
 
+    # ------------------------------------------------------------------ nhiều node (quét chọn trên Canvas)
+    COPY_KEYS = ("engine", "aspect", "count", "duration", "resolution", "config", "title", "prompt_src", "dialogue_src",
+                 "dialogue", "voice", "first_frame", "w", "ask", "auto_post")
+
+    def duplicate_nodes(self, bid: str, ids: list, dx: float = 60, dy: float = 60) -> dict:
+        """Nhân bản nhiều node 1 lần: dây nối GIỮA các node được chọn chuyển sang bản sao (cả nhóm như 1 khối mới),
+        dây từ node ngoài nhóm giữ nguyên. Node Tải lên không nhân bản (bản sao vẫn nối vào ảnh gốc)."""
+        made = {}
+
+        def apply(board):
+            picked = [n for n in board["nodes"] if n["id"] in set(ids or []) and n["kind"] != "upload"]
+            if not picked:
+                raise CanvasError("Chưa chọn node nào nhân bản được (node Tải lên không nhân bản)")
+            for src in picked:
+                copy = self._new_node(board, src["kind"], src["x"] + dx, src["y"] + dy, [], src.get("prompt", ""),
+                                      src.get("wtype", ""))
+                copy.update({k: json.loads(json.dumps(src[k])) for k in self.COPY_KEYS if k in src})
+                made[src["id"]] = copy
+            for src in picked:  # nối lại: node trong nhóm → bản sao của nó; node ngoài nhóm → giữ
+                copy = made[src["id"]]
+                copy["inputs"] = [made[i]["id"] if i in made else i for i in src.get("inputs") or []][:MAX_INPUTS]
+                for key in ("prompt_src", "dialogue_src"):
+                    if copy.get(key) in made:
+                        copy[key] = made[copy[key]]["id"]
+        board = self._edit(bid, apply)
+        return {"board": self.public(board), "nodes": [c["id"] for c in made.values()]}
+
+    def delete_nodes(self, bid: str, ids: list) -> dict:
+        """Xoá nhiều node 1 lần (dừng node đang chạy, xoá file kết quả, gỡ dây nối tới chúng)."""
+        gone = set(ids or [])
+
+        def apply(board):
+            for node in board["nodes"]:
+                if node["id"] not in gone:
+                    continue
+                if node.get("status") in ACTIVE and node.get("task"):
+                    self.pool.cancel(node["task"])
+                for rel in node.get("files") or []:
+                    (self.root / bid / rel).unlink(missing_ok=True)
+            board["nodes"] = [n for n in board["nodes"] if n["id"] not in gone]
+            for n in board["nodes"]:
+                n["inputs"] = [i for i in n.get("inputs") or [] if i not in gone]
+                for key in ("dialogue_src", "prompt_src"):
+                    if n.get(key) in gone:
+                        n[key] = ""
+        return self.public(self._edit(bid, apply))
+
     def file_of(self, bid: str, nid: str) -> Path:
         node = self._node(self.load(bid), nid)
         files = node.get("files") or []
@@ -586,10 +636,23 @@ class CanvasRunner:
                 continue
             src = next((n for n in board["nodes"] if n["id"] == iid), None)
             if src and src["kind"] == "wf":
-                text = str(self._outputs(bid, src).get("text") or "").strip()
+                scene = self._scene_for(src, node)
+                text = str(scene.get("prompt") if scene is not None else self._outputs(bid, src).get("text") or "").strip()
+                if scene and not self._dialogue_text(bid, board, node).strip():  # cảnh không lời → dặn model không nói
+                    text += "\n\nNo dialogue or speech — only natural ambience; no subtitles or on-screen text."
                 if text:
                     texts.append(text)
         return "\n\n".join(texts)
+
+    @staticmethod
+    def _scene_for(src: dict, node: dict) -> dict | None:
+        """Node Video tách từ Storyboard (node.scene = k): cảnh thứ k của khối Storyboard src ({} nếu storyboard không còn
+        cảnh đó); None nếu không phải cặp Storyboard → node cảnh."""
+        k = int(node.get("scene") or 0)
+        if src.get("wtype") != "storyboard_video" or k < 1:
+            return None
+        scenes = (src.get("out") or {}).get("scenes") or []
+        return scenes[k - 1] if k <= len(scenes) else {}
 
     @staticmethod
     def _prompt_src(node: dict) -> str:
@@ -611,7 +674,8 @@ class CanvasRunner:
         if sid and sid in (node.get("inputs") or []):
             src = next((n for n in board["nodes"] if n["id"] == sid), None)
             if src is not None:
-                return str(self._outputs(bid, src).get("text") or "").strip()
+                scene = self._scene_for(src, node)  # node cảnh của Storyboard → lời thoại đúng cảnh đó
+                return str(scene.get("loi") if scene is not None else self._outputs(bid, src).get("text") or "").strip()
         return str(node.get("dialogue") or "")
 
     def _input_images(self, bid: str, board: dict, node: dict) -> list[Path]:
@@ -897,6 +961,10 @@ class CanvasRunner:
         if not confirm:
             self.pool.log(f"{nid}: 🚀 tự đăng không cần duyệt (đã bật cho khối này)", "warn")
         wnode = {"id": nid, "type": node["wtype"], "config": {**(node.get("config") or {}), "confirm": confirm, "sources": []}}
+        materials = self._materials(bid, board, node) if node["wtype"] == "storyboard_video" else None
+        if materials:  # Storyboard: tên khối vật liệu (đúng thứ tự ảnh / video gửi model) để model chọn vật liệu từng cảnh
+            wnode["config"]["_materials"] = {k: [self._material_name(self._node(board, i)) for i in ids]
+                                             for k, ids in materials.items()}
         services = {"facebook": self.facebook, "ads": self.ads, "studio": self.studio,
                     "workflow_name": f"Canvas · {board['name']}",
                     "approve": lambda payload: self._wait_approval(bid, nid, payload)}
@@ -923,6 +991,9 @@ class CanvasRunner:
                 out["video"], files = rel, [rel]
             elif key in ("text", "ad") and value:
                 out["text"] = str(value)
+            elif key == "scenes" and isinstance(value, list):  # Storyboard: các cảnh → node Video từng cảnh đọc từ đây
+                out["scenes"] = value
+                out["materials"] = materials or {"anh": [], "video": []}  # Ảnh k / Video k của model → id khối vật liệu
             elif key == "items":
                 folder = str(ctx.dir.parent / str(wnode["config"].get("name") or "ket-qua"))
                 out.update(folder=folder, text=f"Đã gom {len(value or [])} kết quả vào thư mục:\n{folder}")
@@ -933,10 +1004,115 @@ class CanvasRunner:
                 where = value.get("url") or value.get("post_id") or ""
                 out["text"] = (f"{'Đã lên lịch ' + value.get('when', '') if value.get('scheduled') else 'Đã đăng'} lên "
                                f"“{value.get('page', '')}”" + (f": {where}" if where else ""))
+        if result.get("storyboard"):  # Storyboard: khung hiện storyboard; lời dẫn giữ riêng
+            out.update(narration=out.get("text", ""), text=str(result["storyboard"]))
         self._drop_old(bid, node)
         self._set_node(bid, nid, status="done", pct=100, error="", out=out, files=files, pick=0, stage="", approval={})
         self._mark_sig(bid, nid)
+        if node["wtype"] == "storyboard_video" and out.get("scenes"):
+            self._split_scenes(bid, nid)
         return {"board": bid, "node": nid}
+
+    def _materials(self, bid: str, board: dict, node: dict) -> dict:
+        """Khối vật liệu nối vào Storyboard theo đúng thứ tự ảnh / video gửi model (như _wf_inputs): {anh: [id], video: [id]}."""
+        mats = {"anh": [], "video": []}
+        for iid in node.get("inputs") or []:
+            src = next((n for n in board["nodes"] if n["id"] == iid), None)
+            out = self._outputs(bid, src) if src is not None else {}
+            mats["anh"] += [iid for p in out.get("images") or [] if Path(p).is_file()]
+            if out.get("video") and Path(out["video"]).is_file():
+                mats["video"].append(iid)
+        return mats
+
+    def _material_name(self, node: dict) -> str:
+        return f"{node.get('title') or self.label(node)} (khối {node['id']})"
+
+    SCENE_GAP_Y, SCENE_GAP_X = 470, 400  # node cảnh (cao ~430px) xếp dọc bên phải khối Storyboard, khối Ghép xa thêm 1 cột
+
+    def _split_scenes(self, bid: str, sid: str) -> list:
+        """Storyboard xong → mỗi cảnh 1 node Video (prompt + lời thoại lấy đúng cảnh đó từ Storyboard, ảnh tham chiếu nối
+        vào Storyboard nối luôn vào từng cảnh) + 1 khối Ghép video nối các cảnh theo thứ tự. Đã có thì giữ nguyên node cũ
+        (model, thời lượng bạn đã đổi) — chỉ thêm cảnh còn thiếu, đổi tên theo nội dung mới. Đang chạy quy trình → node mới
+        chạy luôn trong lượt đó. Trả về id các node vừa tạo."""
+        created, touched = [], []
+
+        def apply(board):
+            sb = self._node(board, sid)
+            out = sb.get("out") or {}
+            cfg, scenes = sb.get("config") or {}, out.get("scenes") or []
+            ids = {n["id"] for n in board["nodes"]}
+            mats = {k: [i for i in v if i in ids] for k, v in (out.get("materials") or {}).items()}
+            every = list(dict.fromkeys(mats.get("anh", []) + mats.get("video", [])))  # mọi khối vật liệu (không trùng)
+
+            def chosen(scene):  # vật liệu model chọn cho cảnh (Ảnh k → khối thứ k); model không ghi → dùng tất cả
+                if "anh" not in scene:
+                    return every
+                pick = [mats["anh"][k - 1] for k in scene.get("anh") or [] if 0 < k <= len(mats.get("anh", []))]
+                pick += [mats["video"][k - 1] for k in scene.get("video") or [] if 0 < k <= len(mats.get("video", []))]
+                return list(dict.fromkeys(pick))
+
+            mine = {int(n.get("scene") or 0): n for n in board["nodes"] if n.get("scene_of") == sid}
+            speech = cfg.get("speech") or "character"
+            for k, scene in enumerate(scenes, 1):
+                title = f"Cảnh {k} · {scene.get('noi_dung') or ''}"[:60]
+                use = chosen(scene)[:MAX_INPUTS - 1]
+                if k in mine:  # giữ model / thời lượng bạn đã đổi; cập nhật tên + vật liệu theo storyboard mới
+                    n = mine[k]
+                    keep = [i for i in n.get("inputs") or [] if i != sid and i not in every]  # dây bạn tự nối thêm
+                    n.update(title=title, inputs=[sid, *use, *keep][:MAX_INPUTS])
+                    if speech != "none" and not n.get("dialogue_src") and not str(n.get("dialogue") or "").strip():
+                        n.update(dialogue_src=sid, voice="narrator" if speech == "narrator" else "")
+                    touched.append(n["id"])
+                    continue
+                n = self._new_node(board, "video", sb["x"] + self.SCENE_GAP_X, sb["y"] + (k - 1) * self.SCENE_GAP_Y,
+                                   [sid, *use], "")
+                n.update(title=title, scene=k, scene_of=sid, prompt_src=sid, first_frame=False,
+                         aspect=cfg.get("aspect") or n["aspect"], duration=cfg.get("duration") or n["duration"])
+                if speech != "none":  # mặc định: lời thoại của đúng cảnh lấy từ storyboard
+                    n.update(dialogue_src=sid, voice="narrator" if speech == "narrator" else "")
+                self._fit_options(n)
+                mine[k] = n
+                created.append(n["id"])
+            joined = next((n for n in board["nodes"] if n.get("concat_of") == sid), None)
+            order = [mine[k]["id"] for k in sorted(mine) if k <= len(scenes)]
+            if joined is None:
+                joined = self._new_node(board, "wf", sb["x"] + 2 * self.SCENE_GAP_X, sb["y"], order, "", "concat_video")
+                joined.update(title="Ghép các cảnh", concat_of=sid)
+                joined["config"]["aspect"] = cfg.get("aspect") if cfg.get("aspect") in ("9:16", "16:9", "1:1") else "9:16"
+                created.append(joined["id"])
+            else:  # cảnh mới nối thêm vào khối Ghép, giữ đúng thứ tự cảnh 1 → N (dây khác của bạn giữ nguyên)
+                others = [i for i in joined.get("inputs") or [] if i not in {n["id"] for n in mine.values()}]
+                joined["inputs"] = (order + others)[:MAX_INPUTS]
+                touched.append(joined["id"])
+        board = self._edit(bid, apply)
+        for nid in [*created, *touched]:  # node mới → UI thêm vào bảng; node cũ → UI cập nhật tên / dây
+            self.emit("canvas_node", {"board": bid, "node": self.public_node(bid, self._node(board, nid))})
+        if created:
+            self.pool.log(f"Storyboard {sid}: đã tách {sum(1 for i in created if self._node(board, i)['kind'] == 'video')} "
+                          "node Video theo cảnh" + (" + khối Ghép các cảnh" if any(
+                              self._node(board, i)["kind"] == "wf" for i in created) else ""), "ok")
+        self._extend_flow(bid, sid, created)
+        return created
+
+    def _extend_flow(self, bid: str, sid: str, new: list) -> None:
+        """Lượt Chạy toàn bộ / Chạy từ đây đang chạy → node vừa tách chạy luôn: node cảnh chèn trước khối Ghép (nếu khối
+        Ghép đã nằm trong lượt), không thì nối vào cuối."""
+        live = self._live.get(bid)
+        if not live or not new:
+            return
+        rid, order = live
+        board = self.load(bid)
+        task = self._node(board, sid).get("task") or ""  # tác vụ của lượt chạy (node trong lượt dùng chung)
+        concat = next((n["id"] for n in board["nodes"] if n.get("concat_of") == sid and n["id"] in order), None)
+        for nid in new:
+            if nid in order:
+                continue
+            if concat is not None and self._node(board, nid)["kind"] == "video":
+                order.insert(order.index(concat), nid)
+            else:
+                order.append(nid)
+            self._set_node(bid, nid, status="queued", pct=0, error="", task=task)
+            self._run_record(bid, rid, node=(nid, "queued"))
 
     # ------------------------------------------------------------------ chạy cả quy trình (như Workflow)
     @staticmethod
@@ -984,7 +1160,7 @@ class CanvasRunner:
             return memo[nid]
         node = next(n for n in board["nodes"] if n["id"] == nid)
         keys = ("kind", "wtype", "prompt", "engine", "aspect", "count", "duration", "resolution", "first_frame", "config",
-                "dialogue", "voice", "dialogue_src", "auto_post", "prompt_src")
+                "dialogue", "voice", "dialogue_src", "auto_post", "prompt_src", "scene")
         ins = []
         for iid in node.get("inputs") or []:
             src = next((n for n in board["nodes"] if n["id"] == iid), None)
@@ -1063,6 +1239,10 @@ class CanvasRunner:
                 add(nid, "error", "Ảnh chưa có prompt (viết prompt, hoặc nối khối chữ vào làm prompt)")
             elif n["kind"] == "video" and not ({"images", "video"} & got) and not text_in and not own:
                 add(nid, "error", "Video chưa có ảnh / video đầu vào hoặc prompt")
+            scene_src = nodes.get(n.get("scene_of") or "")
+            if n["kind"] == "video" and scene_src is not None and scene_src.get("status") == "done" \
+                    and self._scene_for(scene_src, n) == {} and scene_src["id"] not in ids:
+                add(nid, "error", f"Storyboard {scene_src['id']} không còn cảnh {n.get('scene')} — xoá node này hoặc viết lại storyboard")
             spoken = self._dialogue_text(board["id"], board, n) if n["kind"] == "video" else ""
             if n["kind"] == "video" and n.get("dialogue_src") and not spoken:
                 src = nodes.get(n["dialogue_src"])
@@ -1123,6 +1303,8 @@ class CanvasRunner:
                     add(nid, "error", "Tạo content: nhập Tên sản phẩm + Công dụng, hoặc nối chữ thông tin sản phẩm vào")
                 if kind == "studio_video" and not text_in and not str(cfg.get("idea") or "").strip():
                     add(nid, "error", "Video dài chưa có ý tưởng")
+                if kind == "storyboard_video" and not text_in and len(str(cfg.get("request") or "").strip()) < 10:
+                    add(nid, "error", "Storyboard → Video chưa có yêu cầu (nhập hoặc nối khối chữ vào)")
                 if kind == "whiteboard_video" and not text_in and not str(cfg.get("text") or "").strip() \
                         and not cfg.get("srt"):
                     add(nid, "error", "Whiteboard chưa có SRT / kịch bản")
@@ -1178,6 +1360,7 @@ class CanvasRunner:
                       "status": "running", "nodes": {nid: "queued" for nid in plan["run"]},
                       "reused": plan["reuse"], "current": "",
                       **({"origin": origin, "round": int(round_no)} if origin else {})}
+            self._grow[bid] = mode in ("all", "from")  # node Storyboard tách cảnh giữa chừng → chạy luôn trong lượt này
             task = self.pool.submit(f"Canvas · {board['name']} · {label}", self._flow, bid, rid, plan["run"],
                                     meta={"board": bid, "flow": rid})
             record["task"] = task
@@ -1211,6 +1394,8 @@ class CanvasRunner:
     def _flow(self, bid: str, rid: str, order: list) -> dict:
         bad: set = set()  # node lỗi / bị bỏ qua trong lần chạy này → node phía sau cũng bỏ qua
         total = len(order)
+        if self._grow.pop(bid, False):
+            self._live[bid] = (rid, order)
         try:
             for i, nid in enumerate(order):
                 self.pool.check_cancel()
@@ -1223,7 +1408,7 @@ class CanvasRunner:
                     self._set_node(bid, nid, status="idle", pct=0, error="Bỏ qua — node phía trước lỗi / không chạy")
                     self._run_record(bid, rid, node=(nid, "skipped"))
                     continue
-                self.pool.log(f"[{i + 1}/{total}] {self.label(node)} {nid}")
+                self.pool.log(f"[{i + 1}/{max(total, len(order))}] {self.label(node)} {nid}")
                 self._run_record(bid, rid, current=nid, node=(nid, "running"))
                 try:
                     result = self._run_wf(bid, nid) if node["kind"] == "wf" else self._run(bid, nid)
@@ -1246,6 +1431,8 @@ class CanvasRunner:
                     self._set_node(bid, nid, status="idle", pct=0, error="Đã dừng", approval={}, stage="")
             self._run_record(bid, rid, status="cancelled", ended=now(), current="")
             raise
+        finally:
+            self._live.pop(bid, None)
         rec = self._run_record(bid, rid, ended=now(), current="")
         states = list((rec.get("nodes") or {}).values())
         status = "done" if all(x == "done" for x in states) else "error" if "error" in states else "partial"

@@ -291,6 +291,7 @@ window.CanvasPage = (() => {
     if (!res) return;
     C.board = res.board;
     C.sel = '';
+    C.multi = new Set();
     renderBoard();
     fitView();
   }
@@ -330,7 +331,8 @@ window.CanvasPage = (() => {
         <button data-add="video" title="Thêm node Video (nối 1 ảnh vào làm khung đầu)">🎬<small>Video</small></button>
         <button data-add="upload" title="Tải ảnh trên máy lên">⬆<small>Tải lên</small></button>
         <button data-blocks title="Các khối như Workflow: Văn bản, AI viết, Tạo content, Ghép video, Video dài, Whiteboard, Đăng bài, Lên lịch, Quảng cáo">🧩<small>Khối</small></button>
-        <button data-group title="Nhóm / ghi chú (như sticky note n8n): khung màu có tên + ghi chú; kéo nhóm thì các node bên trong đi theo. Đang chọn 1 node → bọc quanh node đó. Mẹo: Shift + kéo trên nền để gom nhiều node">▢<small>Nhóm</small></button>
+        <button data-group title="Nhóm / ghi chú (như sticky note n8n): khung màu có tên + ghi chú; kéo nhóm thì các node bên trong đi theo. Đang chọn 1 node → bọc quanh node đó; đang chọn nhiều node → bọc quanh cả nhóm">▢<small>Nhóm</small></button>
+        <button data-selmode title="Quét chọn nhiều khối: bật lên thì kéo trên nền để quét chọn (tắt = kéo để di chuyển bảng). Lúc nào cũng dùng được: Shift + kéo trên nền để quét · Ctrl / Shift + bấm khối để thêm / bớt · Ctrl + A chọn tất cả · Esc bỏ chọn">⬚<small>Quét chọn</small></button>
         <span class="cv-dock-sep"></span>
         <button data-zoom="-" title="Thu nhỏ">−</button><span class="cv-zoom"></span><button data-zoom="+" title="Phóng to">＋</button>
         <button data-zoom="fit" title="Vừa khung — xem toàn bộ node">⤢</button>
@@ -353,7 +355,11 @@ window.CanvasPage = (() => {
     name.onchange = async () => { const res = await call('canvas_rename', b.id, name.value); if (res) C.board.name = res.board.name; };
     root.querySelectorAll('[data-add]').forEach(el => { el.onclick = () => addAt(el.dataset.add); });
     root.querySelector('[data-blocks]').onclick = e => { e.stopPropagation(); showBlocks(e.currentTarget); };
-    root.querySelector('[data-group]').onclick = () => addGroup();
+    root.querySelector('[data-group]').onclick = () => (multi().size > 1 ? multiAct('group') : addGroup());
+    const selBtn = root.querySelector('[data-selmode]');
+    selBtn.classList.toggle('on', !!C.selMode);
+    selBtn.onclick = () => { C.selMode = !C.selMode; selBtn.classList.toggle('on', C.selMode); root.querySelector('.cv-stage').classList.toggle('selmode', C.selMode); };
+    root.querySelector('.cv-stage').classList.toggle('selmode', !!C.selMode);
     root.querySelectorAll('[data-zoom]').forEach(el => {
       el.onclick = () => (el.dataset.zoom === 'fit' ? fitView() : zoomBy(el.dataset.zoom === '+' ? 1.2 : 1 / 1.2));
     });
@@ -503,7 +509,7 @@ window.CanvasPage = (() => {
       el.dataset.node = n.id;
       holder.appendChild(el);
     }
-    el.className = `cv-node ${n.kind} st-${n.status || 'idle'}${n.id === C.sel ? ' sel' : ''}${n.status === 'error' ? ' err' : ''}${C.flash && C.flash[n.id] ? ' flash' : ''}${(C.issues || {})[n.id] ? ' issue' : ''}`;
+    el.className = `cv-node ${n.kind} st-${n.status || 'idle'}${n.id === C.sel ? ' sel' : ''}${multi().has(n.id) ? ' msel' : ''}${n.status === 'error' ? ' err' : ''}${C.flash && C.flash[n.id] ? ' flash' : ''}${(C.issues || {})[n.id] ? ' issue' : ''}`;
     el.style.left = `${n.x}px`;
     el.style.top = `${n.y}px`;
     el.style.width = `${widthOf(n)}px`;
@@ -788,6 +794,7 @@ window.CanvasPage = (() => {
 
   /** Shift + kéo trên nền: khung chọn → gom các node nằm trọn trong khung vào nhóm mới (khung trống đủ lớn → nhóm / ghi chú trống). */
   function marquee(e) {
+    const add = e.ctrlKey || e.metaKey;  // Ctrl + quét → cộng thêm vào các khối đang chọn
     const world = body().querySelector('.cv-world');
     const a = toWorld(e);
     let b = a;
@@ -805,14 +812,12 @@ window.CanvasPage = (() => {
       window.removeEventListener('pointerup', up);
       box.remove();
       const q = rect();
-      const size = n => { const el = body().querySelector(`[data-node="${n.id}"]`); return { w: el ? el.offsetWidth : 240, h: el ? el.offsetHeight : 300 }; };
-      const hits = C.board.nodes.filter(n => { const s = size(n); return n.x >= q.x && n.y >= q.y && n.x + s.w <= q.x + q.w && n.y + s.h <= q.y + q.h; });
-      if (hits.length) {
-        const x1 = Math.min(...hits.map(n => n.x)), y1 = Math.min(...hits.map(n => n.y));
-        const x2 = Math.max(...hits.map(n => n.x + size(n).w)), y2 = Math.max(...hits.map(n => n.y + size(n).h));
-        return addGroup({ x: x1 - 30, y: y1 - 64, w: x2 - x1 + 60, h: y2 - y1 + 100, title: `Nhóm ${hits.length} node` });
-      }
-      if (q.w > 120 && q.h > 80) return addGroup({ x: Math.round(q.x), y: Math.round(q.y), w: Math.round(q.w), h: Math.round(q.h) });
+      if (q.w < 4 && q.h < 4) { if (!add) setMulti([]); return; }  // bấm (không kéo) trên nền → bỏ chọn
+      const hits = C.board.nodes.filter(n => {  // chạm khung là chọn (không cần nằm trọn trong khung)
+        const s = sizeOf(n);
+        return n.x < q.x + q.w && n.x + s.w > q.x && n.y < q.y + q.h && n.y + s.h > q.y;
+      }).map(n => n.id);
+      setMulti(add ? [...new Set([...multi(), ...(C.sel ? [C.sel] : []), ...hits])] : hits);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -820,6 +825,7 @@ window.CanvasPage = (() => {
 
   /* ---------------------------------------------------------------- thanh công cụ + ô prompt của node đang chọn */
   function selectNode(id) {
+    if (id && multi().size) { C.multi = new Set(); body().querySelectorAll('.cv-node.msel').forEach(el => el.classList.remove('msel')); }
     if (C.gsel) {
       C.gsel = '';
       body().querySelectorAll('.cv-group.sel').forEach(el => el.classList.remove('sel'));
@@ -888,6 +894,7 @@ window.CanvasPage = (() => {
     if (!n) {
       tools.classList.add('hidden');
       if (panel) panel.remove();
+      if (multi().size > 1) drawMultiTools();
       return;
     }
     // thanh công cụ nổi (toạ độ màn hình, không phóng theo zoom)
@@ -981,7 +988,7 @@ window.CanvasPage = (() => {
       : psrc === '' && ptexts.length ? 'Viết thêm (không bắt buộc) — được ghép sau chữ từ khối nối vào…'
         : n.kind === 'video' ? 'Mô tả chuyển động: người làm gì, máy quay thế nào (VD: cô gái mỉm cười giới thiệu sản phẩm, máy đứng yên)…'
           : 'Mô tả ảnh muốn tạo (VD: Ảnh đang livestream trên TikTok, có thiết bị và trưng bày các sản phẩm)…';
-    const wantPrompt = fromNode ? sourceText(node(psrc)) : (n.prompt || '');
+    const wantPrompt = fromNode ? sourceText(node(psrc), n, 'prompt') : (n.prompt || '');
     if ((modeChanged || fromNode || document.activeElement !== ta) && ta.value !== wantPrompt) ta.value = wantPrompt;
     panel.querySelector('[data-p="enhance"]').disabled = fromNode;
     panel.querySelector('.cv-in-note').innerHTML = inputsNote(n) + (n.stage && !busy ? ` · <i>${esc(n.stage)}</i>` : '');
@@ -1000,7 +1007,7 @@ window.CanvasPage = (() => {
       dlg.classList.toggle('from-src', fromSrc);
       dlg.placeholder = fromSrc ? `Khối ${n.dialogue_src} chưa có chữ — chạy nó trước, hoặc ▶ Chạy toàn bộ`
         : 'Câu nhân vật nói trong video (tiếng Việt, đúng nguyên văn). Mỗi dòng 1 câu; nhiều người: Tên: câu nói';
-      const want = fromSrc ? sourceText(node(n.dialogue_src)) : (n.dialogue || '');
+      const want = fromSrc ? sourceText(node(n.dialogue_src), n, 'loi') : (n.dialogue || '');
       if (document.activeElement !== dlg && dlg.value !== want) dlg.value = want;
       dialogueCount(panel, n);
     }
@@ -1202,8 +1209,14 @@ window.CanvasPage = (() => {
   const dialogueSources = n => (n.inputs || []).map(node).filter(x => x && x.kind === 'wf' && outTypes(x).has('text') && !outTypes(x).has('video'));
   // nguồn prompt của node Ảnh / Video ('' = ghép, 'own' = chỉ viết trực tiếp, id = khối nối vào; khối đã bỏ nối → '')
   const promptSrc = n => { const s = n.prompt_src || ''; return s === 'own' || (s && (n.inputs || []).includes(s) && node(s)) ? s : ''; };
-  const sourceText = src => (!src ? '' : src.wtype === 'input_text' && !(src.out || {}).text ? (src.config || {}).text || '' : (src.out || {}).text || '');
-  const spokenText = n => (n.dialogue_src && node(n.dialogue_src) ? sourceText(node(n.dialogue_src)) : n.dialogue || '');
+  // node Video tách từ Storyboard (n.scene = k): chỉ lấy phần của cảnh k (prompt / lời thoại), không phải cả storyboard
+  const sceneOf = (src, n) => (src && src.wtype === 'storyboard_video' && n && n.scene ? ((src.out || {}).scenes || [])[n.scene - 1] || {} : null);
+  const sourceText = (src, n, key) => {
+    const sc = sceneOf(src, n);
+    if (sc) return sc[key] || '';
+    return !src ? '' : src.wtype === 'input_text' && !(src.out || {}).text ? (src.config || {}).text || '' : (src.out || {}).text || '';
+  };
+  const spokenText = n => (n.dialogue_src && node(n.dialogue_src) ? sourceText(node(n.dialogue_src), n, 'loi') : n.dialogue || '');
   const typedDialogue = dlg => (dlg && !dlg.readOnly ? { dialogue: dlg.value } : {});  // lấy từ khối → không ghi đè chữ tự nhập
 
   function dialogueCount(panel, n) {
@@ -1222,6 +1235,12 @@ window.CanvasPage = (() => {
     const tools = root.querySelector('.cv-tools');
     const n = node(C.sel);
     const el = n && root.querySelector(`[data-node="${n.id}"]`);
+    if (tools && !n && multi().size > 1 && !tools.classList.contains('hidden')) {
+      const b = multiBox();
+      tools.style.left = `${C.view.x + (b.x1 + b.x2) / 2 * C.view.k}px`;
+      tools.style.top = `${C.view.y + b.y1 * C.view.k - 12}px`;
+      return;
+    }
     if (!tools || !el || tools.classList.contains('hidden')) return;
     const { x, y, k } = C.view;
     tools.style.left = `${x + (n.x + el.offsetWidth / 2) * k}px`;
@@ -1372,11 +1391,13 @@ window.CanvasPage = (() => {
   // gợi ý bước tiếp theo theo kiểu dữ liệu node đưa ra
   const NEXT = {
     images: [['to-video', '🎬 Video từ ảnh này'], ['edit', '🖌 Ảnh mới dùng ảnh này làm tham chiếu'], ['wf:fb_post', '📣 Đăng bài Facebook'],
-      ['wf:ai_text', '✦ AI viết (mô tả ảnh, viết prompt)'], ['wf:studio_video', '🎬 Video dài từ storyboard']],
+      ['wf:ai_text', '✦ AI viết (mô tả ảnh, viết prompt)'], ['wf:storyboard_video', '🧭 Storyboard (ảnh làm tham chiếu)'],
+      ['wf:studio_video', '🎬 Video dài từ storyboard']],
     video: [['wf:dub_vieneu', '🎙 Lồng tiếng VieNeu'], ['wf:post_video', '🎞 Hậu kỳ video (Claude + Remotion)'], ['vid-ref', '🎬 Video mới dùng video này làm tham chiếu'], ['wf:fb_post', '📣 Đăng bài Facebook'],
       ['wf:fb_schedule', '🗓 Lên lịch đăng'], ['wf:concat_video', '⧉ Ghép video']],
     text: [['img-from-text', '🖼 Ảnh từ chữ này (làm prompt)'], ['vid-dialogue', '🎬 Video dùng chữ này làm lời thoại'], ['wf:ai_text', '✦ AI viết / xử lý tiếp'], ['wf:content_post', '📝 Tạo content bài viết'],
-      ['wf:fb_post', '📣 Đăng bài (làm caption)'], ['wf:studio_video', '🎬 Video dài từ storyboard'], ['wf:whiteboard_video', '✍ Whiteboard']],
+      ['wf:fb_post', '📣 Đăng bài (làm caption)'], ['wf:storyboard_video', '🧭 Storyboard → tách mỗi cảnh 1 node Video'],
+      ['wf:studio_video', '🎬 Video dài từ storyboard'], ['wf:whiteboard_video', '✍ Whiteboard']],
     post: [['wf:fb_ad', '🎯 Tạo quảng cáo (tạm dừng)']],
     collect: [['wf:output', '★ Gom vào khối Kết quả']],
   };
@@ -1487,6 +1508,9 @@ window.CanvasPage = (() => {
     };
     stage.onkeydown = e => {
       if (e.target !== stage) return;
+      if ((e.key === 'a' || e.key === 'A') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); return setMulti(C.board.nodes.map(n => n.id)); }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && multi().size > 1) return multiAct('del');
+      if (e.key === 'Escape' && multi().size) setMulti([]);
       if ((e.key === 'Delete' || e.key === 'Backspace') && C.sel) act('del', C.sel);
       else if ((e.key === 'Delete' || e.key === 'Backspace') && C.gsel) deleteGroup(C.gsel);
       if (e.key === 'Escape') selectNode('');
@@ -1498,11 +1522,14 @@ window.CanvasPage = (() => {
       const nodeEl = e.target.closest('.cv-node');
       if (portEl && nodeEl) return dragConnect(e, nodeEl.dataset.node);
       if (nodeEl && e.target.closest('.cv-node-resize')) return resizeNode(e, nodeEl.dataset.node);
+      if (nodeEl && (e.ctrlKey || e.metaKey || e.shiftKey)) { stage.focus(); return toggleMulti(nodeEl.dataset.node); }
+      if (nodeEl && multi().has(nodeEl.dataset.node) && multi().size > 1) return dragMulti(e, nodeEl.dataset.node);
       if (nodeEl) return dragNode(e, nodeEl.dataset.node);
       const groupEl = e.target.closest('.cv-group');
-      if (groupEl) return groupPointer(e, groupEl.dataset.group);
-      if (e.shiftKey) { selectNode(''); return marquee(e); }
+      if (groupEl && !e.shiftKey && !C.selMode) return groupPointer(e, groupEl.dataset.group);
+      if (e.shiftKey || e.ctrlKey || e.metaKey || C.selMode) { stage.focus(); selectNode(''); return marquee(e); }
       stage.focus();
+      if (multi().size) setMulti([]);
       selectNode('');
       const start = { x: e.clientX, y: e.clientY, vx: C.view.x, vy: C.view.y };
       stage.classList.add('panning');
@@ -1511,6 +1538,116 @@ window.CanvasPage = (() => {
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
     };
+  }
+
+  /* ---------------------------------------------------------------- chọn nhiều khối (quét chọn / Ctrl + bấm) */
+  const multi = () => C.multi || (C.multi = new Set());
+  const sizeOf = n => { const el = body().querySelector(`[data-node="${n.id}"]`); return { w: el ? el.offsetWidth : 240, h: el ? el.offsetHeight : 300 }; };
+
+  function setMulti(ids) {
+    const list = [...new Set(ids)].filter(id => node(id));
+    if (list.length === 1) { C.multi = new Set(); paintMulti(); return selectNode(list[0]); }
+    C.multi = new Set(list);
+    if (C.sel) selectNode('');
+    paintMulti();
+  }
+
+  function toggleMulti(id) {  // Ctrl / Shift + bấm khối: thêm / bớt (khối đang chọn đơn cũng tính vào)
+    const m = new Set([...multi(), ...(C.sel ? [C.sel] : [])]);
+    if (m.has(id)) m.delete(id); else m.add(id);
+    setMulti([...m]);
+  }
+
+  function paintMulti() {
+    const m = multi();
+    body().querySelectorAll('.cv-node').forEach(el => el.classList.toggle('msel', m.has(el.dataset.node)));
+    drawPanel();
+  }
+
+  function multiBox() {
+    const b = { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity };
+    multi().forEach(id => {
+      const n = node(id);
+      if (!n) return;
+      const s = sizeOf(n);
+      b.x1 = Math.min(b.x1, n.x); b.y1 = Math.min(b.y1, n.y); b.x2 = Math.max(b.x2, n.x + s.w); b.y2 = Math.max(b.y2, n.y + s.h);
+    });
+    return b;
+  }
+
+  function drawMultiTools() {
+    const tools = body().querySelector('.cv-tools');
+    if (!tools) return;
+    const ids = [...multi()];
+    const busy = ids.some(id => isBusy(node(id)));
+    tools.innerHTML = `<span class="cv-tools-count">☑ ${ids.length} khối</span>
+      <button data-m="dup" title="Nhân bản cả nhóm — dây nối giữa các khối đã chọn chuyển sang bản sao">⧉ Nhân bản</button>
+      <button data-m="group" title="Bọc các khối đã chọn vào 1 Nhóm / ghi chú">▢ Gom nhóm</button>
+      <button data-m="clear" title="Bỏ chọn (Esc)">✕ Bỏ chọn</button>
+      <button data-m="del" class="danger" title="Xoá các khối đã chọn (phím Delete)" ${busy ? 'disabled' : ''}>🗑 Xoá</button>`;
+    tools.classList.remove('hidden');
+    tools.querySelectorAll('[data-m]').forEach(b => { b.onclick = () => multiAct(b.dataset.m); });
+    placeTools();
+  }
+
+  async function multiAct(what) {
+    const ids = [...multi()].filter(id => node(id));
+    if (!ids.length || !C.board) return;
+    if (what === 'clear') return setMulti([]);
+    if (what === 'group') {
+      const b = multiBox();
+      await addGroup({ x: b.x1 - 30, y: b.y1 - 64, w: b.x2 - b.x1 + 60, h: b.y2 - b.y1 + 100, title: `Nhóm ${ids.length} khối` });
+      return setMulti([]);
+    }
+    if (what === 'dup') {
+      const res = await call('canvas_duplicate_nodes', C.board.id, ids);
+      if (!res) return;
+      C.board = res.result.board;
+      C.multi = new Set(res.result.nodes);  // chọn luôn các bản sao để kéo đi chỗ khác
+      drawAll();
+      paintMulti();
+      return toast(`Đã nhân bản ${res.result.nodes.length} khối — kéo để đặt chỗ khác`, 'ok');
+    }
+    if (what === 'del') {
+      if (ids.some(id => isBusy(node(id)))) return toast('Có khối đang chạy — dừng trước khi xoá', 'warn');
+      const withFiles = ids.filter(id => (node(id).urls || []).length || (node(id).out || {}).text).length;
+      if (!confirm(`Xoá ${ids.length} khối đã chọn${withFiles ? ` (${withFiles} khối đã có kết quả)` : ''}?`)) return;
+      const res = await call('canvas_delete_nodes', C.board.id, ids);
+      if (!res) return;
+      C.board = res.board;
+      C.multi = new Set();
+      drawAll();
+      toast(`Đã xoá ${ids.length} khối`, 'ok');
+    }
+  }
+
+  function dragMulti(e, id) {  // kéo 1 khối trong nhóm đang chọn → cả nhóm đi theo; bấm không kéo → chọn riêng khối đó
+    const start = { x: e.clientX, y: e.clientY };
+    const items = [...multi()].map(node).filter(Boolean).map(n => ({ n, x: n.x, y: n.y, el: body().querySelector(`[data-node="${n.id}"]`) }));
+    let moved = false;
+    const move = ev => {
+      const dx = (ev.clientX - start.x) / C.view.k, dy = (ev.clientY - start.y) / C.view.k;
+      if (!moved && Math.hypot(dx, dy) < 4) return;
+      moved = true;
+      items.forEach(it => {
+        it.n.x = Math.round(it.x + dx);
+        it.n.y = Math.round(it.y + dy);
+        if (it.el) { it.el.style.left = `${it.n.x}px`; it.el.style.top = `${it.n.y}px`; }
+      });
+      drawEdges();
+      placeTools();
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      if (moved) {
+        call('canvas_update_nodes', C.board.id, items.map(it => ({ id: it.n.id, x: it.n.x, y: it.n.y })));
+        if (groups().length) drawGroups();
+      } else setMulti([id]);
+      body().querySelector('.cv-stage').focus({ preventScroll: true });
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
   }
 
   function dragNode(e, id) {
@@ -2150,7 +2287,11 @@ window.CanvasPage = (() => {
     }
     if (event === 'canvas_node' && C.board && data.board === C.board.id) {
       const i = C.board.nodes.findIndex(n => n.id === data.node.id);
-      if (i < 0) return;
+      if (i < 0) {  // node do app tạo (Storyboard tách cảnh → node Video + khối Ghép) → thêm vào bảng
+        C.board.nodes.push(data.node);
+        drawAll();
+        return;
+      }
       const before = C.board.nodes[i];
       const keep = data.node.kind === 'wf' ? { config: before.config } : {};  // ô cấu hình đang gõ dở: giữ bản trên màn hình
       C.board.nodes[i] = { ...data.node, ...keep, x: before.x, y: before.y };

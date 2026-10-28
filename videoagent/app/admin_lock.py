@@ -3,10 +3,12 @@
 Mật khẩu lưu dạng băm PBKDF2-SHA256 (+ salt ngẫu nhiên) trong DATA_DIR/admin_lock.json — không lưu mật khẩu gốc, không gửi
 lên giao diện. Mở khoá có hiệu lực trong phiên chạy app, tự khoá sau UNLOCK_TTL giây không thao tác ở Cài đặt; thoát app là
 khoá lại. Sai MAX_FAILS lần liền → chờ LOCKOUT giây mới nhập tiếp. Quên mật khẩu: xoá file admin_lock.json rồi đặt lại.
+Chỉ bật ở bản build (PyInstaller); chạy từ mã nguồn (`python main.py`) → tắt, mọi thứ coi như đã mở khoá.
 """
 import hashlib
 import hmac
 import os
+import sys
 import threading
 import time
 from datetime import datetime
@@ -25,6 +27,12 @@ GUARDED = ("anthropic_api_key", "openai_api_key", "gemini_api_key", "license_ser
 
 class LockError(ValueError):
     pass
+
+
+def lock_enabled() -> bool:
+    """Bản build (PyInstaller đặt sys.frozen) → bật khoá. Chạy `python main.py` → tắt; muốn thử khoá khi chạy mã nguồn thì
+    đặt biến môi trường VIDEOAGENT_ADMIN_LOCK=1 (biến này chỉ bật được, không tắt được khoá ở bản build)."""
+    return bool(getattr(sys, "frozen", False)) or os.environ.get("VIDEOAGENT_ADMIN_LOCK") == "1"
 
 
 class AdminLock:
@@ -57,11 +65,13 @@ class AdminLock:
         return bool(self._data())
 
     def unlocked(self) -> bool:
+        if not lock_enabled():  # chạy từ mã nguồn → không khoá
+            return True
         return self.has_password() and time.time() < self._until
 
     def state(self) -> dict:
         now = time.time()
-        return {"has_password": self.has_password(), "unlocked": self.unlocked(),
+        return {"has_password": self.has_password(), "unlocked": self.unlocked(), "disabled": not lock_enabled(),
                 "retry_in": max(0, int(self._blocked - now + 0.999)), "ttl_min": UNLOCK_TTL // 60}
 
     def touch(self) -> None:
@@ -106,6 +116,6 @@ class AdminLock:
 
     def guard(self, values: dict) -> dict:
         """Bỏ các khoá cài đặt nhạy cảm khi Cài đặt đang khoá (đã đặt mật khẩu mà chưa mở khoá)."""
-        if not self.has_password() or self.unlocked():
+        if not lock_enabled() or not self.has_password() or self.unlocked():
             return values
         return {k: v for k, v in (values or {}).items() if k not in GUARDED}

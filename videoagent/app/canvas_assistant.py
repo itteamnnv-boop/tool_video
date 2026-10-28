@@ -509,7 +509,7 @@ class _ChatAssistant:
 AUTO_DEFAULT = {"on": False, "criteria": "", "pass_score": 8.0, "rounds": 2, "attach": True}
 AUTO_ACTIVE = ("reviewing", "reworking")
 MAX_REWORK = 4
-REWORK_WF = ("ai_text", "content_post", "post_video", "concat_video", "studio_video", "whiteboard_video")
+REWORK_WF = ("ai_text", "content_post", "post_video", "concat_video", "studio_video", "storyboard_video", "whiteboard_video")
 
 REVIEW = """Bạn đang TỰ ĐIỀU PHỐI quy trình Canvas này. Quy trình vừa chạy xong: “{label}” — {status}.
 Đây là lần chấm sau {done} vòng làm lại (tối đa {rounds} vòng làm lại).

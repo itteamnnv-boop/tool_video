@@ -336,6 +336,12 @@
 .cv-group-resize{position:absolute;right:0;bottom:0;width:18px;height:18px;cursor:nwse-resize;
   background:linear-gradient(135deg,transparent 50%,var(--gb) 50%);opacity:.6}
 .cv-group-resize:hover{opacity:1}
+/* chọn nhiều khối (quét chọn / Ctrl + bấm) */
+.cv-node.msel{outline:2px solid var(--lime);outline-offset:4px;border-radius:12px}
+.cv-node.msel .cv-media{border-color:var(--lime)}
+.cv-tools-count{display:flex;align-items:center;padding:0 10px;font-size:12.5px;font-weight:700;color:var(--lime);white-space:nowrap}
+.cv-dock button.on{background:#d4f06a22;color:var(--lime);border-color:var(--lime)}
+.cv-stage.selmode{cursor:crosshair}
 .cv-marquee{position:absolute;border:1.5px dashed var(--lime);background:#d4f06a14;border-radius:8px;pointer-events:none}
 
 /* nguồn prompt của node Ảnh / Video */

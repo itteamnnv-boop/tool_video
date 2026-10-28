@@ -155,6 +155,41 @@ def model_character(studio: dict) -> dict | None:
     return next((c for c in studio.get("characters") or [] if cid and c.get("id") == cid), None)
 
 
+REF_ROLE_TEXT = {
+    "model": "ảnh NGƯỜI MẪU — chỉ lấy NGƯỜI (khuôn mặt, dáng, kiểu tóc, màu da) làm nhân vật chính, giữ nguyên gương mặt; "
+             "bỏ qua sản phẩm, chữ, bối cảnh trong ảnh này",
+    "lead": "ảnh NHÂN VẬT DẪN — chỉ lấy người, giữ nguyên gương mặt; bỏ qua mọi thứ khác trong ảnh này",
+    "product": "ảnh SẢN PHẨM — chỉ lấy SẢN PHẨM (bao bì, nhãn, logo, chữ trên nhãn, màu sắc, tỉ lệ giữ nguyên y hệt); "
+               "KHÔNG lấy người hay bối cảnh có trong ảnh này",
+    "rotate": "ảnh tham chiếu bối cảnh / phong cách — chỉ lấy cảm hứng, không chép người hay chữ trong ảnh",
+    "other": "ảnh tham chiếu",
+}
+
+
+def ref_roles(refs: list, studio: dict, task_roles: dict | None = None, start: int = 1) -> str:
+    """Câu nói rõ VAI TRÒ từng ảnh đính kèm (theo đúng thứ tự gửi): người mẫu cố định / nhân vật / sản phẩm / luân phiên.
+    task_roles: {đường dẫn: "product" | "lead"} cho ảnh của task. start: số thứ tự ảnh đầu (2 khi ảnh 1 là storyboard)."""
+    model = studio.get("model") or {}
+    hero = model_character(studio) if model.get("on") else None
+    fixed = set((hero.get("images") if hero else model.get("images")) or []) if model.get("on") else set()
+    named = {p: c["name"] for c in studio.get("characters") or [] for p in c.get("images") or [] if c.get("name")}
+    rotate = set((studio.get("rotate") or {}).get("images") or [])
+    task_roles = task_roles or {}
+    parts, kinds = [], set()
+    for i, p in enumerate(refs, start):
+        kind = "model" if p in fixed else task_roles.get(p) or ("named" if p in named else "rotate" if p in rotate else "other")
+        kinds.add("model" if kind in ("model", "lead", "named") else kind)
+        text = f"ảnh NHÂN VẬT “{named[p]}” — giữ nguyên gương mặt" if kind == "named" else REF_ROLE_TEXT[kind]
+        parts.append(f"Ảnh {i} là {text}")
+    if not parts:
+        return ""
+    out = "Ảnh đính kèm: " + "; ".join(parts) + "."
+    if {"model", "product"} <= kinds:
+        out += (" Người và sản phẩm lấy từ các ảnh RIÊNG như trên: nhân vật chính là người trong ảnh người mẫu, cầm / dùng / "
+                "giới thiệu đúng sản phẩm trong ảnh sản phẩm — không dùng người xuất hiện trong ảnh sản phẩm.")
+    return out
+
+
 def compose_images(prompt: str, studio: dict, task_images: list, take_rotate) -> tuple[list, list]:
     """Thứ tự: người mẫu cố định → nhân vật có tên trong prompt → 1 ảnh luân phiên → ảnh của task. Bỏ trùng, tối đa
     MAX_IMAGES. Người mẫu cố định là ảnh tải riêng, hoặc ảnh của 1 nhân vật đã chọn (model["character"]).

@@ -197,7 +197,9 @@
       case 'profiles': return `<p class="hint set-first">Mỗi profile là một Chrome riêng với tài khoản đăng nhập riêng. Gán profile cho model (Gemini, Grok, ChatGPT, Dola, Muse…) —
           khi tạo video / ảnh, app tự chọn profile <b>rảnh</b> của model đó, nên nhiều profile = nhiều tác vụ chạy song song.</p>
         <div id="setProfilesSlot"></div>`;
-      case 'security': return `
+      case 'security': return SET.lockOff ? `
+        <p class="hint set-first">Khoá Admin <b>đang tắt</b> vì app đang chạy từ mã nguồn (<code>python main.py</code>) — Cài đặt và
+          chỉnh sửa Canvas mở tự do. Bản build (file .exe / .app) luôn bật khoá bằng mật khẩu quản trị.</p>` : `
         <p class="hint set-first">Cài đặt được khoá bằng mật khẩu quản trị — tự khoá lại sau ${SET.ttl || 15} phút không thao tác và khi thoát app.
           Bấm <b>🔒 Khoá</b> trên thanh để khoá ngay.</p>
         <div class="field"><span>Đổi mật khẩu quản trị</span>
@@ -241,6 +243,9 @@
     const res = await api('settings_lock_state');
     const st = res && res.ok ? res.lock : { has_password: true, unlocked: false, retry_in: 0, ttl_min: 15 };
     SET.ttl = st.ttl_min;
+    SET.lockOff = !!st.disabled;  // chạy từ mã nguồn (python main.py): khoá Admin tắt — chỉ bản build mới khoá
+    const btn = $('#setLockNow');
+    if (btn) btn.classList.toggle('hidden', SET.lockOff);
     return st;
   }
 
@@ -325,6 +330,7 @@
     if (pane) $('#setProfilesSlot').appendChild(pane);
     bind();
     SET.rendered = true;
+    applyView();  // chỉ hiện tab đang chọn
     setDirty(false);
     if (typeof refreshProfiles === 'function') refreshProfiles();
   }
@@ -357,7 +363,7 @@
     $('#licLogin').onclick = async () => { await saveSettings(false); licenseLogin(); };
     $('#licLogout').onclick = async () => { const r = await api('license_logout'); renderLicense(r.license); };
     bindFeatures();
-    $('#secChange').onclick = async () => {
+    if ($('#secChange')) $('#secChange').onclick = async () => {  // không có khi khoá Admin tắt (chạy mã nguồn)
       if ($('#secNew').value !== $('#secNew2').value) return toast('Hai lần nhập mật khẩu mới không khớp', 'warn');
       const res = await api('settings_set_password', $('#secNew').value, $('#secOld').value);
       if (!res.ok) return toast(res.error, 'error');
@@ -370,16 +376,13 @@
   }
 
   /* ------------------------------------------------------------ điều hướng trong trang + tìm kiếm */
+  // mỗi nhóm cài đặt là 1 tab riêng: menu trái chọn tab, chỉ khối đó hiện (không cuộn cả trang).
+  // Đang tìm kiếm → hiện mọi khối khớp từ khoá ở mọi tab; xoá từ khoá → về tab đang chọn.
   function goTo(id) {
-    const block = $(`#setBlock-${id}`);
-    if (!block) return;
-    if ($('#setSearch').value) { $('#setSearch').value = ''; filter(''); }
-    SET.spyPause = Date.now() + 900;
-    block.scrollIntoView({ block: 'start', behavior: 'smooth' });
-    block.classList.remove('flash');
-    void block.offsetWidth;
-    block.classList.add('flash');
-    activeNav(id);
+    if (!$(`#setBlock-${id}`)) return;
+    if ($('#setSearch').value) $('#setSearch').value = '';
+    SET.tab = id;
+    applyView();
   }
 
   function activeNav(id) {
@@ -388,27 +391,23 @@
 
   const fold = t => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd');
 
-  function filter(q) {
-    const k = fold(q.trim());
+  function filter() { applyView(); }
+
+  function applyView() {
+    if (!$(`#setBlock-${SET.tab}`)) SET.tab = BLOCKS[0][0];
+    const k = fold($('#setSearch').value.trim());
     let shown = 0;
     $$('.set-block').forEach(b => {
-      const hit = !k || fold(b.textContent + ' ' + $$('input,select,textarea', b).map(x => x.placeholder || '').join(' ')).includes(k);
-      b.classList.toggle('hidden', !hit);
-      if (hit) shown++;
+      const show = k ? fold(b.textContent + ' ' + $$('input,select,textarea', b).map(x => x.placeholder || '').join(' ')).includes(k)
+        : b.dataset.block === SET.tab;
+      b.classList.toggle('hidden', !show);
+      if (show) shown++;
     });
+    $('#setBody').classList.toggle('tabbed', !k);
     $$('.set-nav-item').forEach(n => n.classList.toggle('dim', !!k && $(`#setBlock-${n.dataset.setGo}`).classList.contains('hidden')));
     $('#setEmpty').classList.toggle('hidden', shown > 0);
-  }
-
-  function spy() {  // mục menu nhóm sáng theo khối đang xem (hàng thấp nhất đã cuộn tới, khối đầu của hàng đó)
-    if (Date.now() < (SET.spyPause || 0)) return;  // vừa bấm menu nhóm → giữ mục đã bấm khi đang cuộn mượt
-    const top = $('#setScroll').getBoundingClientRect().top + 80;
-    let cur = null, best = -Infinity;
-    $$('.set-block:not(.hidden)').forEach(b => {
-      const y = Math.round(b.getBoundingClientRect().top);
-      if (y <= top && y > best) { best = y; cur = b.dataset.block; }
-    });
-    activeNav(cur || (($('.set-block:not(.hidden)') || {}).dataset || {}).block);
+    activeNav(k ? '' : SET.tab);
+    $('#setScroll').scrollTop = 0;
   }
 
   function init() {
@@ -425,7 +424,6 @@
       if (SET.dirty && !confirm('Bỏ các thay đổi chưa lưu và tải lại cài đặt?')) return;
       render();
     };
-    $('#setScroll').addEventListener('scroll', () => requestAnimationFrame(spy), { passive: true });
     document.addEventListener('keydown', e => {
       if (state.view === 'settings' && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveSettings(true); }
     });
@@ -438,8 +436,8 @@
     if (!st.unlocked) return showGate(st, section);
     hideGate();
     if (!SET.rendered || !SET.dirty) render();
-    if (typeof section === 'string' && section) setTimeout(() => goTo(section), 30);
-    else requestAnimationFrame(spy);
+    if (typeof section === 'string' && section) goTo(section);
+    else applyView();
   };
 
   window.saveSettings = async function (done) {
