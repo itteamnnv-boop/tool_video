@@ -40,7 +40,9 @@ def main() -> None:
         min_size=(1200, 760), background_color="#0b0f0c", frameless=frameless, easy_drag=False,
     )
     api.attach(window)
-    webview.start(debug=os.environ.get("VIDEOAGENT_DEBUG") == "1")
+    # Linux: Qt WebEngine (đóng gói kèm bản .deb); Windows / macOS: pywebview tự chọn (WebView2 / WebKit)
+    gui = "qt" if sys.platform.startswith("linux") else None
+    webview.start(gui=gui, debug=os.environ.get("VIDEOAGENT_DEBUG") == "1")
 
 
 if __name__ == "__main__":

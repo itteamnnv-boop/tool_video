@@ -228,6 +228,7 @@
 /* thẻ bài đăng (khối Đăng bài / Lên lịch đã chạy) */
 .cv-media.wf:has(.cv-post){max-height:none;overflow:visible}
 .cv-wf-text{overflow-wrap:anywhere}
+.cv-listen{flex-wrap:wrap;gap:8px;margin:-2px 0 6px}
 .cv-post{display:flex;flex-direction:column;gap:8px;padding:10px;cursor:default}
 .cv-post-head{display:flex;align-items:center;gap:8px}
 .cv-post-av{width:30px;height:30px;flex:none;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:13px;
@@ -389,6 +390,9 @@
 .cv-as-nodes button.bad{border-left:3px solid var(--red)}
 .cv-as-nodes button:hover{border-color:#5d7140}
 .cv-as-ops{margin-top:8px;display:flex;flex-direction:column;gap:6px}
+.cv-as-built{margin-top:8px;padding:6px 9px;border-radius:8px;font-size:12px;border:1px solid #3f5a2a;background:#17230f;color:#c9f29b}
+.cv-as-built.warn{border-color:#6b5a22;background:#2a2410;color:#ffd68a}
+.cv-as-built ul{margin:4px 0 0 16px;padding:0}
 .cv-as-ops-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}
 .cv-as-op{display:flex;align-items:flex-start;gap:8px;padding:8px;border-radius:9px;background:#121812;border:1px solid var(--line)}
 .cv-as-op.done{opacity:.6}
@@ -407,6 +411,11 @@
 .cv-as-input{padding:8px 12px 12px;display:flex;flex-direction:column;gap:6px}
 .cv-as-input textarea{resize:none;font-size:12.8px}
 .cv-as-row{display:flex;align-items:center;gap:10px;font-size:11.5px}
+.cv-as-files{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11.5px}
+.cv-as-file{display:inline-flex;align-items:center;gap:4px;max-width:200px;padding:2px 4px 2px 9px;border-radius:99px;
+  background:#1a211b;border:1px solid var(--line2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cv-as-file button{border:0;background:none;color:inherit;cursor:pointer;opacity:.6;padding:0 3px}
+.cv-as-file button:hover{opacity:1}
 
 /* ---------- 🤖 tự điều phối: chấm theo tiêu chí → giao khối chưa đạt làm lại ---------- */
 .cv-as-auto{margin:10px 12px 0;padding:8px 10px;border-radius:11px;background:#121812;border:1px solid var(--line2)}

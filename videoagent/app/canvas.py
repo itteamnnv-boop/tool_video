@@ -174,6 +174,8 @@ class CanvasRunner:
         # lượt chạy quy trình đang chạy được nối dài (Storyboard tách cảnh → node Video mới chạy luôn trong lượt đó)
         self._grow: dict[str, bool] = {}  # bảng → lượt sắp chạy có được nối dài không (Chạy toàn bộ / Chạy từ đây)
         self._live: dict[str, tuple] = {}  # bảng → (mã lượt, danh sách node theo thứ tự — nối thêm được khi đang chạy)
+        self._trash: set[Path] = set()  # file kết quả cũ chưa xoá được (Windows: đang mở xem trên Canvas) → xoá lại sau
+        self._trash_lock = threading.Lock()
 
     # ------------------------------------------------------------------ lưu trữ
     @property
@@ -382,7 +384,7 @@ class CanvasRunner:
             shutil.copy2(src, self.root / bid / rel)
             for old in node.get("files") or []:
                 if old != rel:
-                    (self.root / bid / old).unlink(missing_ok=True)
+                    self._unlink(self.root / bid / old)
             node.update(files=[rel], pick=0, status="done", pct=100, error="", stage="")
             if node["kind"] == "upload":
                 node["title"] = src.stem[:60]
@@ -477,7 +479,7 @@ class CanvasRunner:
             if node.get("status") in ACTIVE and node.get("task"):
                 self.pool.cancel(node["task"])
             for rel in node.get("files") or []:
-                (self.root / bid / rel).unlink(missing_ok=True)
+                self._unlink(self.root / bid / rel)
             board["nodes"] = [n for n in board["nodes"] if n["id"] != nid]
             for n in board["nodes"]:
                 n["inputs"] = [i for i in n.get("inputs") or [] if i != nid]
@@ -586,7 +588,7 @@ class CanvasRunner:
                 if node.get("status") in ACTIVE and node.get("task"):
                     self.pool.cancel(node["task"])
                 for rel in node.get("files") or []:
-                    (self.root / bid / rel).unlink(missing_ok=True)
+                    self._unlink(self.root / bid / rel)
             board["nodes"] = [n for n in board["nodes"] if n["id"] not in gone]
             for n in board["nodes"]:
                 n["inputs"] = [i for i in n.get("inputs") or [] if i not in gone]
@@ -822,7 +824,7 @@ class CanvasRunner:
                 files.append(rel)
         if not files:
             raise CanvasError("Model không trả ảnh nào")
-        self._drop_old(bid, node)
+        self._drop_old(bid, node, files)
         return files
 
     def video_plan(self, node: dict, images: list, videos: list) -> dict:
@@ -873,13 +875,28 @@ class CanvasRunner:
             raise CanvasError("Không thấy file video kết quả")
         rel = f"nodes/{node['id']}_{int(time.time())}.mp4"
         shutil.copy2(src, self.root / bid / rel)
-        self._drop_old(bid, node)
+        self._drop_old(bid, node, [rel])
         return [rel]
 
-    def _drop_old(self, bid: str, node: dict) -> None:
-        """Tạo lại → xoá kết quả cũ của node (giữ bảng gọn)."""
+    def _drop_old(self, bid: str, node: dict, keep: list | tuple = ()) -> None:
+        """Tạo lại → xoá kết quả cũ của node (giữ bảng gọn); không bao giờ xoá file kết quả mới (keep — trùng tên khi
+        chạy lại trong cùng 1 giây)."""
         for rel in node.get("files") or []:
-            (self.root / bid / rel).unlink(missing_ok=True)
+            if rel not in keep:
+                self._unlink(self.root / bid / rel)
+
+    def _unlink(self, path: Path) -> None:
+        """Xoá file kết quả cũ. Windows khoá file đang mở (video đang phát / xem trước trên Canvas, máy chủ media đang
+        gửi) → WinError 32: KHÔNG báo lỗi khối (kết quả mới đã xong), để xoá lại ở lần sau."""
+        with self._trash_lock:
+            pending = [p for p in self._trash if p != path]
+            self._trash.clear()
+        for p in [path, *pending]:
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                with self._trash_lock:
+                    self._trash.add(p)
 
     # ------------------------------------------------------------------ block Workflow (viết content, đăng bài…)
     def _wf_inputs(self, bid: str, board: dict, node: dict, spec: dict) -> dict:
@@ -965,6 +982,8 @@ class CanvasRunner:
         if materials:  # Storyboard: tên khối vật liệu (đúng thứ tự ảnh / video gửi model) để model chọn vật liệu từng cảnh
             wnode["config"]["_materials"] = {k: [self._material_name(self._node(board, i)) for i in ids]
                                              for k, ids in materials.items()}
+        if node["wtype"] == "post_video":  # Hậu kỳ: lời thoại đã biết của từng video nối vào (đúng thứ tự cổng video)
+            wnode["config"]["_dialogues"] = self._post_sources(bid, board, node)[1]
         services = {"facebook": self.facebook, "ads": self.ads, "studio": self.studio,
                     "workflow_name": f"Canvas · {board['name']}",
                     "approve": lambda payload: self._wait_approval(bid, nid, payload)}
@@ -991,6 +1010,9 @@ class CanvasRunner:
                 out["video"], files = rel, [rel]
             elif key in ("text", "ad") and value:
                 out["text"] = str(value)
+            elif key == "script" and value and not str((node.get("config") or {}).get("script") or "").strip():
+                # Hậu kỳ: ô lời đọc để trống → điền lời thoại vừa phân tích để bạn sửa (lần sau dùng bản đã sửa)
+                self.update_nodes(bid, [{"id": nid, "config": {"script": str(value)}}])
             elif key == "scenes" and isinstance(value, list):  # Storyboard: các cảnh → node Video từng cảnh đọc từ đây
                 out["scenes"] = value
                 out["materials"] = materials or {"anh": [], "video": []}  # Ảnh k / Video k của model → id khối vật liệu
@@ -1006,12 +1028,56 @@ class CanvasRunner:
                                f"“{value.get('page', '')}”" + (f": {where}" if where else ""))
         if result.get("storyboard"):  # Storyboard: khung hiện storyboard; lời dẫn giữ riêng
             out.update(narration=out.get("text", ""), text=str(result["storyboard"]))
-        self._drop_old(bid, node)
+        self._drop_old(bid, node, files)
         self._set_node(bid, nid, status="done", pct=100, error="", out=out, files=files, pick=0, stage="", approval={})
         self._mark_sig(bid, nid)
         if node["wtype"] == "storyboard_video" and out.get("scenes"):
             self._split_scenes(bid, nid)
         return {"board": bid, "node": nid}
+
+    @staticmethod
+    def _has(board: dict, nid: str) -> bool:
+        return any(n["id"] == nid for n in board["nodes"])
+
+    def _post_sources(self, bid: str, board: dict, node: dict) -> tuple[list[Path], list[str]]:
+        """Khối Hậu kỳ: (video nối vào theo thứ tự cổng, lời thoại đã biết của từng video đó)."""
+        videos, known = [], []
+        for src in (self._node(board, i) for i in node.get("inputs") or [] if self._has(board, i)):
+            video = self._outputs(bid, src).get("video")
+            if video and Path(video).is_file():
+                videos.append(Path(video))
+                known.append(self._known_speech(bid, board, src))
+        return videos, known
+
+    def analyze_dialogue(self, bid: str, nid: str) -> dict:
+        """🎧 Phân tích lời thoại từ video đầu vào của khối Hậu kỳ (không chạy hậu kỳ) → điền ô Lời đọc / phụ đề để sửa."""
+        from .workflow import nodes as wfn
+
+        board = self.load(bid)
+        node = self._node(board, nid)
+        if node.get("wtype") != "post_video":
+            raise CanvasError("Chỉ khối Hậu kỳ video phân tích lời thoại")
+        videos, known = self._post_sources(bid, board, node)
+        if not videos:
+            raise CanvasError("Khối chưa có video đầu vào — nối node Video / Ghép video và chạy chúng trước")
+        notes = []
+        script = wfn.analyze_dialogue(self.settings, videos, known, self.root / bid / "runs" / nid,
+                                      lambda m, *a, **k: notes.append(str(m)))
+        text = wfn.script_text(script)
+        if not text:
+            raise CanvasError("Không tìm thấy lời thoại trong video đầu vào" + (f" — {notes[0]}" if notes else ""))
+        return {"board": self.update_nodes(bid, [{"id": nid, "config": {"script": text}}]), "script": text,
+                "notes": notes[-10:]}
+
+    def _known_speech(self, bid: str, board: dict, src: dict, depth: int = 0) -> str:
+        """Lời thoại đã biết của 1 video nối vào: node Video → lời thoại của nó; Ghép video → nối lời các video con theo
+        thứ tự; video khác (Video đầu vào, Hậu kỳ…) → "" (khối Hậu kỳ nghe lại tiếng nếu được chọn)."""
+        if src["kind"] == "video":  # bỏ tên người nói đầu dòng ("Cô gái: …") — phụ đề chỉ hiện lời
+            return " ".join(re.sub(r"(?m)^[^:\n]{1,30}:\s*", "", self._dialogue_text(bid, board, src)).split())
+        if src.get("wtype") == "concat_video" and depth < 6:
+            kids = [self._node(board, i) for i in src.get("inputs") or [] if self._has(board, i)]
+            return " ".join(t for t in (self._known_speech(bid, board, k, depth + 1) for k in kids) if t)
+        return ""
 
     def _materials(self, bid: str, board: dict, node: dict) -> dict:
         """Khối vật liệu nối vào Storyboard theo đúng thứ tự ảnh / video gửi model (như _wf_inputs): {anh: [id], video: [id]}."""

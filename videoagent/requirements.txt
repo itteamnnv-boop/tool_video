@@ -9,4 +9,8 @@ pillow>=10.4
 anthropic>=1.15
 markdown>=3.6
 yt-dlp>=2026.10.21  # tải video tham khảo từ link (Studio → 🎬 Video tham khảo)
+# Linux: cửa sổ app (pywebview) dùng Qt WebEngine — đóng gói được bằng PyInstaller (build_linux.sh), không cần GTK
+qtpy>=2.4; sys_platform == "linux"
+PyQt6>=6.7; sys_platform == "linux"
+PyQt6-WebEngine>=6.7; sys_platform == "linux"
 curl_cffi>=0.16  # yt-dlp giả lập trình duyệt Chrome — TikTok chặn yêu cầu thường ("Unexpected response from webpage")

@@ -20,6 +20,7 @@ import threading
 import time
 import webbrowser
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlencode
 
 import requests
@@ -56,6 +57,15 @@ def machine_id() -> str:
                 raw = found.group(1) + raw
         except (OSError, subprocess.SubprocessError):
             pass
+    else:  # Linux: machine-id của systemd (không đổi khi cài lại app / đổi tên máy)
+        for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+            try:
+                found = Path(path).read_text("ascii").strip()
+            except OSError:
+                continue
+            if found:
+                raw = found + raw
+                break
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 

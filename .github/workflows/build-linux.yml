@@ -1,0 +1,100 @@
+# Build bộ cài VideoAgent cho Ubuntu (.deb) trên máy ảo của GitHub.
+#   - Chạy tay: tab Actions → "Build Linux" → Run workflow → tải .deb ở mục Artifacts của lần chạy.
+#   - Đẩy tag v* (vd. git tag v1.0.2 && git push origin v1.0.2) → build rồi đính kèm .deb vào GitHub Release của tag.
+# Build trên ubuntu-22.04 (glibc 2.35) → cài được trên Ubuntu 22.04 và 24.04. Cài: sudo apt install ./videoagent_*.deb
+name: Build Linux
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write  # đính kèm .deb vào Release khi đẩy tag
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: videoagent
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: videoagent/requirements.txt
+
+      - name: Thư viện hệ thống cho Qt WebEngine (build + chạy thử)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends xvfb xauth desktop-file-utils libnss3 libxkbcommon0 \
+            libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libxcomposite1 libxdamage1 libxrandr2 \
+            libxtst6 libegl1 libgl1 libfontconfig1 libdbus-1-3 libasound2
+
+      - name: Kiểm tra nhanh trên Linux (import app, thư mục dữ liệu, mã máy, Qt WebEngine)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m pip install -q -r requirements.txt
+          python - <<'EOF'
+          import sys, platform
+          from app.paths import DATA_DIR
+          from app.license import machine_id
+          from app.llm.chrome_pool import _chrome_exe
+          from app.osutil import open_path, reveal, kill_tree
+          import app.api, app.canvas, app.studio  # noqa: F401 — import được toàn bộ app
+          from qtpy.QtWebEngineWidgets import QWebEngineView  # noqa: F401 — pywebview dùng Qt trên Linux
+          print("Python", sys.version.split()[0], platform.machine())
+          print("DATA_DIR:", DATA_DIR)
+          assert str(DATA_DIR).endswith(".config/VideoAgent"), DATA_DIR
+          a, b = machine_id(), machine_id()
+          assert a == b and len(a) == 32, (a, b)
+          print("machine_id:", a[:8])
+          try:
+              print("Chrome:", _chrome_exe("chrome"))
+          except RuntimeError as exc:
+              print("Chrome: chưa có trên máy build —", exc)
+          EOF
+
+      - name: Build dist/VideoAgent + .deb
+        run: bash build_linux.sh
+
+      - name: Cài thử .deb và mở app 20 giây (màn hình ảo)
+        run: |
+          ls -la dist
+          sudo apt-get install -y -q ./dist/videoagent_*.deb
+          test -x /opt/videoagent/VideoAgent
+          test -L /usr/bin/videoagent
+          desktop-file-validate /usr/share/applications/videoagent.desktop
+          # app vẫn chạy sau 20 giây (timeout → mã 124) = mở được cửa sổ, không crash lúc khởi động
+          set +e
+          xvfb-run -a -s "-screen 0 1600x1000x24" timeout 20 videoagent
+          code=$?
+          set -e
+          echo "mã thoát: $code"
+          tail -n 40 ~/.config/VideoAgent/videoagent.log || true
+          test "$code" = 124
+          grep -q "Khởi động VideoAgent" ~/.config/VideoAgent/videoagent.log
+          du -sh /opt/videoagent dist/*.deb
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: VideoAgent-Linux-amd64
+          path: videoagent/dist/*.deb
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Đính kèm vào Release (khi đẩy tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # workflow macOS chạy cùng lúc cũng tạo Release → bên nào tạo trước thì bên kia chỉ đính kèm file
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "VideoAgent $GITHUB_REF_NAME" --notes "Bộ cài: macOS (.dmg), Ubuntu (.deb: sudo apt install ./videoagent_*.deb)." \
+            || true
+          gh release upload "$GITHUB_REF_NAME" dist/*.deb --clobber

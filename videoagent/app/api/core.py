@@ -270,11 +270,12 @@ class CoreApi:
             "audio": ("Âm thanh (*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.flac)",),
             "docs": ("Tài liệu (*.txt;*.md;*.csv;*.json;*.docx;*.srt;*.vtt)",),
             "cast_refs": ("Ảnh và ghi chú (*.png;*.jpg;*.jpeg;*.webp;*.txt;*.md)",),
+            "assist": ("Ảnh video và tài liệu (*.png;*.jpg;*.jpeg;*.webp;*.mp4;*.mov;*.webm;*.m4v;*.txt;*.md;*.csv;*.json;*.docx;*.srt;*.vtt)",),
         }.get(kind)
         if file_types is None:
             return []
         open_dialog = getattr(getattr(webview, "FileDialog", None), "OPEN", None) or webview.OPEN_DIALOG
-        result = self._window.create_file_dialog(open_dialog, allow_multiple=kind in ("products", "images_multi", "seedance_images", "docs", "videos", "cast_refs"), file_types=file_types)
+        result = self._window.create_file_dialog(open_dialog, allow_multiple=kind in ("products", "images_multi", "seedance_images", "docs", "videos", "cast_refs", "assist"), file_types=file_types)
         return list(result or [])
 
     def open_output_dir(self) -> dict:

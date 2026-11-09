@@ -330,8 +330,8 @@ window.CanvasPage = (() => {
         <button data-add="image" title="Thêm node Ảnh (tạo ảnh từ prompt)">🖼<small>Ảnh</small></button>
         <button data-add="video" title="Thêm node Video (nối 1 ảnh vào làm khung đầu)">🎬<small>Video</small></button>
         <button data-add="upload" title="Tải ảnh trên máy lên">⬆<small>Tải lên</small></button>
-        <button data-blocks title="Các khối như Workflow: Văn bản, AI viết, Tạo content, Ghép video, Video dài, Whiteboard, Đăng bài, Lên lịch, Quảng cáo">🧩<small>Khối</small></button>
-        <button data-group title="Nhóm / ghi chú (như sticky note n8n): khung màu có tên + ghi chú; kéo nhóm thì các node bên trong đi theo. Đang chọn 1 node → bọc quanh node đó; đang chọn nhiều node → bọc quanh cả nhóm">▢<small>Nhóm</small></button>
+        <button data-blocks title="Các khối như Workflow: Văn bản, AI viết, Tạo content, Ghép video, Video dài, Whiteboard, Đăng bài, Lên lịch, Quảng cáo · Nhóm / ghi chú">🧩<small>Khối</small></button>
+        <button data-arrange title="Tự sắp xếp các khối theo luồng dây nối: trái → phải, khối cùng bước xếp dọc; Nhóm giữ các khối bên trong và co lại vừa khít. Bấm lại trong 15 giây để hoàn tác">⇆<small>Sắp xếp</small></button>
         <button data-selmode title="Quét chọn nhiều khối: bật lên thì kéo trên nền để quét chọn (tắt = kéo để di chuyển bảng). Lúc nào cũng dùng được: Shift + kéo trên nền để quét · Ctrl / Shift + bấm khối để thêm / bớt · Ctrl + A chọn tất cả · Esc bỏ chọn">⬚<small>Quét chọn</small></button>
         <span class="cv-dock-sep"></span>
         <button data-zoom="-" title="Thu nhỏ">−</button><span class="cv-zoom"></span><button data-zoom="+" title="Phóng to">＋</button>
@@ -351,11 +351,13 @@ window.CanvasPage = (() => {
       scheduleDialog(C.board.id, C.board.name, C.board.schedule, board => { if (C.board) C.board.schedule = board.schedule; });
     };
     C.assist = { open: false, chat: null, sending: false, status: '' };
+    C.undoArrange = null;  // hoàn tác sắp xếp chỉ cho bảng đang mở
+    clearTimeout(C.undoT);
     const name = root.querySelector('.cv-name');
     name.onchange = async () => { const res = await call('canvas_rename', b.id, name.value); if (res) C.board.name = res.board.name; };
     root.querySelectorAll('[data-add]').forEach(el => { el.onclick = () => addAt(el.dataset.add); });
     root.querySelector('[data-blocks]').onclick = e => { e.stopPropagation(); showBlocks(e.currentTarget); };
-    root.querySelector('[data-group]').onclick = () => (multi().size > 1 ? multiAct('group') : addGroup());
+    root.querySelector('[data-arrange]').onclick = () => (C.undoArrange ? undoArrange() : arrange());
     const selBtn = root.querySelector('[data-selmode]');
     selBtn.classList.toggle('on', !!C.selMode);
     selBtn.onclick = () => { C.selMode = !C.selMode; selBtn.classList.toggle('on', C.selMode); root.querySelector('.cv-stage').classList.toggle('selmode', C.selMode); };
@@ -1099,7 +1101,10 @@ window.CanvasPage = (() => {
       panel.innerHTML = `${titleInput(n)}<div class="cv-in-note">${esc(s.desc)}${ins.length ? `<br>Nhận từ: ${ins.map(tagOf).join(', ')}` : s.inputs.length
           ? `<br>Nối vào: ${s.inputs.map(p => esc(p.label)).join(' · ')}` : ''}</div>
         ${n.wtype === 'input_video' ? '' : `<label class="cv-opt-check cv-ask-toggle" title="Mỗi lần chạy quy trình, app hỏi lại các ô của khối này (sửa được trước khi chạy)"><input type="checkbox" data-ask-toggle ${n.ask ? 'checked' : ''}> ❓ Hỏi lại các ô này mỗi lần chạy quy trình</label>`}
-        <div class="cv-wf-fields">${s.fields.filter(f => fieldVisible(f, cfg)).map(f => fieldHtml(f, cfg)).join('')}</div>
+        <div class="cv-wf-fields">${s.fields.filter(f => fieldVisible(f, cfg)).map(f => fieldHtml(f, cfg)
+          + (n.wtype === 'post_video' && f.key === 'script' ? `<div class="cv-panel-row cv-listen"><button class="btn sm" data-listen ${busy ? 'disabled' : ''}
+            title="Nghe tiếng thật trong video đầu vào (Gemini API) — không nghe được thì lấy lời thoại đã giao cho khối Video nguồn — rồi điền vào ô Lời đọc / phụ đề để bạn sửa">🎧 Phân tích lời thoại từ video</button>
+          <small class="muted">Để trống → tự phân tích khi chạy</small></div>` : '')).join('')}</div>
         ${s.outputs.some(o => o.type === 'text') && (n.out || {}).text !== undefined && n.wtype !== 'input_text' ? `<label class="field"><span>Kết quả — sửa được trước khi dùng tiếp</span>
           <textarea data-out rows="6">${esc((n.out || {}).text || '')}</textarea></label>` : ''}
         ${['fb_post', 'fb_schedule'].includes(n.wtype) ? `<label class="cv-opt-check cv-auto-post ${n.auto_post ? 'on' : ''}" title="Bật: khi chạy, khối này đăng / hẹn giờ thẳng lên Fanpage, không dừng chờ bạn duyệt"><input type="checkbox" data-auto-post ${n.auto_post ? 'checked' : ''}> 🚀 Tự đăng không cần duyệt</label>
@@ -1146,6 +1151,23 @@ window.CanvasPage = (() => {
           saveConfig(n.id, { [key]: (node(n.id).config[key] || []).filter((_, j) => j !== Number(i)) }, true);
         };
       });
+      const listen = panel.querySelector('[data-listen]');
+      if (listen) {
+        listen.onclick = async () => {
+          const cur = String((node(n.id).config || {}).script || '').trim();
+          if (cur && !confirm('Thay nội dung ô Lời đọc / phụ đề bằng lời thoại phân tích từ video đầu vào?')) return;
+          const label = listen.textContent;
+          listen.disabled = true;
+          listen.textContent = '⏳ Đang phân tích…';
+          const res = await call('canvas_analyze_dialogue', C.board.id, n.id);
+          listen.disabled = false;
+          listen.textContent = label;
+          if (!res) return;
+          C.board = res.result.board;
+          drawWfPanel(node(n.id), true);
+          toast('Đã điền lời thoại vào ô Lời đọc / phụ đề — sửa lại nếu cần', 'ok');
+        };
+      }
       const out = panel.querySelector('[data-out]');
       if (out) {
         out.oninput = () => {
@@ -1437,7 +1459,7 @@ window.CanvasPage = (() => {
       // Ảnh đầu vào = node ⬆ ảnh tải lên của Canvas (chọn được nhiều ảnh, mỗi ảnh 1 node)
       const extra = g === 'input' ? '<button data-blk-upload title="Ảnh sản phẩm, nhân vật, ảnh tham chiếu — chọn nhiều ảnh trên máy">🖼 Ảnh đầu vào</button>' : '';
       return rows.length || extra ? `<b>${esc(label)}</b>${extra}${rows.map(([k, s]) => `<button data-blk="${k}" title="${esc(s.desc)}">${esc(s.icon)} ${esc(s.name)}</button>`).join('')}` : '';
-    }).join('');
+    }).join('') + `<b>Bố cục</b><button data-blk-group title="Nhóm / ghi chú (như sticky note n8n): khung màu có tên + ghi chú; kéo nhóm thì các node bên trong đi theo. Đang chọn 1 node → bọc quanh node đó; đang chọn nhiều node → bọc quanh cả nhóm">▢ Nhóm / ghi chú</button>`;
     const stage = body().querySelector('.cv-stage').getBoundingClientRect();
     const r = anchorEl.getBoundingClientRect();
     menu.classList.remove('hidden');
@@ -1446,6 +1468,130 @@ window.CanvasPage = (() => {
     menu.querySelectorAll('[data-blk]').forEach(b => { b.onclick = () => { hideMenu(); addAt('wf', { wtype: b.dataset.blk }); }; });
     const up = menu.querySelector('[data-blk-upload]');
     if (up) up.onclick = () => { hideMenu(); addAt('upload', { empty: true }); };
+    menu.querySelector('[data-blk-group]').onclick = () => { hideMenu(); return multi().size > 1 ? multiAct('group') : addGroup(); };
+  }
+
+  /* ---------------------------------------------------------------- ⇆ tự sắp xếp theo luồng dây nối */
+  const ARR = { gapX: 110, gapY: 50, padX: 30, padTop: 64, padBottom: 36 };
+
+  /** Xếp tầng (trái → phải theo dây nối): items [{id, w, h, y}], edges [[từ, tới]] → {id: {x, y}} tính từ (0, 0).
+   *  Cột = bước dài nhất từ khối đầu; trong cột xếp theo vị trí trung bình của khối nối vào (ít dây chéo), căn giữa dọc. */
+  function layered(items, edges) {
+    const ids = items.map(i => i.id);
+    const ins = Object.fromEntries(ids.map(id => [id, []]));
+    edges.forEach(([a, b]) => { if (a !== b && ins[b] && ins[a] && !ins[b].includes(a)) ins[b].push(a); });
+    const depth = Object.fromEntries(ids.map(id => [id, 0]));
+    for (let k = 0; k < ids.length; k++) {  // vòng lặp giới hạn → dây nối vòng không treo
+      let changed = false;
+      ids.forEach(id => ins[id].forEach(a => { if (depth[a] + 1 > depth[id] && depth[a] + 1 < ids.length) { depth[id] = depth[a] + 1; changed = true; } }));
+      if (!changed) break;
+    }
+    const cols = [];
+    items.forEach(it => { (cols[depth[it.id]] = cols[depth[it.id]] || []).push(it); });
+    const rank = {};
+    const pos = {};
+    let x = 0;
+    const heights = [];
+    cols.forEach((col, c) => {
+      if (!col) return;
+      const bary = it => (ins[it.id].length ? ins[it.id].reduce((s, a) => s + (rank[a] ?? 0), 0) / ins[it.id].length : Infinity);
+      col.sort((p, q) => (c ? bary(p) - bary(q) : 0) || p.y - q.y);
+      col.forEach((it, i) => { rank[it.id] = i; });
+      heights[c] = col.reduce((s, it) => s + it.h, 0) + ARR.gapY * (col.length - 1);
+    });
+    const tall = Math.max(0, ...heights.filter(h => h != null));
+    cols.forEach((col, c) => {
+      if (!col) return;
+      let y = (tall - heights[c]) / 2;
+      col.forEach(it => { pos[it.id] = { x, y }; y += it.h + ARR.gapY; });
+      x += Math.max(...col.map(it => it.w)) + ARR.gapX;
+    });
+    return pos;
+  }
+
+  async function arrange() {
+    const b = C.board;
+    if (!b || !b.nodes.length) return;
+    if (b.nodes.some(isBusy) && !confirm('Có khối đang chạy — vẫn sắp xếp lại vị trí?')) return;
+    const edges = b.nodes.flatMap(n => (n.inputs || []).map(i => [i, n.id]));
+    // mỗi node thuộc nhóm nhỏ nhất chứa nó; nhóm = 1 đơn vị (các khối bên trong xếp riêng rồi bọc khung vừa khít)
+    const gs = groups().slice().sort((p, q) => p.w * p.h - q.w * q.h);
+    const owner = {};
+    b.nodes.forEach(n => { const g = gs.find(x => inGroup(x, n)); if (g) owner[n.id] = g.id; });
+    const units = [];
+    const unitOf = {};
+    const inner = {};
+    gs.forEach(g => {
+      const ms = b.nodes.filter(n => owner[n.id] === g.id);
+      if (!ms.length) { units.push({ id: `g:${g.id}`, w: g.w, h: g.h, y: g.y }); return; }  // nhóm chỉ ghi chú: giữ cỡ
+      const rel = layered(ms.map(n => ({ id: n.id, ...sizeOf(n), y: n.y })), edges);
+      inner[g.id] = rel;
+      const w = Math.max(...ms.map(n => rel[n.id].x + sizeOf(n).w)) + 2 * ARR.padX;
+      const h = Math.max(...ms.map(n => rel[n.id].y + sizeOf(n).h)) + ARR.padTop + ARR.padBottom;
+      units.push({ id: `g:${g.id}`, w, h, y: g.y });
+      ms.forEach(n => { unitOf[n.id] = `g:${g.id}`; });
+    });
+    b.nodes.filter(n => !owner[n.id]).forEach(n => { units.push({ id: n.id, ...sizeOf(n), y: n.y }); unitOf[n.id] = n.id; });
+    const pos = layered(units, edges.map(([a, c]) => [unitOf[a], unitOf[c]]));
+    // gốc: góc trên-trái hiện tại của cả bảng (không nhảy đi chỗ khác)
+    const ox = Math.min(...b.nodes.map(n => n.x), ...gs.map(g => g.x));
+    const oy = Math.min(...b.nodes.map(n => n.y), ...gs.map(g => g.y));
+    C.undoArrange = { nodes: b.nodes.map(n => ({ id: n.id, x: n.x, y: n.y })), groups: gs.map(g => ({ id: g.id, x: g.x, y: g.y, w: g.w, h: g.h })) };
+    const gpatch = [];
+    units.forEach(u => {
+      const p = pos[u.id];
+      const x = Math.round(ox + p.x), y = Math.round(oy + p.y);
+      if (!u.id.startsWith('g:')) { const n = node(u.id); n.x = x; n.y = y; return; }
+      const g = group(u.id.slice(2));
+      Object.assign(g, { x, y, w: Math.round(u.w), h: Math.round(u.h) });
+      const moves = [];
+      Object.entries(inner[g.id] || {}).forEach(([id, r]) => {
+        const n = node(id);
+        n.x = Math.round(x + ARR.padX + r.x);
+        n.y = Math.round(y + ARR.padTop + r.y);
+        moves.push({ id, x: n.x, y: n.y });
+      });
+      gpatch.push([g.id, { x: g.x, y: g.y, w: g.w, h: g.h }, moves]);
+    });
+    await saveLayout(b.nodes.filter(n => !owner[n.id]), gpatch);
+    drawAll();
+    fitView();
+    armUndo();
+    toast('Đã sắp xếp các khối — bấm “↶ Hoàn tác” trong 15 giây nếu muốn trở lại', 'ok');
+  }
+
+  async function saveLayout(loose, gpatch) {
+    const bid = C.board.id;
+    if (loose.length) await call('canvas_update_nodes', bid, loose.map(n => ({ id: n.id, x: n.x, y: n.y })));
+    for (const [gid, patch, moves] of gpatch) {
+      const res = await call('canvas_update_group', bid, gid, patch, moves);
+      if (res && C.board && C.board.id === bid) C.board.groups = res.board.groups;
+    }
+  }
+
+  function armUndo() {
+    const btn = body().querySelector('[data-arrange]');
+    if (btn) btn.innerHTML = '↶<small>Hoàn tác</small>';
+    clearTimeout(C.undoT);
+    C.undoT = setTimeout(() => {
+      C.undoArrange = null;
+      const b2 = body().querySelector('[data-arrange]');
+      if (b2) b2.innerHTML = '⇆<small>Sắp xếp</small>';
+    }, 15000);
+  }
+
+  async function undoArrange() {
+    const u = C.undoArrange;
+    C.undoArrange = null;
+    clearTimeout(C.undoT);
+    const btn = body().querySelector('[data-arrange]');
+    if (btn) btn.innerHTML = '⇆<small>Sắp xếp</small>';
+    if (!u || !C.board) return;
+    u.nodes.forEach(p => { const n = node(p.id); if (n) { n.x = p.x; n.y = p.y; } });
+    const gpatch = u.groups.filter(p => group(p.id)).map(p => { Object.assign(group(p.id), p); return [p.id, { x: p.x, y: p.y, w: p.w, h: p.h }, []]; });
+    await saveLayout(C.board.nodes, gpatch);
+    drawAll();
+    toast('Đã trả lại vị trí cũ', 'ok');
   }
   const hideMenu = () => { const m = body().querySelector('.cv-menu'); if (m) m.classList.add('hidden'); };
 
@@ -1856,9 +2002,22 @@ window.CanvasPage = (() => {
           title="Bấm để tới node">${esc(x.id)}${x.diem != null ? ` · ${x.diem}` : ''}<small>${esc(x.nhan_xet)}</small></button>`).join('')}</div>` : ''}</div></div>`;
   }
 
+  function droppedHtml(m) {
+    if (!m.dropped) return '';
+    const why = (m.dropped_why || []).join(' · ');
+    return `<small class="muted" ${why ? `title="${esc(why)}"` : ''}>Bỏ ${m.dropped} đề xuất không hợp lệ${why ? `: ${esc(why)}` : ''}</small>`;
+  }
+
+  function builtHtml(m) {
+    if (!m.built) return '';
+    const b = m.built;
+    return `<div class="cv-as-built ${b.errors.length ? 'warn' : 'ok'}">🧩 Đã dựng ${b.done} thao tác lên Canvas${b.errors.length
+      ? ` · ${b.errors.length} lỗi<ul>${b.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul>` : ' — kiểm tra rồi bấm ▶ Chạy toàn bộ'}</div>`;
+  }
+
   function opsHtml(m) {
     const ops = m.ops || [];
-    if (!ops.length) return m.dropped ? `<small class="muted">Bỏ ${m.dropped} đề xuất không hợp lệ</small>` : '';
+    if (!ops.length) return droppedHtml(m);
     const pending = ops.filter(o => !o.applied && o.op !== 'run').length;
     return `<div class="cv-as-ops"><div class="cv-as-ops-head"><b>Đề xuất (${ops.length})</b>
         ${pending > 1 ? `<button class="btn ghost sm" type="button" data-as-all="${esc(m.id)}" title="Áp dụng lần lượt mọi đề xuất chưa áp dụng (trừ ▶ Chạy)">Áp dụng tất cả</button>` : ''}</div>
@@ -1869,7 +2028,7 @@ window.CanvasPage = (() => {
         ${op.applied ? '<span class="cv-as-ok" title="Đã áp dụng">✓</span>'
           : op.op === 'run' ? `<button class="btn ghost sm" type="button" data-as-run="${esc(m.id)}" data-i="${i}">▶ Chạy</button>`
             : `<button class="btn primary sm" type="button" data-as-apply="${esc(m.id)}" data-i="${i}">Áp dụng</button>`}</div>`).join('')}
-      ${m.dropped ? `<small class="muted">Bỏ ${m.dropped} đề xuất không hợp lệ</small>` : ''}</div>`;
+      ${droppedHtml(m)}</div>`;
   }
 
   function drawAssist(scroll) {
@@ -1885,22 +2044,42 @@ window.CanvasPage = (() => {
         <button class="btn ghost sm" type="button" data-as="close" title="Đóng">✕</button></div>
       ${autoHtml(C.assist.chat || {})}
       <div class="cv-as-msgs">${msgs.length ? msgs.map(m => (m.role === 'user'
-        ? `<div class="cv-as-msg user${m.auto ? ' auto' : ''}">${esc(m.text)}${m.images ? `<small>📎 kèm ${m.images} ảnh kết quả</small>` : ''}</div>`
+        ? `<div class="cv-as-msg user${m.auto ? ' auto' : ''}">${esc(m.text)}${m.images ? `<small>📎 kèm ${m.images} ảnh kết quả</small>` : ''}${(m.files || []).length ? `<small>📄 ${esc(m.files.join(', '))}</small>` : ''}</div>`
         : m.error ? `<div class="cv-as-msg err">⚠ ${esc(m.error)}</div>`
-          : `<div class="cv-as-msg bot">${autoTag(m)}${m.text ? noteHtml(m.text) : ''}${evalHtml(m.eval)}${reworkHtml(m)}${opsHtml(m)}</div>`)).join('')
+          : `<div class="cv-as-msg bot">${autoTag(m)}${m.text ? noteHtml(m.text) : ''}${evalHtml(m.eval)}${reworkHtml(m)}${builtHtml(m)}${opsHtml(m)}</div>`)).join('')
         : `<div class="cv-as-intro"><b>Claude đọc toàn bộ Canvas này</b> (khối, prompt, kết quả, lỗi) và có thể xem ảnh kết quả để:
             <ul><li>chấm điểm, chỉ lỗi từng node</li><li>đề xuất sửa prompt / model / thêm & nối khối</li><li>gợi ý bước tiếp theo</li></ul>
             Đề xuất chỉ thay đổi Canvas khi bạn bấm <b>Áp dụng</b>; chạy luôn hỏi xác nhận. Dùng tài khoản claude.ai đã đăng nhập trong app.</div>`}</div>
       <div class="cv-as-status ${C.assist.sending ? '' : 'hidden'}"><span class="cv-spin"></span><span class="cv-as-status-text">${esc(C.assist.status || 'Đang hỏi Claude…')}</span></div>
       <div class="cv-as-quick">${AS_QUICK.map(([l, t], i) => `<button type="button" data-as-q="${i}" title="${esc(t)}">${esc(l)}</button>`).join('')}</div>
       <div class="cv-as-input"><textarea data-as-text rows="3" placeholder="Hỏi trợ lý… (VD: Ảnh n3 có hợp quảng cáo TikTok không? Viết lại prompt cho đẹp hơn)"></textarea>
+        <div class="cv-as-files">${(C.assist.files || []).map((f, i) => `<span class="cv-as-file" title="${esc(f.path)}">📄 ${esc(f.name)}<button type="button" data-as-unfile="${i}" title="Bỏ file này">✕</button></span>`).join('')}
+          <button class="link-btn" type="button" data-as-files title="Ảnh (gửi kèm để Claude xem), video .mp4 .mov .webm (gửi ảnh lưới khung hình có mốc giây) hoặc tài liệu .txt .md .csv .json .docx .srt .vtt (đọc thành chữ) — tối đa 8 file">📎 Đính kèm file</button></div>
         <div class="cv-as-row"><label class="cv-opt-check" title="Gửi ảnh kết quả + 1 khung hình mỗi video (tối đa 6) để Claude xem và chấm"><input type="checkbox" data-as-attach ${C.assist.attach === false ? '' : 'checked'}> 📎 Kèm ảnh kết quả</label>
+          <label class="cv-opt-check" title="Bật: Claude DỰNG THẬT lên Canvas — thêm khối, viết prompt, chọn model, nối dây ngay (không cần bấm Áp dụng). Không tự chạy."><input type="checkbox" data-as-build ${C.assist.build ? 'checked' : ''}> 🧩 Dựng thật lên Canvas</label>
           <button class="link-btn cv-as-browser" type="button" data-as-browser title="Hiện / ẩn cửa sổ trình duyệt dùng chung cho cả app — đổi ở Cài đặt → Trình duyệt">🖥 Trình duyệt: ${state.boot.settings.show_browser ? 'hiện' : 'ẩn'}</button>
           <span class="cv-sp"></span><button class="btn primary sm" type="button" data-as="send" ${C.assist.sending ? 'disabled' : ''}>${C.assist.sending ? 'Đang chờ…' : 'Gửi ➤'}</button></div></div>`;
     const ta = box.querySelector('[data-as-text]');
     ta.value = draft;
     ta.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendAssist(); };
+    const buildBox = box.querySelector('[data-as-build]');
+    buildBox.onchange = () => { C.assist.build = buildBox.checked; C.assist.buildSet = true; };
+    ta.oninput = () => {  // gõ "dựng …" → tự bật Dựng thật (trừ khi bạn đã tự bật / tắt ô này)
+      if (C.assist.buildSet) return;
+      C.assist.build = /dựng/i.test(ta.value);
+      buildBox.checked = C.assist.build;
+    };
     box.querySelector('[data-as-attach]').onchange = e => { C.assist.attach = e.target.checked; };
+    box.querySelector('[data-as-files]').onclick = async () => {
+      const res = await call('canvas_assist_pick_files');
+      if (!res || !res.files.length) return;
+      const have = new Set((C.assist.files || []).map(f => f.path));
+      C.assist.files = [...(C.assist.files || []), ...res.files.filter(f => !have.has(f.path))].slice(0, 8);
+      drawAssist();
+    };
+    box.querySelectorAll('[data-as-unfile]').forEach(b => {
+      b.onclick = () => { C.assist.files.splice(+b.dataset.asUnfile, 1); drawAssist(); };
+    });
     box.querySelector('[data-as-browser]').onclick = () => openSettings('browser');
     box.querySelector('[data-as="send"]').onclick = () => sendAssist();
     box.querySelector('[data-as="close"]').onclick = () => toggleAssist(false);
@@ -1912,7 +2091,10 @@ window.CanvasPage = (() => {
     box.querySelectorAll('[data-as-q]').forEach(b => {
       b.onclick = () => {
         const [, text] = AS_QUICK[+b.dataset.asQ];
-        if (text.endsWith(': ')) { ta.value = text; ta.focus(); ta.setSelectionRange(text.length, text.length); return; }
+        if (text.endsWith(': ')) {
+          if (/^Dựng/.test(text)) { C.assist.build = true; C.assist.buildSet = true; buildBox.checked = true; }
+          ta.value = text; ta.focus(); ta.setSelectionRange(text.length, text.length); return;
+        }
         ta.value = text;
         sendAssist();
       };
@@ -1940,17 +2122,27 @@ window.CanvasPage = (() => {
     const text = ta ? ta.value.trim() : '';
     if (!text || C.assist.sending) return;
     const bid = C.board.id;
+    const build = !!C.assist.build;  // khoá Admin: call() tự hỏi mật khẩu khi backend báo locked
     C.assist.sending = true;
-    C.assist.status = 'Đang hỏi Claude…';
+    C.assist.status = build ? 'Đang nhờ Claude dựng quy trình…' : 'Đang hỏi Claude…';
     C.assist.chat = C.assist.chat || { messages: [] };
-    C.assist.chat.messages = [...C.assist.chat.messages, { role: 'user', text, images: 0 }];
+    const files = C.assist.files || [];
+    C.assist.chat.messages = [...C.assist.chat.messages, { role: 'user', text: build ? `🧩 ${text}` : text, images: 0,
+      files: files.map(f => f.name) }];
+    C.assist.files = [];
     ta.value = '';
+    C.assist.build = false;  // mỗi lượt dựng bật lại (tránh lượt hỏi sau vô tình sửa Canvas)
+    C.assist.buildSet = false;
     drawAssist(true);
-    const res = await call('canvas_assist_send', bid, text, C.assist.attach !== false);
+    const res = await call('canvas_assist_send', bid, text, C.assist.attach !== false, false, build, files.map(f => f.path));
     if (!C.board || C.board.id !== bid) return;  // đã rời Canvas này trong lúc chờ
     C.assist.sending = false;
     if (res) C.assist.chat = res.chat;
     else { const again = await call('canvas_assist_get', bid); if (again) C.assist.chat = again.chat; }
+    if (build) {  // khối Claude vừa dựng → vẽ lại bảng
+      const opened = await call('canvas_open', bid);
+      if (opened && C.board && C.board.id === bid) { C.board = opened.board; drawAll(); }
+    }
     drawAssist(true);
   }
 
@@ -1973,7 +2165,8 @@ window.CanvasPage = (() => {
     const m = ((C.assist.chat || {}).messages || []).find(x => x.id === mid);
     if (!m) return;
     // thêm khối mới trước (đề xuất nối / sửa có thể nhắc tới khối mới), rồi các đề xuất còn lại theo thứ tự
-    const order = [...m.ops.keys()].sort((a, b) => (m.ops[b].op === 'add_node') - (m.ops[a].op === 'add_node') || a - b);
+    const isAdd = o => o.op === 'add_node' || o.op === 'add_frame';  // tạo khối (khung video / khối mới) trước rồi mới nối
+    const order = [...m.ops.keys()].sort((a, b) => isAdd(m.ops[b]) - isAdd(m.ops[a]) || a - b);
     for (const i of order) {
       const cur = ((C.assist.chat || {}).messages || []).find(x => x.id === mid).ops[i];
       if (cur.applied || cur.op === 'run') continue;
@@ -2262,6 +2455,10 @@ window.CanvasPage = (() => {
         const bid = C.board.id;
         call('canvas_assist_get', bid).then(r => { if (r && C.board && C.board.id === bid) { C.assist.chat = r.chat; drawAssist(true); } });
       } else if (data.refresh && C.assist) C.assist.chat = null;  // đóng khung → lần mở sau tải mới
+      if (data.reload) {  // tự điều phối vừa thêm khối / nối dây → vẽ lại bảng
+        const bid = C.board.id;
+        call('canvas_open', bid).then(r => { if (r && C.board && C.board.id === bid) { C.board = r.board; drawAll(); } });
+      }
       return;
     }
     if (event === 'canvas_log' && data.task) {

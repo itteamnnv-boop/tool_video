@@ -308,7 +308,9 @@ NODE_TYPES = {
         "outputs": [{"key": "video", "type": "video", "label": "Video hậu kỳ"}],
         "fields": [
             {"key": "name", "label": "Tên video", "type": "text", "default": ""},
-            {"key": "script", "label": "Lời đọc / phụ đề từng video (mỗi đoạn cách 1 dòng trống = 1 video, theo thứ tự nối)",
+            {"key": "script", "label": "Lời đọc / phụ đề từng video — để trống: tự phân tích lời thoại từ video đầu vào rồi "
+                                       "điền vào đây để bạn sửa (mỗi đoạn cách 1 dòng trống = 1 video, theo thứ tự nối; "
+                                       "đoạn “-” = video không lời)",
              "type": "textarea", "default": ""},
             {"key": "audio", "label": "Âm thanh", "type": "select", "default": "original",
              "options": [{"value": "original", "label": "Giữ tiếng gốc của video"},
@@ -617,7 +619,8 @@ def run_node(ctx: NodeContext, inputs: dict) -> dict:
     if kind == "dub_vieneu":
         return {"video": _dub_vieneu(ctx, cfg, _files(inputs.get("video", [])), inputs.get("text", []))}
     if kind == "post_video":
-        return {"video": _post_video(ctx, cfg, _files(inputs.get("videos", [])), inputs.get("text", []))}
+        video, script = _post_video(ctx, cfg, _files(inputs.get("videos", [])), inputs.get("text", []))
+        return {"video": video, "script": script_text(script)}
     if kind == "concat_video":
         return {"video": _concat(ctx, cfg, _files(inputs.get("videos", [])))}
     if kind == "output":
@@ -1082,7 +1085,8 @@ def _num(value, default: float) -> float:
 
 def split_script(texts: list, count: int) -> list[str]:
     """Lời đọc cho từng video: các đoạn cách dòng trống (hoặc từng dòng nếu số dòng = số video), theo thứ tự nối;
-    thừa đoạn → gộp vào video cuối; 1 đoạn → video đầu."""
+    thừa đoạn → gộp vào video cuối; 1 đoạn → video đầu. Đoạn chỉ có "-" = video đó không lời (giữ "-" để bên gọi
+    không phân tích lời thoại cho video đó)."""
     import re
 
     text = "\n\n".join(str(t).strip() for t in texts if str(t or "").strip())
@@ -1095,13 +1099,67 @@ def split_script(texts: list, count: int) -> list[str]:
     return [" ".join(p.split()) for p in parts] + [""] * (count - len(parts))
 
 
-def _post_video(ctx, cfg, videos: list[Path], texts: list) -> str:
-    """Khối Hậu kỳ video: chạy đúng pipeline Hậu kỳ (Studio Muse AI) với model chọn được (mặc định Claude trình duyệt)."""
+def analyze_dialogue(settings, videos: list[Path], known: list, work: Path, log, check_cancel=None,
+                     only: set | None = None) -> list[str]:
+    """Phân tích lời thoại từ video đầu vào: nghe tiếng thật trong video bằng Gemini API (khớp đúng câu đã nói); không
+    nghe được (chưa có Gemini API key / lỗi / video không tiếng) → lời thoại đã giao cho khối Video nguồn (known, Canvas
+    gửi đúng thứ tự video). only = chỉ phân tích các video thứ i này. Trả lời thoại từng video ("" = không lời)."""
+    from ..pipeline import speech
+
+    can_listen = speech.can_listen(settings)
+    if not can_listen:
+        log("Chưa có Gemini API key (Cài đặt → Model AI) — không nghe được tiếng video, dùng lời thoại của khối "
+            "Video nguồn (nếu có)", "warn")
+    out = []
+    for i, video in enumerate(videos):
+        if only is not None and i not in only:
+            out.append("")
+            continue
+        if check_cancel:
+            check_cancel()
+        said, how = "", ""
+        if can_listen:
+            log(f"🎧 Đang nghe lời thoại video {i + 1}/{len(videos)} ({video.name}) bằng Gemini API…")
+            try:
+                said, how = speech.transcribe(video, settings, work / "nghe"), "nghe tiếng video"
+            except (speech.SpeechError, OSError, RuntimeError) as exc:
+                log(f"Không nghe được lời thoại video {i + 1}: {exc}", "warn")
+        if not said and i < len(known) and str(known[i] or "").strip():
+            said, how = str(known[i]), "lời thoại khối Video nguồn"
+        said = " ".join(str(said or "").split())
+        log(f"Lời thoại video {i + 1} ({how}): {said[:160]}{'…' if len(said) > 160 else ''}" if said
+            else f"Video {i + 1}: không có lời thoại")
+        out.append(said)
+    return out
+
+
+def _listen_script(ctx, cfg, videos: list[Path], script: list[str]) -> list[str]:
+    """Đoạn lời đọc còn trống → phân tích lời thoại từ video tương ứng (analyze_dialogue)."""
+    empty = {i for i, t in enumerate(script) if not t}
+    if not empty:
+        return script
+    heard = analyze_dialogue(ctx.settings, videos, list(cfg.get("_dialogues") or []), ctx.dir, ctx.log,
+                             ctx.check_cancel, only=empty)
+    return [heard[i] if i in empty else t for i, t in enumerate(script)]
+
+
+def script_text(script: list[str]) -> str:
+    """Lời thoại từng video → nội dung ô Lời đọc / phụ đề (đoạn cách dòng trống; video không lời = "-")."""
+    return "\n\n".join(t or "-" for t in script) if any(script) else ""
+
+
+def _post_video(ctx, cfg, videos: list[Path], texts: list) -> tuple[str, list]:
+    """Khối Hậu kỳ video: chạy đúng pipeline Hậu kỳ (Studio Muse AI) với model chọn được (mặc định Claude trình duyệt).
+    Trả (video, lời thoại từng video đã dùng)."""
     from .. import muse_post
 
     if not videos:
         raise ValueError("Khối Hậu kỳ video chưa có video — nối node Video / Ghép video / Video đầu vào vào")
-    script = split_script([*texts, cfg.get("script") or ""], len(videos))
+    script = _listen_script(ctx, cfg, videos, split_script([*texts, cfg.get("script") or ""], len(videos)))
+    script = ["" if t == "-" else t for t in script]  # "-" = video không lời
+    dialogue = "\n\n".join(f"Video {i + 1}: {t}" for i, t in enumerate(script) if t)
+    if dialogue:
+        (ctx.dir / "loi-thoai.txt").write_text(dialogue, "utf-8")
     if cfg.get("audio") == "tts" and not any(script):
         ctx.log("Lồng tiếng AI nhưng chưa có lời đọc — video sẽ không lời (nhập lời đọc hoặc nối node chữ vào)", "warn")
     form = {**cfg, "name": str(cfg.get("name") or "").strip() or "Hậu kỳ video",
@@ -1116,7 +1174,7 @@ def _post_video(ctx, cfg, videos: list[Path], texts: list) -> str:
     dest = ctx.dir / "video.mp4"
     shutil.copy2(final, dest)
     (ctx.dir / "hau-ky.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), "utf-8")
-    return str(dest)
+    return str(dest), script
 
 
 def whiteboard_source(cfg: dict, text_in: str = "") -> str:

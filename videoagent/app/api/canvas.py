@@ -135,6 +135,11 @@ class CanvasApi:
             return _ok(result=None)
         return self._cv_edit("result", self._canvas.replace_image, bid, nid, paths[0])
 
+    def canvas_analyze_dialogue(self, bid: str, nid: str) -> dict:
+        """🎧 Khối Hậu kỳ: phân tích lời thoại từ video đầu vào → điền ô Lời đọc / phụ đề (nghe bằng Gemini API: vài giây
+        mỗi video). Như sửa ô của khối khi chạy → không cần mở khoá."""
+        return self._cv("result", self._canvas.analyze_dialogue, bid, nid)
+
     def canvas_update_nodes(self, bid: str, changes: list) -> dict:
         return self._cv("board", self._canvas.update_nodes, bid, changes)
 
@@ -221,13 +226,24 @@ class CanvasApi:
     def canvas_assist_get(self, bid: str) -> dict:
         return self._assist_call("chat", self._assist().load, bid)
 
-    def canvas_assist_send(self, bid: str, message: str, attach: bool = True, show_browser: bool = False) -> dict:
-        """1 lượt hỏi Claude (30 giây – vài phút). Trạng thái đẩy lên qua sự kiện canvas_assist."""
+    def canvas_assist_pick_files(self) -> dict:
+        """Chọn ảnh / tài liệu đính kèm cho tin nhắn gửi trợ lý."""
+        return _ok(files=[{"path": p, "name": Path(p).name} for p in self.pick_files("assist")])
+
+    def canvas_assist_send(self, bid: str, message: str, attach: bool = True, show_browser: bool = False,
+                           build: bool = False, files: list | None = None) -> dict:
+        """1 lượt hỏi Claude (30 giây – vài phút). Trạng thái đẩy lên qua sự kiện canvas_assist.
+        build = 🧩 Dựng: Claude dựng thật lên Canvas (= sửa quy trình → cần mở khoá như mọi thao tác sửa)."""
         def status(m, level="info", *a, **k):
             self._emit("canvas_assist", {"board": bid, "text": str(m), "level": level})
 
+        if build:
+            locked = self._canvas_locked()
+            if locked:
+                return locked
         return self._assist_call("chat", self._assist().chat, bid, message, attach=bool(attach),
-                                 show_browser=bool(show_browser), log=status)
+                                 show_browser=bool(show_browser), log=status, build=bool(build),
+                                 files=[str(f) for f in files or []])
 
     def canvas_assist_apply(self, bid: str, mid: str, idx: int) -> dict:
         """Áp dụng 1 đề xuất của trợ lý = sửa quy trình → cần mở khoá như mọi thao tác sửa Canvas."""
