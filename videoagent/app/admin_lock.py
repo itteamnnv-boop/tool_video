@@ -22,7 +22,8 @@ MIN_LEN = 4
 MAX_FAILS, LOCKOUT = 5, 30
 UNLOCK_TTL = 15 * 60
 # khoá cài đặt nhạy cảm: chỉ sửa được khi Cài đặt đang mở khoá (màn khác không gửi các khoá này)
-GUARDED = ("anthropic_api_key", "openai_api_key", "gemini_api_key", "license_server", "menus")
+GUARDED = ("anthropic_api_key", "openai_api_key", "gemini_api_key", "heygen_api_key", "license_server", "menus", "use_api_models",
+           "locked_screens")  # 🔒 khoá màn hình: chỉ đổi được khi Cài đặt đang mở khoá
 
 
 class LockError(ValueError):

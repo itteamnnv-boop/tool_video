@@ -66,6 +66,10 @@ body.win-max .win-grips{display:none}
 .sidebar{width:88px;flex:none;display:flex;flex-direction:column;gap:2px;padding:8px 6px;background:var(--panel);border-right:1px solid var(--line);overflow-x:hidden;overflow-y:auto;scrollbar-width:none;transition:width .18s}
 .sidebar::-webkit-scrollbar{width:0}
 .sb-item{position:relative;flex:none;display:flex;flex-direction:column;align-items:center;gap:2px;padding:5px 2px;border-radius:10px;border:1px solid transparent;color:#a9b4a7;font-size:9.5px;font-weight:600;line-height:1.2;text-align:center}
+.sb-item.sb-locked::after{content:'🔒';position:absolute;top:1px;left:3px;font-size:9px;line-height:1}
+.set-scrlock{margin-top:14px}
+.set-scrlock .set-feat-groups{display:block}
+.set-scrlock .set-feat-group{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px}
 .sb-item:hover{background:#1a211b;color:var(--text)}
 .sb-item.active{background:#1e2813;border-color:#8fae38;color:var(--lime);box-shadow:inset 0 0 0 1px #d4f06a22}
 .sb-ic{width:24px;height:24px;flex:none;display:grid;place-items:center}
@@ -725,3 +729,7 @@ select option{background:#1c231d}
 .shared-model.sm{width:auto;min-height:0;padding:4px 8px;font-size:11.5px}
 .set-model-row select{flex:1;min-width:0}
 .set-model-row select[data-model-profile]{flex:0 0 38%}
+/* 📥 thông báo bài chờ duyệt + nút âm thanh */
+.nt-pop.review .nt-err,.nt-row.review .nt-err{color:#ffd88a}
+.nt-pop.review{border-color:#7a5a1a}
+.nt-sound{margin-left:auto;font-size:15px;text-decoration:none}

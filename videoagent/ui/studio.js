@@ -449,7 +449,7 @@ function createStudioPage(CFG) {
           ${dis ? '' : '<button class="link" data-rv-clear type="button">Bỏ video</button>'}</div>
           ${rv.data ? `<small class="muted">Vật liệu phân tích được — sửa trực tiếp; storyboard dùng đúng phần này.</small>`
             : `<textarea data-rv-brief rows="9" ${dis} title="Sửa được — storyboard dùng nguyên văn phần này">${esc(rv.brief || '')}</textarea>`}</div></div>
-        ${rv.data ? rvMaterialsHtml(rv.data, dis) : ''}` : ''}
+        ${rv.data ? rvMaterialsHtml(rv.data, dis) : ''}${fromVideo ? trendFramesHtml(o, rv, dis) : ''}` : ''}
       <small class="muted">Model 👁 xem được ảnh khung hình (Gemini trình duyệt / API, Claude / OpenAI API); model khác chỉ đọc tiêu đề, mô tả, phụ đề. Video từ link chỉ dùng để phân tích, app không lưu lại. ${fromVideo
         ? 'Chỉ dùng nguyên văn lời thoại / nội dung khi video là của bạn hoặc được phép; thương hiệu của video gốc được đổi sang sản phẩm của bạn.'
         : 'Storyboard được dặn không chép nguyên văn lời thoại, thương hiệu, nhân vật của video tham khảo.'}</small>
@@ -457,6 +457,21 @@ function createStudioPage(CFG) {
   }
 
   // Vật liệu phân tích từ video (nguồn kịch bản = video): sửa được từng trường, từng đoạn → mỗi đoạn thành 1 cảnh
+  // 📸 khung mẫu chụp lúc phân tích (độ phân giải gốc): ảnh bìa cảnh k = khung mẫu k + thay đúng khuôn mặt nhân vật
+  function framesStrip(frames, removable) {
+    return `<div class="st-frames">${frames.map((f, i) => `<figure class="st-frame"><img src="${esc(f.url || '')}" alt="Khung mẫu ${i + 1}" loading="lazy">
+      <figcaption>${i + 1} · ${Number(f.t || 0).toFixed(1)}s</figcaption>${removable ? `<button class="st-frame-x" data-frame-rm="${i}" type="button" title="Bỏ khung này">✕</button>` : ''}</figure>`).join('')}</div>`;
+  }
+  function trendFramesHtml(o, rv, dis) {
+    const frames = (rv.frames && rv.frames[0] && rv.frames[0].url ? rv.frames : (S.cur && S.cur.trend_frames_view)) || [];
+    if (!frames.length) {
+      return `<small class="muted st-frames-note">📸 Chưa có khung mẫu — bấm 🔍 Phân tích lại để chụp khung từng đoạn (ảnh bìa cảnh = khung mẫu + thay mặt nhân vật).</small>`;
+    }
+    return `<div class="st-frames-box"><label class="check"><input type="checkbox" data-opt="trend_frames" ${o.trend_frames !== false ? 'checked' : ''} ${dis}>
+      📸 Ảnh bìa cảnh = khung mẫu (${frames.length} khung) + ảnh nhân vật — chỉ thay khuôn mặt, giữ đúng bố cục và kích thước</label>
+      ${framesStrip(frames, false)}</div>`;
+  }
+
   function rvMaterialsHtml(d, dis) {
     const f = (k, label, rows = 2) => `<label class="field"><span>${label}</span><textarea data-rvm="${k}" rows="${rows}" ${dis}>${esc(d[k] || '')}</textarea></label>`;
     const scenes = d.canh || [];
@@ -537,13 +552,18 @@ function createStudioPage(CFG) {
   // tắt storyboard: chỉ với nguồn ý tưởng + AI video (khớp studio.no_storyboard)
   const noBoard = o => o.storyboard === false && o.source_mode !== 'video' && o.scene_style !== 'whiteboard';
   const clipMax = o => Math.max(...((S.meta.video_engines[o.video_engine] || {}).durations || ['10s']).map(x => parseInt(x, 10)));
+  // ⏱ độ dài video: mốc gợi ý + độ dài đang dùng (tự nhập) nếu không trùng mốc nào
+  const lengthChoices = o => [...new Set([...S.meta.lengths, +o.length || 60])].sort((a, b) => a - b);
+  const scenesFor = n => (S.meta.length_scenes || {})[n] || (n <= 15 ? 1 : n <= 20 ? 2 : Math.max(S.meta.scenes[0], Math.min(S.meta.scenes[1], Math.round(n / 8))));
+  const fmtLen = n => (n >= 60 && n % 60 === 0 ? `${n / 60} phút` : n > 60 ? `${Math.floor(n / 60)}p${String(n % 60).padStart(2, '0')}` : `${n} giây`);
+  const lengthLabel = (o, n) => `${S.meta.lengths.includes(n) ? '' : '✎ '}~${fmtLen(n)} (${noBoard(o) ? `${Math.max(1, Math.min(S.meta.scenes[1], Math.ceil(n / clipMax(o))))} clip` : `${scenesFor(n)} cảnh`})`;
   function boardToggleHtml(o, dis) {
     if (o.source_mode === 'video' || o.scene_style === 'whiteboard') return '';
     const on = o.storyboard !== false;
     return `<label class="check st-wide st-board-toggle"><input type="checkbox" class="st-switch" data-opt="storyboard" ${on ? 'checked' : ''} ${dis}>
       <span><b>📝 Viết storyboard</b> <span class="st-post-state">${on ? 'BẬT' : 'TẮT'}</span><br><small class="muted">${on
         ? 'Model viết từng cảnh (lời dẫn, prompt ảnh / chuyển động, bình luận…) để bạn duyệt, sửa trước khi làm video.'
-        : `Bỏ bước storyboard: app chia ý tưởng thành ${Math.max(1, Math.min(10, Math.ceil((+o.length || 60) / clipMax(o))))} clip nối tiếp × ${clipMax(o)}s rồi làm video luôn. Không có lời dẫn AI — nên dùng giọng gốc trong clip.`}</small></span></label>`;
+        : `Bỏ bước storyboard: app chia ý tưởng thành ${Math.max(1, Math.min(S.meta.scenes[1], Math.ceil((+o.length || 60) / clipMax(o))))} clip nối tiếp × ${clipMax(o)}s rồi làm video luôn. Không có lời dẫn AI — nên dùng giọng gốc trong clip.`}</small></span></label>`;
   }
 
   const optLabel = (list, v) => (((list || []).find(x => x.value === v) || {}).label || '').split(' — ')[0];
@@ -602,7 +622,7 @@ function createStudioPage(CFG) {
     // form Dự án mới đã đặt khung video ở đầu trang → ở đây chỉ hiện trong Cài đặt của dự án đang mở
     const rvHere = o.source_mode === 'video' && Boolean(S.cur);
     return `${grp('content', PROMPT ? '🔒 Bible — nhân vật, bối cảnh, sản phẩm' : '🎬 Nội dung &amp; nhân vật', esc(sums.content), `${rvHere ? refVideoHtml(o, dis) : ''}${castHtml(o, dis)}${PROMPT ? productLockHtml(o, dis) : ''}`)}
-      ${grp('video', '🎥 Hình ảnh &amp; video', esc(sums.video), `<label class="field"><span>Độ dài video</span><select data-opt="length" ${dis}>${selectOptions(m.lengths.map(n => [n, noBoard(o) ? `~${n} giây (${Math.max(1, Math.min(10, Math.ceil(n / clipMax(o))))} clip)` : `~${n} giây (${(m.length_scenes || {})[n] || Math.max(m.scenes[0], Math.min(m.scenes[1], Math.round(n / 8)))} cảnh)`]), o.length)}</select></label>
+      ${grp('video', '🎥 Hình ảnh &amp; video', esc(sums.video), `<label class="field"><span>Độ dài video</span><select data-opt="length" ${dis} title="Chọn mốc có sẵn hoặc ✎ Tự nhập số giây">${selectOptions([...lengthChoices(o).map(n => [n, lengthLabel(o, n)]), ['custom', '✎ Tự nhập…']], o.length)}</select></label>
       ${PROMPT ? '' : boardToggleHtml(o, dis)}
       <label class="check st-wide"><input type="checkbox" data-opt="natural_look" ${o.natural_look !== false ? 'checked' : ''} ${dis}>
         <span><b>🌿 Hình ảnh tự nhiên, tươi sáng</b><br><small class="muted">${o.natural_look !== false
@@ -742,13 +762,27 @@ function createStudioPage(CFG) {
         <label class="field"><span>Cỡ cảnh</span>${sel('stKindShot', (m.shot_sizes || []).map(x => [x.value, x.label]), p.shot_size)}</label>
         <label class="field"><span>Góc máy</span>${sel('stKindAngle', (m.camera_angles || []).map(x => [x.value, x.label]), p.camera_angle)}</label></div>
       <label class="field"><span>Phong cách hình ảnh điền sẵn</span><input id="stKindStyle" value="${esc(p.style || '')}" placeholder="VD: ánh sáng tự nhiên, quay cầm tay, màu ấm"></label>
+      <div id="stKindFrames"></div>
       <small class="muted" id="stKindSrcNote">${k.source && (k.source.title || k.source.url) ? `Nguồn: ${esc(k.source.title || k.source.url)}` : ''}</small>
       <div class="modal-foot st-optfoot"><button class="btn ghost" data-kind-cancel type="button">Huỷ</button>
         <button class="btn primary" data-kind-save type="button">💾 Lưu mẫu</button></div></div>`, true);
     let source = k.source || null;
+    let frames = (k.frames || []).slice();  // 📸 khung mẫu của mẫu
+    let useFrames = k.use_frames !== false;
+    const drawFrames = () => {
+      const box = $('#stKindFrames');
+      if (!box) return;
+      box.innerHTML = frames.length ? `<div class="st-frames-box"><label class="check"><input type="checkbox" id="stKindUseFrames" ${useFrames ? 'checked' : ''}>
+        📸 Dùng ${frames.length} khung mẫu làm ảnh bìa cảnh — dự án chọn nhân vật thì chỉ thay khuôn mặt (giữ bố cục, kích thước)</label>
+        ${framesStrip(frames, true)}</div>` : '';
+      const cb = $('#stKindUseFrames');
+      if (cb) cb.onchange = () => { useFrames = cb.checked; };
+    };
+    drawFrames();
     $('#stKindDlg').onclick = async e => {
       const b = e.target.closest('button');
       if (!b) return;
+      if (b.dataset.frameRm !== undefined) { frames.splice(+b.dataset.frameRm, 1); return drawFrames(); }
       if (b.dataset.kindCancel !== undefined) return closeModal();
       if (b.dataset.kindPick !== undefined) {
         const files = await api('pick_files', 'video');
@@ -768,6 +802,9 @@ function createStudioPage(CFG) {
         if (dp.length) $('#stKindLen').value = String(dp.length);
         if (dp.style) $('#stKindStyle').value = dp.style;
         source = dr.source || null;
+        frames = (dr.frames || []).slice();
+        useFrames = dr.use_frames !== false;
+        drawFrames();
         $('#stKindSrcNote').textContent = source ? `Nguồn: ${source.title || source.url}` : '';
         return toast('Đã phân tích — xem / sửa ghi chú rồi bấm 💾 Lưu mẫu', 'ok');
       }
@@ -776,7 +813,8 @@ function createStudioPage(CFG) {
         camera_angle: $('#stKindAngle').value, style: $('#stKindStyle').value.trim() };
       b.disabled = true;
       const res = await api(CFG.api + 'kinds_save', { key: k.value || '', label: $('#stKindLabel').value, hint: $('#stKindHint').value,
-        note: $('#stKindNote').value, presets, source });
+        note: $('#stKindNote').value, presets, source,
+        frames: frames.map(f => ({ t: f.t, path: f.path, w: f.w, h: f.h })), use_frames: useFrames });
       b.disabled = false;
       if (!res.ok) return toast(res.error, 'error');
       S.meta.kinds = res.kinds;
@@ -1445,6 +1483,18 @@ function createStudioPage(CFG) {
         if (S.cur) markDirty();
         return render();
       }
+      if (t.dataset.opt === 'length' && t.value === 'custom') {  // ⏱ tự nhập độ dài video (giây)
+        const [lo, hi] = S.meta.length_range || [5, 300];
+        const raw = prompt(`Độ dài video (giây, ${lo}–${hi}):`, String(d.options.length || 60));
+        const n = Math.round(Number(String(raw || '').replace(',', '.')));
+        if (!raw || !Number.isFinite(n) || n < lo || n > hi) {
+          if (raw) toast(`Nhập số giây từ ${lo} đến ${hi}`, 'error');
+          return render();
+        }
+        d.options = { ...d.options, length: n };
+        if (S.cur) markDirty();
+        return render();
+      }
       if (t.dataset.opt) {
         const num = ['transition_duration', 'transition_volume'].includes(t.dataset.opt);
         d.options = { ...d.options, [t.dataset.opt]: t.type === 'checkbox' ? t.checked : num ? +t.value : t.value };
@@ -1454,7 +1504,7 @@ function createStudioPage(CFG) {
         if (S.cur) markDirty();
         if (t.dataset.opt === 'auto_video' && S.cur) return save(false);  // công tắc: lưu ngay, không làm prompt cũ hết hạn
         if (['model', 'image_engine', 'video_engine', 'scene_style', 'dub', 'lock_outfit', 'ref_note', 'negative_extra', 'post_ai', 'post_model',
-          'post_subs', 'subtitles', 'post_style', 'cast_direct', 'frame_mode', 'source_mode', 'chat_overlay', 'flow', 'transition_on', 'storyboard', 'frame_lock', 'frame_host', 'natural_look', 'shot_size', 'camera_angle', 'bgm', 'transition', 'length', 'aspect', 'quality'].includes(t.dataset.opt)) render();
+          'post_subs', 'subtitles', 'post_style', 'cast_direct', 'frame_mode', 'source_mode', 'chat_overlay', 'flow', 'transition_on', 'storyboard', 'frame_lock', 'frame_host', 'trend_frames', 'natural_look', 'shot_size', 'camera_angle', 'bgm', 'transition', 'length', 'aspect', 'quality'].includes(t.dataset.opt)) render();
       } else if (t.dataset.ban) {  // ràng buộc prompt: bật/tắt từng thứ bị cấm trong hình
         const all = (S.meta.bans || []).map(b => b.value);
         const on = new Set(bansOf(d.options));

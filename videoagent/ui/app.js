@@ -109,13 +109,30 @@ function initSidebar() {
   window.SettingsPage.applyMenus();  // Cài đặt → Chức năng: ẩn các mục menu đã tắt
 }
 
+// 🔒 màn bị khoá (Cài đặt → Bảo mật → Khoá màn hình): biểu tượng khoá trên thanh bên + hỏi mật khẩu khi mở
+const screenLocked = view => ((state.boot && state.boot.settings && state.boot.settings.locked_screens) || []).includes(view);
+window.applyScreenLocks = () => $$('.sb-item[data-view]').forEach(el => el.classList.toggle('sb-locked', screenLocked(el.dataset.view)));
+let screenPass = false;
+
 function navigate(view) {
   if (view === 'folder') return api('open_output_dir');
   if (view === 'profiles') return openSettings('profiles');  // Profile trình duyệt nằm trong Cài đặt (cần mật khẩu)
+  if (view === 'facebook') return openSettings('facebook');  // 📣 Fanpage Facebook nằm trong Cài đặt → Facebook · Meta
+  if (screenLocked(view) && !screenPass && window.requireAdmin) {
+    const el = $(`.sb-item[data-view="${view}"] .sb-label`);
+    window.requireAdmin(`mở màn “${el ? el.textContent.trim() : view}”`).then(ok => {
+      if (!ok) return;
+      screenPass = true;
+      try { navigate(view); } finally { screenPass = false; }
+    });
+    return;
+  }
   const previous = state.view;
   state.view = view;
   if (view === 'create' && previous === 'library') switchTab('progress');
-  $$('.sb-item[data-view]').forEach(item => item.classList.toggle('active', item.dataset.view === view));
+  // trang Thiết kế workflow không còn mục riêng trên thanh bên → sáng mục Workflow (cũ)
+  $$('.sb-item[data-view]').forEach(item => item.classList.toggle('active', item.dataset.view === view
+    || (view === 'workflow' && item.dataset.view === 'wf-list')));
   const workspace = view === 'create' || view === 'library';
   $('#workspace').classList.toggle('hidden', !workspace);
   $('#workspace').classList.toggle('library', view === 'library');
@@ -129,6 +146,12 @@ function navigate(view) {
   if (view === 'adbot') window.AdBotPage.show();
   $('#page-canvas').classList.toggle('hidden', view !== 'canvas');
   if (view === 'canvas') window.CanvasPage.show();
+  $('#page-fcanvas').classList.toggle('hidden', view !== 'fcanvas');
+  if (view === 'fcanvas') window.FlowCanvasPage.show();  // 🎬 Grok Canvas
+  $('#page-channel').classList.toggle('hidden', view !== 'channel');
+  if (view === 'channel') window.ChannelPage.show();
+  $('#page-mcp').classList.toggle('hidden', view !== 'mcp');
+  if (view === 'mcp') window.McpPage.show();
   $('#page-cast').classList.toggle('hidden', view !== 'cast');
   if (view === 'cast') window.CastPage.show();
   $('#page-posts').classList.toggle('hidden', view !== 'posts');
@@ -605,7 +628,7 @@ function renderFacebook(fb) {
   $('#fbLoadPages').disabled = !fb.logged_in;
   const pages = fb.pages || [];
   const connected = pages.filter(p => p.connected).length;
-  $('#sbFbCount').textContent = connected;
+  if ($('#sbFbCount')) $('#sbFbCount').textContent = connected;
   $('#fbPagesTotal').textContent = pages.length ? `③ ${pages.length} Fanpage · đã kết nối ${connected}` : '③ Chưa có fanpage';
   $('.fb-tools').classList.toggle('hidden', pages.length < 2);
   renderFbPages();
@@ -1972,7 +1995,11 @@ const OfferForm = (() => {
 window.__onBackend = ({ event, data }) => {
   if (event.startsWith('mstudio_')) return window.MuseStudioPage.update(`studio_${event.slice(8)}`, data);  // Studio Muse AI
   if (event.startsWith('mhub_')) return window.MuseHubPage.update(event, data);  // Studio Muse AI · dây chuyền
-  if (event.startsWith('canvas_')) return window.CanvasPage && window.CanvasPage.update(event, data);  // Canvas
+  if (event.startsWith('fcanvas_')) return window.FlowCanvasPage && window.FlowCanvasPage.update(event.slice(1), data);  // 🎬 Grok Canvas
+  if (event.startsWith('canvas_')) {  // Canvas — Trợ lý nuôi kênh chạy trên bảng Canvas riêng nên cũng nghe các sự kiện này
+    if (window.ChannelPage) window.ChannelPage.update(event, data);
+    return window.CanvasPage && window.CanvasPage.update(event, data);
+  }
   switch (event) {
     case 'seedance': window.SeedanceStudio.update(data); break;
     case 'studio_update': case 'studio_log': case 'studio_progress': case 'studio_done': case 'studio_error': case 'studio_cancelled':
@@ -1983,6 +2010,13 @@ window.__onBackend = ({ event, data }) => {
     case 'adreq_changed': if (window.AdReqPage) window.AdReqPage.reload(data); break;  // yêu cầu mới từ nhóm Zalo
     case 'adchat_status': if (window.AdReqPage) window.AdReqPage.status(data); break;  // Claude đang trả lời / chờ quyền công cụ
     case 'posts_changed': if (window.PostsPage) window.PostsPage.reload(); break;  // bài lên lịch vừa đăng / lỡ lịch
+    case 'post_review':  // 📥 khối Đăng bài trên Canvas vừa lưu bài CHỜ DUYỆT → 🔔 thông báo + chuông
+      if (window.PostsPage) window.PostsPage.reload();
+      if (window.Notify) window.Notify.push({ key: `review:${data.id}`, status: 'review', label: 'Quản lý bài đăng', view: 'posts',
+        title: data.title || 'Bài đăng mới', results: data.thumb ? [{ kind: 'image', url: data.thumb }] : [],
+        text: `Chờ duyệt${data.page ? ` · ${data.page}` : ''}${data.when_text ? ` · ${data.when === 'now' ? '' : data.when === 'app' ? 'lên lịch ' : 'hẹn giờ '}${data.when_text}` : ''}${data.board ? ` · ${data.board}` : ''}` });
+      else toast(`📥 Bài “${data.title || ''}” đang chờ duyệt ở Quản lý bài đăng`, 'warn');
+      break;
     case 'offer_closed': OfferForm.close(data.id); break;
     case 'cast_update': case 'cast_done': case 'cast_error': case 'cast_log': case 'cast_progress': case 'cast_tasks':
       window.CastPage.update(event, data); break;

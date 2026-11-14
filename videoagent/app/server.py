@@ -78,6 +78,11 @@ class Handler(BaseHTTPRequestHandler):
             from .cast import CAST_DIR
 
             base, rel = CAST_DIR, path[len("/cast/"):]
+        elif path.startswith("/kind-frame/"):
+            # 📸 khung mẫu của mẫu dự án Studio (chỉ ảnh)
+            if Path(path).suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
+                return self.send_error(404)
+            base, rel = DATA_DIR / "studio_kinds_frames", path[len("/kind-frame/"):]
         elif path.startswith("/post-media/"):
             # Quản lý bài đăng: chỉ phục vụ ảnh / video của bài (không bao giờ trả posts.json)
             if Path(path).suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm", ".m4v"):

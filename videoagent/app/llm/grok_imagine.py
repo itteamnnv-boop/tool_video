@@ -146,13 +146,73 @@ def _attach_images(page, images: list[Path], log) -> None:
         log(f"Đã đính kèm đủ {len(images)} ảnh lên Grok")
 
 
+MODE_WAIT_S = 15
+# nút chế độ Video: radio (10/2026) → tab → nút chữ "Video" (Grok hay đổi kiểu nút)
+VIDEO_MODE_ALT = ("[role='radio'][aria-label='Video' i]", "[role='tab'][aria-label='Video' i]",
+                  "button[aria-label='Video' i]", "[role='radio']:text-is('Video')", "[role='tab']:text-is('Video')",
+                  "button:text-is('Video')")
+MODE_MENU = ("button[aria-label*='mode' i]", "button:text-is('Image')")
+MENU_VIDEO = "[role='menuitemradio']:has-text('Video'), [role='menuitem']:has-text('Video'), [role='option']:has-text('Video')"
+BLOCKED = re.compile(r"(upgrade|supergrok|premium|subscribe|rate limit|limit reached|nâng cấp|hết lượt)", re.I)
+BUTTONS_JS = """() => [...document.querySelectorAll('button,[role=radio],[role=tab]')]
+  .filter(b => { const r = b.getBoundingClientRect(); return r.width > 0 && r.height > 0; })
+  .map(b => (b.getAttribute('aria-label') || b.innerText || '').trim().split('\\n')[0].slice(0, 30))
+  .filter(Boolean).slice(0, 40)"""
+
+
+def _is_on(el) -> bool:
+    flags = (el.get_attribute("aria-checked") or "") + (el.get_attribute("aria-selected") or "") \
+        + (el.get_attribute("aria-pressed") or "")
+    return "true" in flags or (el.get_attribute("data-state") or "") in ("on", "active", "checked")
+
+
 def _select_video_mode(page) -> None:
-    btn = page.locator(VIDEO_MODE).first
-    if not btn.count():
-        raise LLMError("Không tìm thấy chế độ Video trên Grok Imagine (tài khoản có thể chưa được dùng video)")
-    if btn.get_attribute("aria-checked") != "true":
-        btn.click()
-        page.wait_for_timeout(800)
+    """Bật chế độ Video của Grok Imagine — chờ nút hiện, thử nhiều kiểu nút; không còn nút chọn mà đã có ô "Video duration"
+    (trang chỉ còn video) → coi như đang ở chế độ video."""
+    deadline = time.time() + MODE_WAIT_S
+    while True:
+        for sel in (VIDEO_MODE, *VIDEO_MODE_ALT):
+            btn = page.locator(sel).first
+            try:
+                if btn.count() and btn.is_visible():
+                    if not _is_on(btn):
+                        btn.click(timeout=3000)
+                        page.wait_for_timeout(800)
+                    return
+            except PWError:
+                continue
+        try:
+            if page.locator(f"button[aria-label='{OPTION_BUTTONS['duration']}']").first.count():
+                return  # đã ở chế độ video (có ô thời lượng video)
+        except PWError:
+            pass
+        if time.time() >= deadline:
+            break
+        page.wait_for_timeout(1000)
+    for sel in MODE_MENU:  # chế độ nằm trong menu thả xuống ("Image ▾" → Video)
+        try:
+            menu = page.locator(sel).first
+            if menu.count() and menu.is_visible():
+                menu.click(timeout=3000)
+                item = page.locator(MENU_VIDEO).first
+                item.wait_for(state="visible", timeout=3000)
+                item.click()
+                page.wait_for_timeout(800)
+                return
+        except PWError:
+            page.keyboard.press("Escape")
+    try:
+        text = page.locator("main").first.inner_text(timeout=2000) if page.locator("main").count() else ""
+        buttons = page.evaluate(BUTTONS_JS)
+    except PWError:
+        text, buttons = "", []
+    hit = BLOCKED.search(text or "")
+    if hit:
+        raise LLMError(f"Grok Imagine không cho tạo video lúc này (trang báo “{hit.group(1)}”) — tài khoản Grok này có thể "
+                       "hết lượt video hoặc cần gói trả phí; đợi rồi chạy lại, hoặc đổi profile Grok khác")
+    raise LLMError("Không tìm thấy chế độ Video trên Grok Imagine (giao diện Grok có thể đã đổi, hoặc tài khoản chưa "
+                   f"được dùng video). Nút đang thấy trên trang: {', '.join(buttons) or 'không có'} — gửi dòng này để "
+                   "sửa; bật “Hiện cửa sổ Chrome” để xem")
 
 
 def _current_value(btn) -> str:

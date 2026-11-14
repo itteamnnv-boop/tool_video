@@ -13,6 +13,7 @@ Dữ liệu: DATA_DIR/posts/posts.json; file: DATA_DIR/posts/media/<id>/ (phục
 """
 import getpass
 import json
+import re
 import shutil
 import threading
 import time
@@ -33,13 +34,23 @@ POST_TYPES = {  # cùng danh sách với block Đăng bài Facebook (workflow)
     "media": "Chỉ ảnh/video (không chữ)",
     "reel": "Reels (video dọc)",
     "story": "Story (ảnh/video hiện 24 giờ)",
+    "link": "Chia sẻ link (có ảnh xem trước)",
+    "dark": "Bài ẩn — chỉ dùng chạy quảng cáo (không hiện trên Fanpage)",
 }
-SCHEDULABLE = ("feed", "text", "media", "reel")
+SCHEDULABLE = ("feed", "text", "media", "reel", "link")  # Facebook không hẹn giờ Story / bài ẩn
+_URL = re.compile(r"https?://[^\s<>\"')\]]+")
+
+
+def first_url(text: str) -> str:
+    """Link đầu tiên trong chữ (kiểu Chia sẻ link để trống ô link → lấy từ nội dung)."""
+    m = _URL.search(str(text or ""))
+    return m.group(0).rstrip(".,;:!?…") if m else ""
 SCHEDULE_MIN, SCHEDULE_MAX = 10 * 60, 30 * 24 * 3600  # Facebook: hẹn giờ 10 phút → 30 ngày
 APP_SCHEDULE_MIN, APP_SCHEDULE_MAX = 60, 365 * 24 * 3600  # lên lịch app tự đăng: 1 phút → 1 năm
 GRACE = 15 * 60  # mở app trễ hơn giờ hẹn quá 15 phút → không tự đăng (lỡ lịch), chờ người dùng
 SOURCES = {"manual": "Tạo tay", "quick": "Đăng nhanh (Fanpage)", "library": "Thư viện video", "workflow": "Workflow",
-           "campaign": "Chiến dịch"}
+           "campaign": "Chiến dịch", "canvas": "Canvas"}
+REVIEW_WHEN = ("now", "app", "at")  # bài chờ duyệt: đăng ngay / app tự đăng lúc… / hẹn giờ trên Facebook
 MAX_POSTS = 3000
 MAX_FILES = 10
 _LOCK = threading.RLock()  # chung mọi PostStore (API, Workflow, Chiến dịch cùng ghi posts.json)
@@ -116,7 +127,10 @@ class PostStore:
         sch = post.get("schedule")
         if sch:
             sch = {**sch, "when": datetime.fromtimestamp(sch["at"]).strftime("%H:%M %d/%m/%Y")}
-        return {**post, "schedule": sch, "media": files, "type_label": POST_TYPES.get(post.get("kind"), post.get("kind", "")),
+        rv = post.get("review")
+        if rv:
+            rv = {**rv, "when_text": datetime.fromtimestamp(rv["at"]).strftime("%H:%M %d/%m/%Y") if rv.get("at") else ""}
+        return {**post, "schedule": sch, "review": rv, "media": files, "type_label": POST_TYPES.get(post.get("kind"), post.get("kind", "")),
                 "source_label": SOURCES.get(post.get("source"), post.get("source", "")),
                 "posted_count": len(ok), "last_publish": pubs[-1] if pubs else None}
 
@@ -138,9 +152,14 @@ class PostStore:
         caption = str(data.get("caption") or "").strip()[:63000]
         title = " ".join(str(data.get("title") or "").split())[:120]
         files = [str(f) for f in data.get("files") or [] if f]
-        if kind == "text":
+        link = str(data.get("link") or "").strip()[:1000]
+        if kind in ("text", "link"):
             files = []
-        if not caption and not files:
+        if link and not link.startswith(("http://", "https://")):
+            raise PostError("Link phải bắt đầu bằng http:// hoặc https://")
+        if kind == "link" and not (link or first_url(caption)):
+            raise PostError("Kiểu “Chia sẻ link” cần link (ô Link, hoặc 1 link trong nội dung)")
+        if not caption and not files and not link:
             raise PostError("Bài cần nội dung hoặc ảnh / video")
         pid = str(data.get("id") or "")
         with self._lock:
@@ -151,7 +170,7 @@ class PostStore:
                 post = {"id": pid, "created_at": now(), "source": "manual", "source_name": "", "status": "draft",
                         "publishes": []}
                 posts.append(post)
-            post.update(title=title or caption[:60] or "Bài đăng", caption=caption, kind=kind,
+            post.update(title=title or caption[:60] or link[:60] or "Bài đăng", caption=caption, kind=kind, link=link,
                         files=self._copy_media(pid, files), updated_at=now())
             self._save(posts)
         return self.public(post)
@@ -164,7 +183,7 @@ class PostStore:
 
     # ------------------------------------------------------------------ ghi lại bài đăng từ nơi khác
     def record(self, *, source: str, source_name: str, kind: str, caption: str, files: list, page_id: str, page: str,
-               result: dict, by: str, scheduled_at: int | None = None) -> dict:
+               result: dict, by: str, scheduled_at: int | None = None, link: str = "") -> dict:
         """Lưu bài vừa đăng thành công (Thư viện / Workflow / Chiến dịch) để quản lý + đăng lại. Bên gọi bỏ qua mọi
         lỗi ở đây — lưu lịch sử không được làm hỏng bài vừa đăng."""
         pid = f"p{datetime.now():%Y%m%d%H%M%S}{uuid.uuid4().hex[:4]}"
@@ -178,7 +197,8 @@ class PostStore:
             post = {"id": pid, "created_at": now(), "updated_at": now(),
                     "source": source if source in SOURCES else "manual", "source_name": source_name[:120],
                     "title": (caption or source_name or "Bài đăng")[:60], "caption": caption or "", "kind": kind,
-                    "files": names, "publishes": [entry], "status": "scheduled" if scheduled_at else "posted"}
+                    "link": link or "", "files": names, "publishes": [entry],
+                    "status": "scheduled" if scheduled_at else "posted"}
             posts = self._load()
             posts.append(post)
             self._save(posts)
@@ -208,7 +228,7 @@ class PostStore:
         kind = post.get("kind") if post.get("kind") in POST_TYPES else "feed"
         if scheduled_at:
             if kind not in SCHEDULABLE:
-                raise PostError("Facebook không cho hẹn giờ Story")
+                raise PostError(f"Facebook không cho hẹn giờ kiểu “{POST_TYPES[kind]}”")
             delta = int(scheduled_at) - time.time()
             if not SCHEDULE_MIN <= delta <= SCHEDULE_MAX:
                 raise PostError("Facebook chỉ cho hẹn giờ từ 10 phút đến 30 ngày tính từ bây giờ")
@@ -224,7 +244,7 @@ class PostStore:
         for page_id in page_ids:
             page_name = (pages.get(page_id) or {}).get("name", page_id)
             try:
-                res = self._send(kind, page_id, caption, images, videos, scheduled_at)
+                res = self._send(kind, page_id, caption, images, videos, scheduled_at, post.get("link") or "")
                 results.append(self._publish_entry(page_id, page_name, by, result=res, scheduled_at=scheduled_at))
             except Exception as exc:  # lỗi từng page: ghi lại, đăng tiếp page khác
                 results.append(self._publish_entry(page_id, page_name, by, error=str(exc), scheduled_at=scheduled_at))
@@ -233,6 +253,7 @@ class PostStore:
             p["publishes"] = (p.get("publishes") or []) + results
             if any(r["post_id"] or r["url"] for r in results):
                 p["status"] = "scheduled" if scheduled_at else "posted"
+                self._approved(p, by)
             elif p.get("status") in ("draft", "queued", "missed"):
                 p["status"] = "error"
 
@@ -267,6 +288,7 @@ class PostStore:
             p["schedule"] = {"at": at, "page_ids": page_ids, "pages": names, "by": by or who(), "set_at": now()}
             p["status"] = "queued"
             p.pop("auto", None)
+            self._approved(p, by or who())
 
         return self.public(self._update(pid, apply))
 
@@ -349,22 +371,78 @@ class PostStore:
         return len(due)
 
     def queue_new(self, *, source: str, source_name: str, kind: str, caption: str, files: list, page_id: str,
-                  at: int, by: str) -> dict:
+                  at: int, by: str, link: str = "") -> dict:
         """Tạo bài mới + lên lịch app tự đăng (Workflow: block Đăng bài chọn “Lên lịch”, sau khi bạn duyệt)."""
         pid = f"p{datetime.now():%Y%m%d%H%M%S}{uuid.uuid4().hex[:4]}"
         kind = kind if kind in POST_TYPES else ("text" if not files else "feed")
         with self._lock:
-            names = self._copy_media(pid, [f for f in files if Path(str(f)).is_file()]) if kind != "text" else []
+            keep = kind not in ("text", "link")
+            names = self._copy_media(pid, [f for f in files if Path(str(f)).is_file()]) if keep else []
             posts = self._load()
             posts.append({"id": pid, "created_at": now(), "updated_at": now(),
                           "source": source if source in SOURCES else "manual", "source_name": source_name[:120],
                           "title": (caption or source_name or "Bài đăng")[:60], "caption": caption or "", "kind": kind,
-                          "files": names, "publishes": [], "status": "draft"})
+                          "link": link or "", "files": names, "publishes": [], "status": "draft"})
             self._save(posts)
         return self.schedule(pid, [page_id], at, True, by=by)
 
-    def _send(self, kind: str, page_id: str, caption: str, images: list, videos: list, scheduled_at: int | None) -> dict:
+    # ------------------------------------------------------------------ chờ duyệt (Canvas: “📥 Lưu vào Quản lý bài đăng”)
+    def pending_new(self, *, source: str, source_name: str, kind: str, caption: str, files: list, page_id: str,
+                    page: str, when: str = "now", at: int | None = None, by: str = "", link: str = "") -> dict:
+        """Lưu bài CHỜ DUYỆT (chưa đăng gì): người dùng xem ở Quản lý bài đăng rồi bấm Duyệt & đăng (vẫn qua bước xác
+        nhận như đăng tay) hoặc Từ chối. review = Fanpage + thời điểm mà khối đăng đã chọn — điền sẵn khi duyệt."""
+        pid = f"p{datetime.now():%Y%m%d%H%M%S}{uuid.uuid4().hex[:4]}"
+        kind = kind if kind in POST_TYPES else ("text" if not files else "feed")
+        when = when if when in REVIEW_WHEN else "now"
+        with self._lock:
+            keep = kind not in ("text", "link")
+            names = self._copy_media(pid, [f for f in files if Path(str(f)).is_file()]) if keep else []
+            post = {"id": pid, "created_at": now(), "updated_at": now(),
+                    "source": source if source in SOURCES else "manual", "source_name": source_name[:120],
+                    "title": (caption or link or source_name or "Bài đăng")[:60], "caption": caption or "", "kind": kind,
+                    "link": link or "", "files": names, "publishes": [], "status": "pending",
+                    "review": {"page_ids": [page_id] if page_id else [], "pages": [page] if page else [], "when": when,
+                               "at": int(at) if at and when != "now" else None, "by": by or who(), "requested_at": now(),
+                               "from": source_name[:120]}}
+            posts = self._load()
+            posts.append(post)
+            self._save(posts)
+        return self.public(post)
+
+    @staticmethod
+    def _approved(p: dict, by: str) -> None:
+        """Bài chờ duyệt vừa được đăng / lên lịch thành công → ghi ai duyệt, bỏ yêu cầu duyệt."""
+        if p.get("review") or p.get("status") == "pending":
+            p["reviewed"] = {"ok": True, "by": by, "at": now()}
+            p.pop("review", None)
+
+    def reject(self, pid: str) -> dict:
+        """Từ chối bài chờ duyệt: không đăng, giữ bài trong danh sách (sửa rồi đăng tay vẫn được)."""
+        def apply(p):
+            if p.get("status") != "pending":
+                raise PostError("Bài này không còn chờ duyệt")
+            p["status"] = "rejected"
+            p["reviewed"] = {"ok": False, "by": who(), "at": now()}
+            p.pop("review", None)
+
+        return self.public(self._update(pid, apply))
+
+    def pending_count(self) -> int:
+        return sum(1 for p in self._load() if p.get("status") == "pending")
+
+    def _send(self, kind: str, page_id: str, caption: str, images: list, videos: list, scheduled_at: int | None,
+              link: str = "") -> dict:
         fb = self.facebook
+        if kind == "link":
+            link = link or first_url(caption)
+            if not link:
+                raise PostError("Kiểu “Chia sẻ link” cần link")
+            return fb.post_link(page_id, caption, link, scheduled_at)
+        if kind == "dark":  # bài ẩn cho quảng cáo: video > ảnh > link > chữ
+            if scheduled_at:
+                raise PostError("Facebook không hẹn giờ bài ẩn")
+            return fb.post_dark(page_id, caption, link if not (videos or images) else "", images if not videos else [],
+                                videos[0] if videos else "")
         if kind == "text":
             if not caption:
                 raise PostError("Bài “Chỉ bài viết” cần nội dung")

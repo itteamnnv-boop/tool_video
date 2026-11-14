@@ -254,14 +254,16 @@ def chatgpt_images(prompt: str, *, aspect: str, count: int, images: list[Path], 
                 before = set(_images(page, CHATGPT_SCOPE, CHATGPT_EXCLUDE))
                 if i == 0:
                     message = (f"Hãy tạo 1 hình ảnh tỉ lệ {aspect} theo mô tả sau. Chỉ trả về ảnh, không giải thích. "
-                               f"{CHATGPT_SELF_ADJUST}\n" + prompt)
+                               f"{'' if images else CHATGPT_FRESH + ' '}{CHATGPT_SELF_ADJUST}\n" + prompt)
                 else:
                     message = (f"Tạo thêm 1 phiên bản khác của ảnh trên (cùng yêu cầu, tỉ lệ {aspect}, bố cục/góc máy "
                                f"khác một chút). Chỉ trả về ảnh. {CHATGPT_SELF_ADJUST}")
                 previous = _chatgpt_last_reply(page)
                 _chatgpt_send(page, site, message, check_cancel, log)
                 log(f"Đã gửi prompt — ChatGPT đang tạo ảnh {i + 1}/{count} (thường mất 30–90 giây)…")
-                src = _chatgpt_wait_image(page, site, before, previous, timeout_s, check_cancel, log)
+                src = _chatgpt_wait_image(page, site, before, previous, timeout_s, check_cancel, log,
+                                          fresh=CHATGPT_NO_SOURCE.format(aspect=aspect) if not images else "",
+                                          retry=CHATGPT_RETRY.format(aspect=aspect))
                 results.append(_download(ctx, page, src))
                 log(f"Đã nhận ảnh {i + 1}/{count} từ ChatGPT")
             return results
@@ -277,6 +279,20 @@ CHATGPT_MAX_AUTO = 2  # số lần tự đồng ý tối đa cho 1 ảnh
 # ChatGPT hỏi lại / đề xuất phương án khác (thay vì tạo ảnh) → tự đồng ý; từ chối hẳn → báo lỗi kèm câu trả lời
 CHATGPT_OFFER = re.compile(r"(\?|bạn có muốn|muốn mình|có thể thử|mình có thể|phiên bản|thay vì|would you like|"
                            r"do you want|shall i|should i|i can (?:try|create|make)|instead)", re.I)
+# ChatGPT tưởng là yêu cầu SỬA ảnh ("Vui lòng tải lên ảnh gốc…") trong khi không có ảnh nào → nhắc tạo ảnh mới từ đầu
+CHATGPT_ASK_UPLOAD = re.compile(r"(tải (lên|ảnh)|ảnh gốc|gửi (cho (tôi|mình) )?ảnh|upload|attach|share (the|an|your) "
+                                r"(image|photo)|provide (the|an) (image|photo)|original (image|photo))", re.I)
+CHATGPT_NO_SOURCE = ("Không có ảnh gốc nào cả — đây KHÔNG phải yêu cầu sửa ảnh. Hãy tự tạo 1 ảnh MỚI hoàn toàn từ mô tả "
+                     "ở trên (tỉ lệ {aspect}), chỉ vẽ khoảnh khắc đầu tiên của cảnh. Chỉ trả về ảnh.")
+CHATGPT_FRESH = ("Đây là ảnh MỚI tạo từ đầu bằng mô tả chữ — không có ảnh gốc, không cần tải ảnh lên, không phải sửa ảnh "
+                 "có sẵn.")
+# công cụ tạo ảnh hỏng giữa chừng ("Image generation failed" / "Không thể tạo lại ảnh…") → tự gửi lại bản giản lược
+CHATGPT_FAILED = re.compile(r"(image generation failed|couldn.t (generate|create)|unable to (generate|create)|"
+                            r"something went wrong|không thể tạo|không tạo được|công cụ tạo ảnh không)", re.I)
+CHATGPT_RETRY = ("Hãy thử tạo lại ảnh đó một lần nữa: tạo 1 ảnh MỚI hoàn toàn từ mô tả ở trên (tỉ lệ {aspect}), không phải "
+                 "sửa ảnh. Nếu cảnh phức tạp thì giản lược: bỏ chuyển động máy / góc bay drone, chụp ngang tầm mắt từ mặt đất, "
+                 "chỉ giữ chủ thể và bối cảnh chính. Chỉ trả về ảnh.")
+CHATGPT_MAX_RETRY = 2
 CHATGPT_WORKING = re.compile(r"(creating image|generating|đang tạo (hình )?ảnh|image created|đã tạo ảnh)", re.I)
 CHATGPT_REPLY_JS = """() => {
   const msgs = [...document.querySelectorAll("[data-message-author-role='assistant']")];
@@ -345,12 +361,13 @@ def _chatgpt_last_reply(page) -> str:
         return ""
 
 
-def _chatgpt_wait_image(page, site, before: set, previous: str, timeout_s: int, check_cancel, log) -> str:
+def _chatgpt_wait_image(page, site, before: set, previous: str, timeout_s: int, check_cancel, log, fresh: str = "",
+                        retry: str = "") -> str:
     """Chờ ảnh ChatGPT tạo. Mỗi 30 giây chưa có ảnh thì xem ChatGPT có trả lời bằng CHỮ không (câu trả lời mới, đã
     đứng yên qua 2 lần kiểm tra, không còn đang tạo): hỏi lại / đề xuất phương án nhẹ nhàng hơn → tự trả lời đồng ý
     (tối đa CHATGPT_MAX_AUTO lần); từ chối hẳn → báo lỗi kèm câu ChatGPT nói (thay vì chờ tới hết giờ)."""
     deadline = time.time() + timeout_s
-    replies, seen = 0, ""
+    replies, seen, retries = 0, "", 0
     while True:
         left = deadline - time.time()
         if left <= 0:
@@ -368,6 +385,19 @@ def _chatgpt_wait_image(page, site, before: set, previous: str, timeout_s: int, 
             continue
         if text != seen:  # câu trả lời mới → đợi thêm 1 lượt cho chắc ChatGPT đã nói xong (và ảnh không tới sau)
             seen = text
+            continue
+        if retry and retries < CHATGPT_MAX_RETRY and CHATGPT_FAILED.search(text):  # công cụ tạo ảnh hỏng → thử lại
+            retries += 1
+            log(f"ChatGPT báo tạo ảnh thất bại — gửi lại bản giản lược (lần {retries}/{CHATGPT_MAX_RETRY})", "warn")
+            previous, seen = text, ""
+            _chatgpt_send(page, site, retry, check_cancel, log)
+            deadline = max(deadline, time.time() + 180)  # lượt thử lại có đủ thời gian
+            continue
+        if fresh and CHATGPT_ASK_UPLOAD.search(text):  # đòi ảnh gốc dù không gửi ảnh nào → nhắc tạo mới (1 lần)
+            log("ChatGPT tưởng là sửa ảnh, đòi ảnh gốc — nhắc tạo ảnh mới từ mô tả", "warn")
+            previous, seen = text, ""
+            _chatgpt_send(page, site, fresh, check_cancel, log)
+            fresh = ""
             continue
         if replies < CHATGPT_MAX_AUTO and CHATGPT_OFFER.search(text):
             from . import offers

@@ -69,8 +69,11 @@ def migrate_legacy_keys() -> None:
 
 
 def get_key(provider: str = "anthropic") -> str:
+    from .. import api_mode
     from ..config import settings
 
+    if not api_mode.enabled(settings):  # 🔑 chỉ dùng model trình duyệt → bỏ cả khoá trong biến môi trường
+        return ""
     return os.environ.get(ENV_KEYS[provider]) or settings.get(SETTING_KEYS[provider]) or ""
 
 

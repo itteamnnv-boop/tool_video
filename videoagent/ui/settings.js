@@ -11,8 +11,8 @@
     ['storage', '📁', 'Lưu trữ', 'Thư mục video, file tạm'],
     ['video', '🎬', 'Video & âm thanh', 'FPS, luồng song song, nhạc nền'],
     ['browser', '🌐', 'Trình duyệt', 'Cách điều khiển Chrome'],
-    ['api', '🔑', 'Khoá API & model API', 'Anthropic, OpenAI, Gemini'],
-    ['facebook', '📣', 'Facebook · Meta', 'Token, App ID / Secret'],
+    ['api', '🔑', 'Khoá API & model API', 'Anthropic, OpenAI, Gemini, HeyGen'],
+    ['facebook', '📣', 'Facebook · Meta', 'Token, App ID / Secret, Fanpage', true],
     ['zalo', '💬', 'Zalo', 'Nhận yêu cầu quảng cáo'],
     ['ui', '🖥', 'Giao diện', 'Màn Loading'],
     ['security', '🔒', 'Bảo mật', 'Mật khẩu quản trị, khoá Cài đặt'],
@@ -65,6 +65,7 @@
     });
     const menus = state.boot.settings.menus || {};
     menuItems().forEach(it => it.el.classList.toggle('hidden', !menuOn(it, menus)));
+    if (window.applyScreenLocks) window.applyScreenLocks();  // 🔒 biểu tượng khoá trên mục màn bị khoá
     let head = null, any = false;
     const close = () => { if (head) head.classList.toggle('hidden', !any); };
     $$('#sidebar > *').forEach(el => {
@@ -104,6 +105,42 @@
         </div>`).join('')}</div>`;
   }
 
+  /* ------------------------------------------------------------ 🔒 khoá từng màn (Bảo mật) */
+  const NO_LOCK = ['settings', 'help', 'folder', 'profiles'];  // nút / màn đã có khoá riêng
+  function screenLocksHtml() {
+    const locked = state.boot.settings.locked_screens || [];
+    const items = menuItems().filter(it => !NO_LOCK.includes(it.view));
+    return `<div class="set-scrlock"><div class="field"><span>🔒 Khoá màn hình</span>
+      <small class="muted">Màn được khoá: bấm vào phải nhập mật khẩu quản trị (dùng chung với Cài đặt, tự khoá lại sau ${SET.ttl || 15} phút không
+        thao tác). Fanpage Facebook / Quảng cáo / Quản lý bài đăng còn chặn luôn lệnh kết nối, sửa, đăng bài khi chưa mở khoá;
+        đăng bài từ quy trình Canvas hoặc lịch đã duyệt vẫn chạy.${SET.lockOff ? ' <b>Đang chạy từ mã nguồn — khoá chỉ có hiệu lực ở bản build.</b>' : ''}</small></div>
+      <div class="set-feat-groups"><div class="set-feat-group">${items.map(it => `<label class="set-feat ${locked.includes(it.view) ? 'on' : ''}" title="${esc(it.label)}">
+        <span class="set-feat-ic">${it.icon}</span><span class="set-feat-txt"><b>${esc(it.label)}</b>${locked.includes(it.view) ? '<small>🔒 Đang khoá</small>' : ''}</span>
+        <span class="set-switch"><input type="checkbox" data-scrlock="${esc(it.view)}" ${locked.includes(it.view) ? 'checked' : ''}><i></i></span></label>`).join('')}</div></div></div>`;
+  }
+  function bindScreenLocks() {
+    const box = $('#setBlock-security');
+    if (!box) return;
+    box.querySelectorAll('[data-scrlock]').forEach(cb => {
+      cb.onchange = async () => {
+        const cur = new Set(state.boot.settings.locked_screens || []);
+        if (cb.checked) cur.add(cb.dataset.scrlock); else cur.delete(cb.dataset.scrlock);
+        state.boot.settings = await api('save_settings', { locked_screens: [...cur] });
+        const saved = state.boot.settings.locked_screens || [];
+        if (saved.includes(cb.dataset.scrlock) !== cb.checked) {
+          cb.checked = !cb.checked;
+          return toast('Cài đặt đang khoá — mở khoá Cài đặt rồi đổi lại', 'error');
+        }
+        cb.closest('.set-feat').classList.toggle('on', cb.checked);
+        const txt = cb.closest('.set-feat').querySelector('.set-feat-txt');
+        txt.querySelector('small') && txt.querySelector('small').remove();
+        if (cb.checked) txt.insertAdjacentHTML('beforeend', '<small>🔒 Đang khoá</small>');
+        if (window.applyScreenLocks) window.applyScreenLocks();
+        toast(cb.checked ? '🔒 Đã khoá màn này' : 'Đã bỏ khoá màn này', 'ok');
+      };
+    });
+  }
+
   async function saveMenus(menus) {
     state.boot.settings = await api('save_settings', { menus });
     applyMenus();
@@ -136,7 +173,9 @@
     const lic = state.boot.license;
     switch (id) {
       case 'features': return featuresHtml();
-      case 'models': return `<div id="setModels"><p class="hint">Đang tải danh sách model…</p></div>
+      case 'models': return `<label class="check set-first" title="Tắt: chỉ dùng model trên trình duyệt (tài khoản đã đăng nhập) — ẩn mọi khoá API và model API; khối / cài đặt cũ đang chọn model API tự chạy bằng bản trình duyệt cùng hãng. Bật: hiện lại mục Khoá API & các model API (cần quyền quản trị)."><input type="checkbox" id="setUseApi" ${s.use_api_models ? 'checked' : ''}> 🔑 Dùng model qua API key <small class="muted">(đang ${s.use_api_models ? 'bật' : 'tắt — chỉ dùng model trình duyệt'})</small></label>
+        ${s.use_api_models ? '' : '<p class="hint">Cần nhập khoá Anthropic / OpenAI / Gemini / <b>HeyGen</b> (khối 🧑‍💼 Video HeyGen)? Tick ô trên → bấm Lưu → mục <b>🔑 Khoá API &amp; model API</b> hiện ở cột trái.</p>'}
+        <div id="setModels"><p class="hint">Đang tải danh sách model…</p></div>
         <p class="hint">Cài 1 lần — Studio, Nhân vật &amp; Layout, Viết content, Chiến dịch, Trợ lý quảng cáo dùng chung bộ model này.
           Trang đặc thù giữ lựa chọn riêng: Studio Muse AI (luôn Muse), Seedance, Workflow (từng nút). Tạo hình ảnh / Tạo video mặc định theo bộ này, vẫn đổi được từng lần.</p>`;
       case 'storage': return `
@@ -152,6 +191,8 @@
         </div>
         <div class="field"><span>Thư mục nhạc nền (trống = nhạc nền tự tổng hợp)</span>
           <div class="inline"><input id="setMusic" value="${esc(s.music_dir)}" readonly><button class="btn ghost" id="setMusicPick" type="button">Chọn…</button><button class="btn ghost" id="setMusicClear" type="button">Xoá</button></div></div>
+        <label class="field"><span>🗣 Từ điển phát âm — tên riêng / thương hiệu giọng đọc hay đọc sai (mỗi dòng: viết = đọc). Áp cho VieNeu, giọng đọc Edge và lời thoại video; phụ đề vẫn giữ chữ gốc</span>
+          <textarea id="setPronounce" rows="4" spellcheck="false" placeholder="KINGER = Kinh gơ&#10;NPK = en pê ca">${esc(s.pronounce ?? '')}</textarea></label>
         <label class="field"><span>Khi model trình duyệt (Muse, ChatGPT…) đề xuất phương án khác thay vì tạo ảnh / video</span>
           <select id="setOfferMode">${opt([['ask', 'Hỏi tôi — hiện form duyệt (không trả lời sau 3 phút thì tự đồng ý)'], ['auto', 'Tự đồng ý đề xuất']], s.offer_mode || 'ask')}</select></label>`;
       case 'browser': return `
@@ -170,6 +211,7 @@
         <label class="field"><span>Anthropic API key — Claude (Chiến dịch, Content, Workflow)</span><input id="setAnthropicKey" type="password" value="${esc(s.anthropic_api_key || '')}" placeholder="sk-ant-…" autocomplete="off"></label>
         <label class="field"><span>OpenAI API key — GPT Image + GPT viết bài</span><input id="setOpenAIKey" type="password" value="${esc(s.openai_api_key || '')}" placeholder="sk-…" autocomplete="off"></label>
         <label class="field"><span>Gemini API key — Gemini / Veo / Nano Banana</span><input id="setKey" type="password" value="${esc(s.gemini_api_key)}" placeholder="AIza…" autocomplete="off"></label>
+        <label class="field"><span>HeyGen API key — khối 🧑‍💼 Video HeyGen (avatar đọc lời thoại)</span><input id="setHeyGenKey" type="password" value="${esc(s.heygen_api_key || '')}" placeholder="khoá ở app.heygen.com → Settings → API" autocomplete="off"></label>
         <div class="grid2">
           <label class="field"><span>Gemini model (API)</span><input id="setModel" value="${esc(s.gemini_model)}"></label>
           <label class="field"><span>Veo model</span><input id="setVeoModel" value="${esc(s.veo_model || '')}" placeholder="veo-3.1-generate-preview"></label>
@@ -192,14 +234,16 @@
           <label class="field"><span>Graph API version</span><input id="fbVersion" placeholder="v21.0"></label>
         </div>
         <label class="field"><span>App Secret</span><input id="fbAppSecret" type="password" placeholder="App Secret" autocomplete="off"></label>
-        <button class="btn ghost" id="fbSaveApp" type="button">Lưu & kiểm tra App</button>`;
+        <button class="btn ghost" id="fbSaveApp" type="button">Lưu & kiểm tra App</button>
+        <div class="set-fbpages"><div class="field"><span>📄 Fanpage — bật “Kết nối” cho trang muốn dùng và đăng bài</span></div>
+          <div id="setFbPagesSlot"></div></div>`;
       case 'zalo': return '<div id="zaloBox" class="zl-box"></div>';
       case 'profiles': return `<p class="hint set-first">Mỗi profile là một Chrome riêng với tài khoản đăng nhập riêng. Gán profile cho model (Gemini, Grok, ChatGPT, Dola, Muse…) —
           khi tạo video / ảnh, app tự chọn profile <b>rảnh</b> của model đó, nên nhiều profile = nhiều tác vụ chạy song song.</p>
         <div id="setProfilesSlot"></div>`;
       case 'security': return SET.lockOff ? `
         <p class="hint set-first">Khoá Admin <b>đang tắt</b> vì app đang chạy từ mã nguồn (<code>python main.py</code>) — Cài đặt và
-          chỉnh sửa Canvas mở tự do. Bản build (file .exe / .app) luôn bật khoá bằng mật khẩu quản trị.</p>` : `
+          chỉnh sửa Canvas mở tự do. Bản build (file .exe / .app) luôn bật khoá bằng mật khẩu quản trị.</p>` + screenLocksHtml() : `
         <p class="hint set-first">Cài đặt được khoá bằng mật khẩu quản trị — tự khoá lại sau ${SET.ttl || 15} phút không thao tác và khi thoát app.
           Bấm <b>🔒 Khoá</b> trên thanh để khoá ngay.</p>
         <div class="field"><span>Đổi mật khẩu quản trị</span>
@@ -208,7 +252,7 @@
           <input id="secNew" type="password" placeholder="Mật khẩu mới (ít nhất 4 ký tự)" autocomplete="new-password">
           <input id="secNew2" type="password" placeholder="Nhập lại mật khẩu mới" autocomplete="new-password">
         </div>
-        <button class="btn ghost" id="secChange" type="button">Đổi mật khẩu</button>`;
+        <button class="btn ghost" id="secChange" type="button">Đổi mật khẩu</button>` + screenLocksHtml();
       case 'ui': return `
         <label class="field"><span>Thời gian màn Loading khi mở app</span><select id="setSplash">
           ${opt([[0, 'Tắt — vào app ngay khi tải xong'], [1, '1 giây (mặc định)'], [2, '2 giây'], [3, '3 giây'], [5, '5 giây'], [8, '8 giây']], Number(s.splash_seconds ?? 1))}</select></label>
@@ -228,6 +272,9 @@
   function parkProfiles() {
     const pane = $('#profPane');
     if (pane && $('#page-profiles') && pane.parentElement !== $('#page-profiles')) $('#page-profiles').appendChild(pane);
+    // 📣 danh sách Fanpage (giao diện màn Fanpage cũ, #fbPagesPane) — cất tạm về chỗ cũ khi vẽ lại / khoá Cài đặt
+    const fb = $('#fbPagesPane'), home = $('#page-facebook .fb-layout');
+    if (fb && home && fb.parentElement !== home) home.appendChild(fb);
   }
 
   /** Xoá nội dung Cài đặt khỏi màn hình (đang khoá → không để khoá API / token trong trang). */
@@ -317,17 +364,24 @@
 
   function render() {
     parkProfiles();
+    // 🔑 chỉ dùng model trình duyệt → khối Khoá API ẩn (vẫn nằm trong trang để Lưu đọc được ô; backend không ghi khoá)
+    const hide = id => (id === 'api' && !state.boot.settings.use_api_models ? 'hidden' : '');
     $('#setNav').innerHTML = BLOCKS.map(([id, icon, title, desc]) => `
-      <button class="set-nav-item" type="button" data-set-go="${id}"><span class="set-nav-ic">${icon}</span>
+      <button class="set-nav-item ${hide(id)}" type="button" data-set-go="${id}"><span class="set-nav-ic">${icon}</span>
         <span><b>${esc(title)}</b><small>${esc(desc)}</small></span></button>`).join('');
     $('#setBody').innerHTML = BLOCKS.map(([id, icon, title, desc, wide]) => `
-      <section class="set-block ${wide ? 'wide' : ''}" id="setBlock-${id}" data-block="${id}">
+      <section class="set-block ${wide ? 'wide' : ''} ${hide(id)}" id="setBlock-${id}" data-block="${id}">
         <header class="set-block-head"><span class="set-block-ic">${icon}</span>
           <div><h3>${esc(title)}</h3><small>${esc(desc)}${INSTANT.includes(id) ? ' · <i>áp dụng ngay</i>' : ''}</small></div></header>
         <div class="set-block-body form">${blockBody(id)}</div>
       </section>`).join('');
     const pane = $('#profPane');
     if (pane) $('#setProfilesSlot').appendChild(pane);
+    const fbPane = $('#fbPagesPane');
+    if (fbPane && $('#setFbPagesSlot')) {
+      $('#setFbPagesSlot').appendChild(fbPane);
+      if (typeof refreshFacebook === 'function') refreshFacebook();
+    }
     bind();
     SET.rendered = true;
     applyView();  // chỉ hiện tab đang chọn
@@ -370,6 +424,7 @@
       ['#secOld', '#secNew', '#secNew2'].forEach(id => { $(id).value = ''; });
       toast('Đã đổi mật khẩu quản trị', 'ok');
     };
+    bindScreenLocks();
     bindFbSettings();
     if (window.ZaloSettings) window.ZaloSettings.mount();
     renderModelSettings(false);
@@ -447,7 +502,7 @@
       return showGate(st, '', true);
     }
     // khoá API dán dính khoảng trắng / chữ thừa → backend chỉ giữ phần sk-… / AIza… đầu tiên; báo để người dùng biết
-    const messy = [['#setOpenAIKey', 'OpenAI'], ['#setAnthropicKey', 'Anthropic'], ['#setKey', 'Gemini']]
+    const messy = [['#setOpenAIKey', 'OpenAI'], ['#setAnthropicKey', 'Anthropic'], ['#setKey', 'Gemini'], ['#setHeyGenKey', 'HeyGen']]
       .filter(([id]) => $(id) && /\s/.test($(id).value.trim())).map(([, name]) => name);
     if (messy.length) toast(`Khoá ${messy.join(', ')} có khoảng trắng / chữ thừa — đã tự lấy phần khoá đầu tiên. Kiểm tra lại nếu vẫn báo sai khoá.`, 'warn');
     const values = {
@@ -464,17 +519,27 @@
       openai_image_model: $('#setOpenAIModel').value.trim() || 'gpt-image-1',
       gemini_image_model: $('#setGeminiImgModel').value.trim() || 'gemini-2.5-flash-image',
       gemini_api_key: $('#setKey').value.trim(),
+      ...($('#setHeyGenKey') ? { heygen_api_key: $('#setHeyGenKey').value.trim() } : {}),
       fps: parseInt($('#setFps').value, 10),
       max_parallel_video: parseInt($('#setParVideo').value, 10),
       max_parallel_image: parseInt($('#setParImage').value, 10),
       offer_mode: $('#setOfferMode').value,
+      pronounce: $('#setPronounce').value,
       bgm_volume: Math.max(0, Math.min(1, parseFloat($('#setBgmVol').value) || 0)),
       music_dir: $('#setMusic').value,
       license_server: $('#setServer').value.trim(),
+      use_api_models: !!($('#setUseApi') && $('#setUseApi').checked),
       ...readModelSettings(),
     };
     const before = sharedModels();
+    const apiBefore = !!state.boot.settings.use_api_models;
     state.boot.settings = await api('save_settings', values);
+    if (!!state.boot.settings.use_api_models !== apiBefore) {  // đổi chế độ model → tải lại để mọi danh sách model cập nhật
+      toast(state.boot.settings.use_api_models ? 'Đã bật model qua API key — đang tải lại…' : 'Chỉ dùng model trình duyệt — đang tải lại…', 'ok');
+      setDirty(false);
+      setTimeout(() => location.reload(), 600);
+      return;
+    }
     $('#geminiModel').value = values.gemini_model;
     const r = await api('license_refresh');
     renderLicense(r.license);

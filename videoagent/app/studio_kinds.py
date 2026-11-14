@@ -1,14 +1,18 @@
 """Mẫu dự án Studio do người dùng tự thêm (kể cả mẫu tạo từ video trending) — lưu ở %APPDATA%/VideoAgent/studio_kinds.json.
 Mỗi mẫu: key ("c_…"), label (tên, có thể có emoji), hint (mô tả ngắn trên thẻ), note (ghi chú gửi model viết storyboard),
 presets (độ dài / tỉ lệ / cỡ cảnh / góc máy / phong cách điền sẵn), source (video gốc nếu tạo từ video trending)."""
+import shutil
 import threading
 import uuid
+from pathlib import Path
 
 from .paths import DATA_DIR
 from .util import read_json, write_json
 
 FILE = DATA_DIR / "studio_kinds.json"
+FRAMES_DIR = DATA_DIR / "studio_kinds_frames"  # 📸 khung mẫu của từng mẫu: <key>/frame_XX.jpg
 MAX_KINDS = 40
+MAX_FRAMES = 24
 _lock = threading.Lock()
 
 
@@ -22,6 +26,42 @@ def load() -> list[dict]:
     except (OSError, ValueError):
         return []
     return [k for k in data if isinstance(k, dict) and str(k.get("key", "")).startswith("c_")] if isinstance(data, list) else []
+
+
+def clean_frames(raw) -> list[dict]:
+    """📸 Khung mẫu (ảnh độ phân giải gốc chụp lúc phân tích): [{"t", "path", "w", "h"}] — chỉ file còn trên máy."""
+    out = []
+    for f in raw if isinstance(raw, list) else []:
+        if not isinstance(f, dict) or not f.get("path") or not Path(str(f["path"])).is_file():
+            continue
+        try:
+            out.append({"t": round(float(f.get("t") or 0), 2), "path": str(f["path"]),
+                        "w": int(f.get("w") or 0), "h": int(f.get("h") or 0)})
+        except (TypeError, ValueError):
+            continue
+    return out[:MAX_FRAMES]
+
+
+def _store_frames(key: str, frames: list[dict]) -> list[dict]:
+    """Chép khung mẫu vào thư mục riêng của mẫu (giữ đúng thứ tự), xoá khung cũ không còn dùng."""
+    folder = FRAMES_DIR / key
+    folder.mkdir(parents=True, exist_ok=True)
+    staged = []
+    for i, f in enumerate(frames, 1):
+        src = Path(f["path"])
+        dest = folder / f"frame_{i:02d}{src.suffix.lower() or '.jpg'}"
+        tmp = folder / f"_new_{i:02d}{src.suffix.lower() or '.jpg'}"
+        shutil.copy2(src, tmp)  # chép qua file tạm: khung cũ đổi thứ tự không đè lên nhau
+        staged.append((tmp, dest, f))
+    result, keep = [], set()
+    for tmp, dest, f in staged:
+        tmp.replace(dest)
+        keep.add(dest.name)
+        result.append({**f, "path": str(dest)})
+    for old in folder.iterdir():
+        if old.name not in keep:
+            old.unlink(missing_ok=True)
+    return result
 
 
 def clean(raw: dict) -> dict:
@@ -46,14 +86,20 @@ def clean(raw: dict) -> dict:
         presets["style"] = _flat(p["style"], 300)
     src = raw.get("source") if isinstance(raw.get("source"), dict) else {}
     key = str(raw.get("key") or "")
+    frames = clean_frames(raw.get("frames"))
     return {"key": key if key.startswith("c_") else f"c_{uuid.uuid4().hex[:8]}", "label": label,
             "hint": _flat(raw.get("hint"), 160), "note": note, "presets": presets,
+            **({"frames": frames, "use_frames": raw.get("use_frames") is not False} if frames else {}),
             **({"source": {"url": _flat(src.get("url"), 500), "title": _flat(src.get("title"), 200)}}
                if src.get("url") or src.get("title") else {})}
 
 
 def save(raw: dict) -> tuple[list[dict], str]:
     item = clean(raw)
+    if item.get("frames"):
+        item["frames"] = _store_frames(item["key"], item["frames"])
+    elif (FRAMES_DIR / item["key"]).is_dir():  # bỏ hết khung mẫu
+        shutil.rmtree(FRAMES_DIR / item["key"], ignore_errors=True)
     with _lock:
         current = load()
         old = next((i for i, k in enumerate(current) if k["key"] == item["key"]), None)
@@ -71,7 +117,13 @@ def delete(key: str) -> list[dict]:
     with _lock:
         items = [k for k in load() if k["key"] != key]
         write_json(FILE, items)
+    if key.startswith("c_") and (FRAMES_DIR / key).is_dir():
+        shutil.rmtree(FRAMES_DIR / key, ignore_errors=True)
     return items
+
+
+def get(key: str) -> dict | None:
+    return next((k for k in load() if k["key"] == key), None)
 
 
 def from_video(rv: dict, lengths: tuple) -> dict:
@@ -100,4 +152,5 @@ def from_video(rv: dict, lengths: tuple) -> dict:
     return {"label": f"🔥 {title[:50]}", "hint": _flat(d.get("hook") or d.get("chu_de") or "Theo cấu trúc video trending", 150),
             "note": "\n".join(parts)[:2500],
             "presets": {**({"length": length} if length else {}), **({"style": _flat(d["phong_cach"], 300)} if d.get("phong_cach") else {})},
-            "source": {"url": _flat(rv.get("source"), 500), "title": title}}
+            "source": {"url": _flat(rv.get("source"), 500), "title": title},
+            **({"frames": rv["frames"], "use_frames": True} if rv.get("frames") else {})}

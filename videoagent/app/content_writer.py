@@ -81,7 +81,9 @@ def models(settings) -> list[dict]:
              "note": "Khoá Anthropic ở Cài đặt → API & kết nối"} for m in CLAUDE_MODELS]
     out += [{"id": f"api:{m}", "name": f"OpenAI · {m}", "group": "API key", "ready": keys["openai"],
              "note": "Khoá OpenAI ở Cài đặt → API & kết nối"} for m in OPENAI_MODELS]
-    return out
+    from . import api_mode
+
+    return api_mode.text_models(out, settings)  # 🔑 chỉ dùng model trình duyệt → bỏ model API
 
 
 # ---------------------------------------------------------------- prompt

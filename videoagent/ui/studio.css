@@ -495,3 +495,12 @@ textarea.locked{background:rgba(141,153,140,.08);color:#9aa59a;border-style:dash
 .st-kind.st-kind-add.trend b{color:#ffb648}
 .st-kind-trendbox{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px dashed #7a6320;border-radius:9px;margin-bottom:10px}
 .st-kind-trendbox .row{gap:6px}.st-kind-trendbox input{flex:1;min-width:0}
+
+/* 📸 khung mẫu (video phân tích / mẫu trending): ảnh bìa cảnh = khung mẫu + thay mặt nhân vật */
+.st-frames-box{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.st-frames{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px}
+.st-frame{position:relative;margin:0;flex:0 0 auto;width:86px}
+.st-frame img{width:86px;height:86px;object-fit:cover;border-radius:7px;border:1px solid var(--line2);display:block}
+.st-frame figcaption{font-size:10px;color:var(--muted);text-align:center;margin-top:2px}
+.st-frame-x{position:absolute;top:3px;right:3px;width:20px;height:20px;border-radius:50%;border:0;background:rgba(0,0,0,.65);color:#fff;font-size:11px;cursor:pointer;line-height:20px;padding:0}
+.st-frames-note{display:block;margin-top:6px}

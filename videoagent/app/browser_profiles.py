@@ -20,8 +20,9 @@ from .util import slugify
 PROFILES_FILE = DATA_DIR / "browser_profiles.json"
 PROFILES_ROOT = DATA_DIR / "browser-profiles"
 SITE_NAMES = {"gemini": "Gemini", "grok": "Grok", "chatgpt": "ChatGPT", "dola": "Dola", "doubao": "Doubao",
-              "muse": "Muse (Meta)", "claude": "Claude"}
-LATER_SITES = ("claude",)  # model thêm sau khi đã có file profile (chưa có known_sites) — xem _load
+              "muse": "Muse (Meta)", "claude": "Claude", "flow": "Google Flow",
+              "qwen": "Qwen"}
+LATER_SITES = ("claude", "flow", "qwen")  # model thêm sau khi đã có file profile (chưa có known_sites) — xem _load
 CHANNELS = ("", "chrome", "msedge", "chromium")  # "" = theo Cài đặt chung
 DEFAULT_ID = "default"
 MAX_PROFILES = 30

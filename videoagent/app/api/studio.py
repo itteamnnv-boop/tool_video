@@ -156,7 +156,9 @@ class StudioApi:
         except Exception as exc:  # tải link / model / ffmpeg lỗi → báo nguyên nhân cho người dùng
             return _fail(exc)
         rel = Path(result["sheet"]).relative_to(settings.output_dir).as_posix() if result.get("sheet") else ""
-        return _ok(result={**result, "sheet_url": f"/media/{rel}" if rel else ""})
+        frames = [{**f, "url": "/media/" + Path(f["path"]).relative_to(settings.output_dir).as_posix()}
+                  for f in result.get("frames") or []]  # 📸 khung mẫu (xem ngay trên giao diện)
+        return _ok(result={**result, "sheet_url": f"/media/{rel}" if rel else "", **({"frames": frames} if frames else {})})
 
     def studio_ref_thumbs(self, paths: list) -> dict:
         """Ảnh thu nhỏ (data URL) của ảnh sản phẩm vừa chọn trên máy — để xem ngay khi viết ý tưởng."""
@@ -255,7 +257,10 @@ class StudioApi:
         res = self.studio_analyze_video(source, model, profile, show_browser)
         if not res.get("ok"):
             return res
-        return _ok(draft=studio_kinds.from_video(res["result"], LENGTHS))
+        draft = studio_kinds.from_video(res["result"], LENGTHS)
+        if draft.get("frames"):  # 📸 khung mẫu kèm URL (đã có trong kết quả phân tích)
+            draft["frames"] = res["result"].get("frames") or draft["frames"]
+        return _ok(draft=draft)
 
     def studio_import_storyboard(self, pid: str, text: str) -> dict:
         """Dán JSON storyboard model đã viết (app chưa lấy được câu trả lời) → thành các cảnh, không hỏi model lại."""

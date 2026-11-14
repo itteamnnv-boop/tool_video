@@ -114,7 +114,8 @@ class SystemApi:
                 ("studio", "Studio", "studio", self._studio.pool),
                 ("mstudio", "Studio Muse", "mstudio", self._studio_muse.pool),
                 ("campaign", "Chiến dịch", "camp-list", self._campaigns.pool),
-                ("workflow", "Workflow", "workflow", self._workflows.pool),
+                ("workflow", "Workflow", "wf-list", self._workflows.pool),
+                ("canvas", "Canvas", "canvas", self._canvas.pool),  # lượt chạy / khối Canvas xong, lỗi → 🔔 thông báo
                 ("cast", "Nhân vật & Layout", "cast", self._cast.pool)]
 
     def system_progress(self) -> dict:

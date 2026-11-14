@@ -32,12 +32,33 @@ ENGINES = {
         "note": "Trợ lý Muse của Meta (muse.ai). Muse Video đang mở dần — tài khoản chưa có thì Muse chỉ trả lời "
                 "bằng chữ và app báo lỗi rõ. Cần đăng nhập Muse trong Profile trình duyệt.",
     },
+    "flow_browser": {
+        "name": "Google Flow · Veo (trình duyệt)",
+        "durations": ["8s"], "resolutions": ["720p"], "aspects": ["9:16", "16:9"], "max_images": 3,
+        "note": "Google Flow (labs.google/fx/tools/flow) tạo video Veo có tiếng, mỗi video tốn tín dụng Flow. Dùng tài khoản "
+                "Google đã đăng nhập — gán “Google Flow” cho profile ở Profile trình duyệt rồi bấm Đăng nhập. App dùng chung "
+                "1 dự án Flow cho mọi video.",
+    },
+    "qwen_browser": {
+        "name": "Qwen · Create Video (trình duyệt)",
+        "durations": ["5s", "10s"], "resolutions": ["720p"],
+        "aspects": ["16:9", "9:16", "1:1", "4:3", "3:4"], "max_images": 1,
+        "note": "Chế độ Create Video của chat.qwen.ai (tài khoản Qwen đã đăng nhập). Nhận 1 ảnh khung đầu. Gán “Qwen” cho "
+                "profile ở Profile trình duyệt rồi bấm Đăng nhập.",
+    },
     "gemini_api": {
         "name": "Gemini · Veo (API key)",
         "durations": ["4s", "6s", "8s"], "resolutions": ["720p", "1080p"], "aspects": ["9:16", "16:9"], "max_images": 3,
         "note": "Dùng Gemini API key trong Cài đặt (tính phí theo giây video). Tối đa 3 ảnh tham chiếu.",
     },
 }
+
+
+LEGACY = {"aistudio_browser": "flow_browser"}  # model đã bỏ → model thay thế (khối / cài đặt cũ vẫn chạy)
+
+
+def resolve(engine) -> str:
+    return LEGACY.get(str(engine or ""), engine)
 
 
 def _seconds(value: str) -> int:
@@ -62,6 +83,7 @@ def generate(engine: str, prompt: str, out_path: Path, *, options: dict, images:
              show_browser: bool, log, check_cancel, on_progress) -> None:
     common = dict(aspect=options["aspect"], duration=options["duration"], resolution=options["resolution"],
                   images=images, log=log, check_cancel=check_cancel, on_progress=on_progress)
+    engine = resolve(engine)
     if engine == "grok_browser":
         from .grok_imagine import generate_video
         generate_video(prompt, out_path, channel=settings.get("browser_channel"), show_browser=show_browser, **common)
@@ -75,6 +97,14 @@ def generate(engine: str, prompt: str, out_path: Path, *, options: dict, images:
     elif engine == "muse_browser":
         from .muse_browser import muse_video
         muse_video(prompt, out_path, channel=settings.get("browser_channel"), show_browser=show_browser, **common)
+    elif engine == "flow_browser":
+        from .flow_video import generate_video as flow_generate
+        flow_generate(prompt, out_path, project_url=settings.get("flow_project_url") or "",
+                      remember_project=lambda url: settings.update({"flow_project_url": url}),
+                      channel=settings.get("browser_channel"), show_browser=show_browser, **common)
+    elif engine == "qwen_browser":
+        from .qwen_video import generate_video as qwen_generate
+        qwen_generate(prompt, out_path, channel=settings.get("browser_channel"), show_browser=show_browser, **common)
     elif engine == "gemini_api":
         from .gemini_veo import generate_video_api
         generate_video_api(prompt, out_path, api_key=settings.get("gemini_api_key"), model=settings.get("veo_model"),

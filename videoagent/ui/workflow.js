@@ -752,6 +752,12 @@
         : '<div class="muted">Chưa có block nào tạo văn bản / ảnh / video phía trước block này.</div>'}
         <small class="muted">Tick theo thứ tự muốn dùng (số bên phải). Dây nối tay vẫn dùng được; trên canvas tài nguyên chọn hiện dạng dây nét đứt.</small></div>`;
     }
+    if (f.type === 'heygen_avatar' || f.type === 'heygen_voice') {  // 🧑‍💼 danh sách tải ở Canvas (↻ tải từ HeyGen)
+      const cur = String(v ?? '');
+      const opts = f.options || [];
+      return `<label class="field"><span>${esc(f.label)}</span><select data-f="${f.key}">${opts.map(o => `<option value="${esc(o.value)}" ${String(o.value) === cur ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}${opts.some(o => String(o.value) === cur) ? '' : `<option value="${esc(cur)}" selected>${esc(cur)} (đã chọn)</option>`}</select>
+        ${f.loaded ? '' : '<small class="muted">Chưa tải danh sách — mở khối Video HeyGen trên Canvas, bấm ↻ tải từ HeyGen</small>'}</label>`;
+    }
     if (f.type === 'files') return `<div class="field"><span>${esc(f.label)}</span><div class="wf-files">${(v || []).map((p, i) => `<span class="camp-chip">${esc(p.split(/[\\/]/).pop())}<button data-rmfile="${f.key}:${i}" type="button">✕</button></span>`).join('')}
       <button class="btn ghost sm" data-pick="${f.key}" data-kind="${esc(f.kind)}" data-single="${f.single ? 1 : 0}" type="button">+ Chọn file…</button></div></div>`;
     return `<label class="field"><span>${esc(f.label)}</span><input data-f="${f.key}" value="${esc(v ?? '')}"></label>`;

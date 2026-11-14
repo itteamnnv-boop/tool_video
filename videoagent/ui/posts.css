@@ -85,3 +85,9 @@
 .ps-at{display:flex;align-items:center;gap:10px;margin-top:8px}
 .ps-at input{width:auto;padding:6px 8px}
 @media (max-width:720px){.ps-whens{grid-template-columns:1fr}}
+/* 📥 bài chờ duyệt (khối Đăng bài trên Canvas gửi vào) */
+.ps-status.pending{background:#3a2a0c;color:#ffc861;border-color:#7a5a1a}
+.ps-status.rejected{background:#2a1c1c;color:#d99;border-color:#5a3333}
+.ps-sched.ps-review{background:#2a2312;border-color:#7a5a1a}
+.ps-sched.ps-review b{color:#ffd88a}
+.sb-badge.ps-badge-pending{background:#ffb020;color:#2a1a00;padding:0 5px}

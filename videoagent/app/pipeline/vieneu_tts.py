@@ -151,7 +151,9 @@ def synthesize(text: str, out: Path, *, voice: str = "", ref_audio: str = "", lo
 def synthesize_many(items: list, *, voice: str = "", ref_audio: str = "", log=None, check_cancel=None) -> list[Path]:
     """Đọc nhiều đoạn [(text, out.wav), …] trong 1 lần nạp model (lời đọc theo từng cảnh) → danh sách file WAV."""
     log = log or (lambda *a, **k: None)
-    clean = [(re.sub(r"[ \t]+", " ", str(t or "")).strip(), Path(o)) for t, o in items]
+    from ..pronounce import apply as say  # 🗣 tên riêng đọc đúng (VD KINGER → Kinh gơ)
+
+    clean = [(re.sub(r"[ \t]+", " ", say(str(t or ""))).strip(), Path(o)) for t, o in items]
     if not clean or any(not t for t, _ in clean):
         raise VieNeuError("Chưa có lời đọc")
     ensure_installed(log)

@@ -402,6 +402,56 @@ class FacebookManager:
         return {"id": post_id, "page": page["name"], "scheduled": False,
                 "url": f"https://www.facebook.com/stories/{page_id}" if post_id else ""}
 
+    # ------------------------------------------------------------------ Chia sẻ link / Bài ẩn (dark post)
+    def post_link(self, page_id: str, message: str, link: str, scheduled_at: int | None = None) -> dict:
+        """Chia sẻ link — Facebook tự lấy ảnh / tiêu đề xem trước từ trang. scheduled_at → hẹn giờ đăng."""
+        page, token = self._page_token(page_id)
+        link = (link or "").strip()
+        if not link.startswith(("http://", "https://")):
+            raise FacebookError("Link chia sẻ phải bắt đầu bằng http:// hoặc https://")
+        data = self._call("POST", f"{self._graph}/{page_id}/feed", data={
+            "message": (message or "").strip(), "link": link, "access_token": token, **self._schedule(scheduled_at)})
+        post_id = data.get("id", "")
+        return {"id": post_id, "page": page["name"], "scheduled": bool(scheduled_at),
+                "url": f"https://www.facebook.com/{post_id}" if post_id else ""}
+
+    def post_dark(self, page_id: str, message: str, link: str = "", images: list | None = None, video: str = "") -> dict:
+        """Bài ẩn (dark post): KHÔNG hiện trên Fanpage / bảng tin người theo dõi — chỉ dùng làm bài cho quảng cáo.
+        Nội dung: chữ, link, ảnh (album) hoặc 1 video (ưu tiên video > ảnh > link)."""
+        page, token = self._page_token(page_id)
+        message, link = (message or "").strip(), (link or "").strip()
+        if video:
+            path = Path(video)
+            if path.suffix.lower() not in VIDEO_EXT or not path.is_file():
+                raise FacebookError("Bài ẩn video cần 1 file video (mp4/mov/webm)")
+            with open(path, "rb") as fh:
+                data = self._call("POST", f"https://graph-video.facebook.com/{self._data.get('graph_version') or DEFAULT_VERSION}"
+                                          f"/{page_id}/videos", timeout=1800, files={"source": (path.name, fh)},
+                                  data={"description": message, "published": "false", "access_token": token})
+            post_id, url = self._video_post(data.get("id", ""), token)
+            return {"id": post_id or data.get("id", ""), "video_id": data.get("id", ""), "page": page["name"],
+                    "scheduled": False, "dark": True, "url": url}
+        body = {"message": message, "published": "false", "access_token": token}
+        paths = [Path(f) for f in images or [] if Path(f).suffix.lower() in IMAGE_EXT and Path(f).is_file()]
+        if link:
+            if not link.startswith(("http://", "https://")):
+                raise FacebookError("Link phải bắt đầu bằng http:// hoặc https://")
+            body["link"] = link
+        elif paths:
+            media = []
+            for path in paths[:10]:
+                with open(path, "rb") as fh:
+                    ph = self._call("POST", f"{self._graph}/{page_id}/photos", timeout=300, files={"source": (path.name, fh)},
+                                    data={"published": "false", "access_token": token})
+                media.append({"media_fbid": ph["id"]})
+            body["attached_media"] = json.dumps(media)
+        elif not message:
+            raise FacebookError("Bài ẩn cần nội dung, link, ảnh hoặc video")
+        data = self._call("POST", f"{self._graph}/{page_id}/feed", data=body)
+        post_id = data.get("id", "")
+        return {"id": post_id, "page": page["name"], "scheduled": False, "dark": True,
+                "url": f"https://www.facebook.com/{post_id}" if post_id else ""}
+
     def post(self, page_id: str, message: str, file_path: str = "", scheduled_at: int | None = None) -> dict:
         """Đăng bài lên page đã kết nối: chữ, ảnh (/photos) hoặc video (/videos). scheduled_at → hẹn giờ đăng."""
         schedule = self._schedule(scheduled_at)

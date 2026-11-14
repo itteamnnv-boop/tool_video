@@ -6,9 +6,11 @@
 """
 from __future__ import annotations  # TaskPool có phương thức tên `list` — tránh che kiểu list trong chú thích
 
+import json
 import logging
 import threading
 from collections import deque
+from contextlib import contextmanager
 from datetime import datetime
 
 from ..browser_profiles import task_context
@@ -120,10 +122,33 @@ class TaskPool:
         self._broadcast()
 
     # ------------------------------------------------------------------ dùng trong runner
+    @contextmanager
+    def adopt(self, task: Task, prefix: str = ""):
+        """Thread PHỤ làm 1 phần của tác vụ đang chạy (VD Canvas chạy song song nhiều khối trong 1 lượt): nhật ký, tiến trình,
+        nút Dừng dùng chung tác vụ đó; prefix ghép trước mỗi dòng nhật ký của thread này (VD "n5 · ")."""
+        self._local.task, self._local.prefix, self._local.extra = task, prefix, []
+        try:
+            with task_context("", check_cancel=self.check_cancel, log=self.log):
+                yield
+        finally:
+            self._local.task, self._local.prefix, self._local.extra = None, "", []
+
+    def log_extra(self, files: list) -> None:
+        """File nhật ký riêng của THREAD hiện tại (ngoài log_files chung của tác vụ) — VD nhật ký từng khối Canvas."""
+        self._local.extra = list(files or [])
+
     def log(self, message: str, level: str = "info") -> None:
         task = self.current
+        message = f"{getattr(self._local, 'prefix', '') or ''}{message}"
         entry = {"time": datetime.now().strftime("%H:%M:%S"), "message": message, "level": level, "task": task.id}
         task.logs.append(entry)
+        # runner muốn giữ nhật ký ra file (VD Canvas: theo lượt chạy) + file riêng của thread (khối đang chạy)
+        for path in [*(task.data.get("log_files") or ()), *(getattr(self._local, "extra", None) or ())]:
+            try:
+                with open(path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            except OSError:
+                pass
         self._emit(f"{self._prefix}log", entry)
 
     def progress(self, pct: float, status: str, stage: str) -> None:
@@ -193,3 +218,4 @@ class TaskPool:
             self._emit(f"{self._prefix}error", {"task": task.id, "message": str(exc)})
         finally:
             self._local.task = None
+            self._local.extra = []

@@ -168,8 +168,9 @@ def identity_lock(scene: dict, options: dict, bible: dict | None = None) -> str:
     return " ".join(x for x in (FACE_LOCK, f"Characters: {who}." if who else "", outfit) if x)[:1500]
 
 
-MIN_SCENES, MAX_SCENES = 5, 10
-LENGTHS = (10, 15, 20, 30, 45, 60, 75, 90)
+MIN_SCENES, MAX_SCENES = 5, 24  # video dài (≤ 3 phút ≈ 8 giây / cảnh) cần tới ~22 cảnh
+LENGTHS = (10, 15, 20, 30, 45, 60, 75, 90, 120, 150, 180)  # mốc gợi ý; ô Độ dài còn cho tự nhập (MIN_LENGTH–MAX_LENGTH)
+MIN_LENGTH, MAX_LENGTH = 5, 300
 SHORT_SCENES = {10: 1, 15: 1, 20: 2}  # video ngắn: 1 cảnh (một cú máy liền, hợp Grok 10–15s) / 2 cảnh
 
 
@@ -226,9 +227,11 @@ def framing(scene: dict, options: dict) -> str:
 
 
 def scene_count(length: int) -> int:
-    """Số cảnh storyboard theo độ dài video: ngắn (≤20s) 1–2 cảnh, còn lại ~8 giây / cảnh (5–10 cảnh)."""
+    """Số cảnh storyboard theo độ dài video: ngắn (≤15s) 1 cảnh, ≤20s 2 cảnh, còn lại ~8 giây / cảnh (5–24 cảnh)."""
     if length in SHORT_SCENES:
         return SHORT_SCENES[length]
+    if length <= 20:  # độ dài tự nhập ngắn (VD 12s, 18s)
+        return 1 if length <= 15 else 2
     return max(MIN_SCENES, min(MAX_SCENES, round(length / 8)))
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 SCENE_FIELDS = ("title", "narration", "speaker", "image_prompt", "motion_prompt", "seconds", "shot", "angle", "purpose")
@@ -284,7 +287,10 @@ def kinds_meta() -> list[dict]:
     """Danh sách mẫu cho giao diện (mẫu tự thêm kèm ghi chú, điền sẵn, nguồn video để sửa)."""
     return ([{"value": k, "label": v[0], "hint": v[1]} for k, v in PROJECT_KINDS.items()]
             + [{"value": k["key"], "label": k["label"], "hint": k.get("hint", ""), "note": k.get("note", ""),
-                "presets": k.get("presets", {}), "source": k.get("source", {}), "custom": True} for k in studio_kinds.load()])
+                "presets": k.get("presets", {}), "source": k.get("source", {}), "custom": True,
+                "use_frames": k.get("use_frames", True),
+                "frames": [{**f, "url": f"/kind-frame/{k['key']}/{Path(f['path']).name}"} for f in k.get("frames") or []]}
+               for k in studio_kinds.load()])
 
 
 # mục đích từng cảnh trong storyboard (Tầng 2)
@@ -397,6 +403,17 @@ def settings_text(o: dict, p: dict) -> str:
     return "CÀI ĐẶT DỰ ÁN (người dùng đã chọn — phải bám theo):\n" + "\n".join(lines)
 
 
+# 📸 ảnh bìa từ khung mẫu (video phân tích / mẫu trending): khung mẫu của cảnh = ảnh để SỬA, chỉ thay khuôn mặt
+TREND_FACE_PROMPT = """Edit the FIRST attached image (one frame of a template video). Replace ONLY the face of {who} with
+the face of {names} from the next attached reference image(s): same facial features, face shape, skin tone and apparent
+age as the reference. Keep EVERYTHING else exactly identical to the first image: hair, outfit, body, hands, pose, head
+angle, gaze direction, the person's position and size in the frame, every other person, the background, props, lighting,
+colours, camera angle, framing, crop and image dimensions. Do not add, remove, move or restyle anything; no text, no
+watermark. Return the whole edited frame, same size as the first image."""
+TREND_NEW_PROMPT = """Use the FIRST attached image (one frame of a template video) as the exact composition reference:
+same framing, crop, camera angle, pose, position and size of the person in the frame, setting, props, lighting and
+colours. Recreate this frame as a new photo with a DIFFERENT person (do not copy the face of the person in the image).
+Scene: {scene}"""
 KEEP_PROMPT = """Edit the FIRST attached image (a fixed layout). Keep EVERYTHING identical except the parts listed below:
 the person (face, hair, outfit, pose and framing), background, composition, camera angle, lighting and colours, and every
 on-screen interface element in exactly the same position, size and style (badges, avatars, icons, buttons, hearts,
@@ -540,7 +557,7 @@ def clean_options(raw: dict, settings) -> dict:
     except (TypeError, ValueError):
         length = 60
     return {"model": str(raw.get("model") or "chatgpt_browser"), "text_profile": str(raw.get("text_profile") or ""),
-            "length": max(LENGTHS[0], min(LENGTHS[-1], length)), "style": str(raw.get("style") or "").strip()[:300],
+            "length": max(MIN_LENGTH, min(MAX_LENGTH, length)), "style": str(raw.get("style") or "").strip()[:300],
             "image_engine": image_engine, "image_profile": str(raw.get("image_profile") or ""),
             "video_engine": video_engine, "video_profile": str(raw.get("video_profile") or ""),
             "voice": voice, "rate": raw.get("rate") if raw.get("rate") in RATES else "+0%",
@@ -575,6 +592,8 @@ def clean_options(raw: dict, settings) -> dict:
             "bans": [k for k in BANS if k in raw["bans"]] if isinstance(raw.get("bans"), list) else [],
             # 🔒 khoá hoàn toàn khung hình: nguyên ảnh layout ⭐ làm khung đầu mọi cảnh, giữ mọi chi tiết (Studio)
             "frame_lock": bool(raw.get("frame_lock", True)),
+            # 📸 ảnh bìa cảnh = khung mẫu của video phân tích / mẫu trending + thay mặt nhân vật (có khung mẫu mới dùng)
+            "trend_frames": bool(raw.get("trend_frames", True)),
             # 👤 khung đã khoá có sẵn người dẫn? tắt (mặc định) = không ai trên hình, lời thoại là giọng ngoài khung
             "frame_host": bool(raw.get("frame_host", False)),
             # 🌿 hình ảnh tự nhiên: màu tươi sáng nhưng thật, giữ kết cấu da — không làm mịn, không filter làm đẹp
@@ -618,13 +637,14 @@ def clean_options(raw: dict, settings) -> dict:
 
 def meta(settings) -> dict:
     """Danh sách lựa chọn cho giao diện Studio."""
+    from . import api_mode
     from .content_writer import models
 
     return {"text_models": models(settings), "lengths": list(LENGTHS),
             "image_engines": {k: {"name": v["name"], "browser": bool(v.get("browser")), "note": v.get("note", "")}
-                              for k, v in IMAGE_ENGINES.items()},
+                              for k, v in api_mode.engines(IMAGE_ENGINES, settings).items()},
             "video_engines": {k: {"name": v["name"], "durations": v["durations"], "note": v.get("note", "")}
-                              for k, v in VIDEO_ENGINES.items()},
+                              for k, v in api_mode.engines(VIDEO_ENGINES, settings).items()},
             "bans": [{"value": k, "label": v[0]} for k, v in BANS.items()], "ref_prompt_default": REF_PROMPT,
             "logo_corners": [{"value": k, "label": v} for k, v in LOGO_CORNERS.items()],
             "post_styles": [{"value": k, "label": v} for k, v in POST_STYLES.items()],
@@ -638,8 +658,10 @@ def meta(settings) -> dict:
             "camera_angles": [{"value": k, "label": v[0]} for k, v in CAMERA_ANGLES.items()],
             "voices": VOICES, "rates": RATES, "speakers": [{"value": k, "label": v[0]} for k, v in ROLES.items()],
             "scenes": [MIN_SCENES, MAX_SCENES], "length_scenes": {str(n): scene_count(n) for n in LENGTHS},
+            "length_range": [MIN_LENGTH, MAX_LENGTH],
             **transitions.options(), "shared_models": model_prefs.get(settings),
-            "default_image_engine": (settings.get("last_image_form") or {}).get("engine") or "openai_api"}
+            "default_image_engine": api_mode.pick((settings.get("last_image_form") or {}).get("engine") or "openai_api",
+                                                  IMAGE_ENGINES, settings)}
 
 
 def project_logo(project: dict) -> Path | None:
@@ -1230,6 +1252,10 @@ class StudioRunner:
                 "refs_view": [url(f"refs/{Path(r).name}") for r in project.get("refs") or []],
                 "logo_url": url(Path(project["logo"]).name) if project.get("logo") else "",
                 "ref_video_url": url("ref_video.jpg") if project.get("ref_video") else "",
+                # 📸 khung mẫu: ảnh bìa cảnh = khung mẫu + thay mặt nhân vật
+                "trend_frames_view": [{"t": f.get("t", 0), "url": url(Path(f["path"]).relative_to(pdir).as_posix())}
+                                      for f in ((project.get("ref_video") or {}).get("frames") or project.get("tpl_frames") or [])
+                                      if Path(f["path"]).is_relative_to(pdir)],
                 "final_url": (f"/media/{final['job_id']}/final.mp4?v={int(final_path.stat().st_mtime)}"
                               if final_path and final_path.is_file() else "")}
 
@@ -1268,10 +1294,20 @@ class StudioRunner:
                 shutil.copy2(path, dest)
                 refs.append(str(dest))
         self._pin_live_avatar(pdir, options)  # avatar kênh livestream → chép vào dự án
+        tpl_frames = []  # 📸 mẫu tạo từ video trending có khung mẫu → ảnh bìa cảnh k = khung k + thay mặt nhân vật
+        kind = studio_kinds.get(options["kind"]) if str(options["kind"]).startswith("c_") else None
+        if kind and kind.get("frames") and kind.get("use_frames", True) and options["source_mode"] != "video":
+            for i, f in enumerate(kind["frames"], 1):
+                src = Path(f["path"])
+                if src.is_file():
+                    dest = pdir / "tpl_frames" / f"frame_{i:02d}{src.suffix.lower() or '.jpg'}"
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dest)
+                    tpl_frames.append({**f, "path": str(dest)})
         project = {"id": pid, "name": name, "idea": idea, "created_at": now(), "options": options, "refs": refs,
                    "logo": copy_logo(pdir, form["logo"]) if form.get("logo") else "",
                    "ref_video": rvm.copy_sheet(rvm.clean(form.get("ref_video")), pdir),
-                   **({"form": brief} if brief is not None else {}),
+                   **({"form": brief} if brief is not None else {}), **({"tpl_frames": tpl_frames} if tpl_frames else {}),
                    "bible": {}, "scenes": [], "status": "draft", "error": "", "final": {}}
         self.store.save(project)
         return {"project": self.public(project), "task": self.start(pid, "storyboard")}
@@ -1728,6 +1764,97 @@ class StudioRunner:
             add(r, "SẢN PHẨM — đúng bao bì, nhãn, màu")
         return out
 
+    @staticmethod
+    def _trend_base(p: dict, sc: dict) -> dict | None:
+        """📸 Khung mẫu của cảnh: video phân tích (nguồn kịch bản = video; cảnh k ↔ đoạn k, chọn khung gần mốc giây
+        nhất) hoặc khung của mẫu dự án tạo từ video trending (theo thứ tự). Tắt / không có → None."""
+        o = p.get("options") or {}
+        if not o.get("trend_frames", True) or o.get("scene_style") == "whiteboard":
+            return None
+        rv = p.get("ref_video") or {}
+        k = int(sc.get("index") or 1)
+        if o.get("source_mode") == "video" and rv.get("frames"):
+            mats = (rv.get("data") or {}).get("canh") or []
+            t = mats[k - 1]["tu"] if 0 < k <= len(mats) else None
+            return rvm.pick_frame(rv["frames"], t, k)
+        if p.get("tpl_frames"):
+            return rvm.pick_frame(p["tpl_frames"], None, k)
+        return None
+
+    def _cast_faces(self, o: dict, sc: dict | None = None) -> list[dict]:
+        """Nhân vật đã chọn → [{"name", "path" (ảnh ⭐ chân dung), "desc"}] — mặt thay vào khung mẫu."""
+        out = []
+        if self.cast is None:
+            return out
+        names_in = (sc or {}).get("cast") if isinstance((sc or {}).get("cast"), list) else None
+        for cid in (o.get("cast_characters") or [])[:MAX_CAST]:
+            try:
+                item = self.cast.get("character", cid)
+            except Exception:  # noqa: BLE001 — nhân vật đã xoá
+                continue
+            if names_in is not None and item["name"] not in names_in:
+                continue
+            pick = next((Path(im["path"]) for im in item["starred"] if Path(im["path"]).is_file()
+                         and im.get("preset") not in DIRECT_SKIP), None) or next(
+                (Path(im["path"]) for im in item["starred"] if Path(im["path"]).is_file()), None)
+            if pick:
+                out.append({"name": item["name"], "path": pick, "desc": item.get("description") or item.get("summary") or ""})
+        return out
+
+    def _trend_job(self, o: dict, base: dict, sc: dict, spec: dict, pdir: Path, faces: list) -> tuple[dict, tuple]:
+        """📸 Phiếu Tạo hình ảnh cho ảnh bìa cảnh: gửi KHUNG MẪU (ảnh để sửa, đã cắt đúng tỉ lệ dự án) + ẢNH NHÂN VẬT
+        → chỉ thay khuôn mặt; không chọn nhân vật → khung mẫu là bố cục, AI tạo người mới. Trả (phiếu, cỡ ảnh đích)."""
+        from PIL import Image
+
+        sdir = pdir / "scenes" / scene_dir_name(sc["index"])
+        sdir.mkdir(parents=True, exist_ok=True)
+        fw, fh = frame_size(o)
+        with Image.open(base["path"]) as im:
+            im = im.convert("RGB")
+            w, h = im.size
+            want = fw / fh
+            if abs(w / h - want) > 0.02:  # khung mẫu khác tỉ lệ dự án → cắt giữa đúng tỉ lệ (giữ bố cục, không méo)
+                if w / h > want:
+                    cw = round(h * want)
+                    im = im.crop(((w - cw) // 2, 0, (w - cw) // 2 + cw, h))
+                else:
+                    ch = round(w / want)
+                    im = im.crop((0, (h - ch) // 2, w, (h - ch) // 2 + ch))
+            size = im.size
+            src = sdir / "template_frame.jpg"
+            im.save(src, quality=95)
+        faces = faces[:max(0, spec["max_images"] - 1)]
+        if faces:
+            names = " and ".join(f"{f['name']} (reference image {i + 2})" for i, f in enumerate(faces))
+            who = "the main person" if len(faces) == 1 else "the people (left to right, in order)"
+            prompt = TREND_FACE_PROMPT.format(who=who, names=names)
+            extra = [{"path": str(src), "role": "image to edit", "prompt": "keep everything identical; replace only the face"}]
+            extra += [{"path": str(f["path"]), "role": f"face reference — {f['name']}",
+                       "prompt": "use ONLY this person's face (identity); ignore their clothes, hair style and background"}
+                      for f in faces]
+        else:
+            prompt = TREND_NEW_PROMPT.format(scene=" ".join(str(sc.get("image_prompt") or sc.get("title") or "").split())[:800])
+            extra = [{"path": str(src), "role": "composition reference",
+                      "prompt": "same composition, framing, pose, setting and lighting — a different person"}]
+        job = {"engine": o["image_engine"], "prompt": prompt, "aspect": o["aspect"], "count": 1, "quality": "high",
+               "refs": [], "extra_refs": extra, "show_browser": bool(o.get("show_browser")),
+               "ref_note": False, "browser_profile": o.get("image_profile", "")}
+        return job, size
+
+    @staticmethod
+    def _fit_frame(path: Path, size: tuple) -> None:
+        """Ảnh bìa từ khung mẫu → đúng kích thước pixel của khung mẫu (model trả lệch cỡ → cắt giữa + co lại)."""
+        from PIL import Image, ImageOps
+
+        with Image.open(path) as im:
+            if im.size == tuple(size):
+                return
+            out = ImageOps.fit(im.convert("RGB"), tuple(size), Image.LANCZOS)
+        if path.suffix.lower() in (".jpg", ".jpeg"):
+            out.save(path, quality=95)
+        else:
+            out.save(path)
+
     def _copy_frame(self, pid: str, pdir: Path, sc: dict, src: Path) -> None:
         """Khung đầu = ảnh có sẵn (chép vào thư mục cảnh, giữ nguyên ảnh gốc) — không tốn lượt tạo ảnh."""
         sdir = pdir / "scenes" / scene_dir_name(sc["index"])
@@ -1948,6 +2075,8 @@ class StudioRunner:
         self.pool.progress(3, "Đang viết storyboard", "script")
         allowed = video_engine_durations(o["video_engine"])
         count = 1 if o.get("kind") == "single" else scene_count(o["length"])  # Clip đơn: đúng 1 cảnh
+        if p.get("tpl_frames") and o.get("trend_frames", True):  # 📸 mẫu có khung mẫu: mỗi khung = 1 cảnh
+            count = max(1, min(MAX_SCENES, len(p["tpl_frames"])))
         # nguồn kịch bản = video phân tích: mỗi đoạn trong vật liệu = 1 cảnh, không dùng ý tưởng
         from_video = o.get("source_mode") == "video" and bool(p.get("ref_video"))
         mats = ((p.get("ref_video") or {}).get("data") or {}).get("canh") or [] if from_video else []
@@ -2460,10 +2589,27 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
             direct.update(combo=[host], all=[host])
         frame_tasks, clip_tasks, errors = {}, {}, []
         clip_frames: dict[int, Path] = {}  # khung đầu đã giao cho từng clip (để giữ nét chi tiết khi khoá khung)
+        trend_sizes: dict[int, tuple] = {}  # 📸 cảnh làm ảnh bìa từ khung mẫu → cỡ ảnh đích
+        trend = {sc["index"]: self._trend_base(p, sc) for sc in targets}
+        trend = {k: v for k, v in trend.items() if v is not None}
+        if trend and spec["max_images"] < 1:
+            self._log(f"{spec['name']} không nhận ảnh — không làm ảnh bìa từ khung mẫu được (đổi model ảnh)", "warn")
+            trend = {}
+        if trend:
+            faces = self._cast_faces(o)
+            self._log(f"📸 Ảnh bìa {len(trend)} cảnh từ khung mẫu — "
+                      + (f"gửi khung mẫu + ảnh nhân vật {', '.join(f['name'] for f in faces)}, chỉ thay khuôn mặt"
+                         if faces else "chưa chọn nhân vật: khung mẫu làm bố cục, AI tạo người mới"))
         try:
             for sc in targets:  # 1) ảnh khung đầu (song song)
                 stale = host is not None and sc.get("frame_src") != host.name  # khung cũ chưa ghép người dẫn / sản phẩm
                 if not stale and (what == "clip" or (has(sc, "frame") and not (indexes and what in ("both", "frame")))):
+                    continue
+                if sc["index"] in trend:  # 📸 khung mẫu của cảnh + ảnh nhân vật → chỉ thay khuôn mặt
+                    job, trend_sizes[sc["index"]] = self._trend_job(o, trend[sc["index"]], sc, spec, pdir,
+                                                                    self._cast_faces(o, sc) or self._cast_faces(o))
+                    frame_tasks[sc["index"]] = self.images.start(job)
+                    self._scene_update(pid, sc["index"], status="frame_running", error="")
                     continue
                 if keep["base"] is not None:  # giữ layout: sửa ảnh layout (không có gì để đổi → dùng nguyên ảnh)
                     job = self._keep_job(o, keep, sc, spec) if spec["max_images"] >= 1 else None
@@ -2498,6 +2644,8 @@ Chỉ trả về MỘT object JSON (không markdown, không giải thích):
                         sdir.mkdir(parents=True, exist_ok=True)
                         dest = sdir / f"frame{src.suffix.lower()}"
                         shutil.copy2(src, dest)
+                        if idx in trend_sizes:  # 📸 đúng kích thước khung mẫu
+                            self._fit_frame(dest, trend_sizes[idx])
                         sc.update(frame=dest.relative_to(pdir).as_posix(), clip="")
                         self._scene_update(pid, idx, frame=sc["frame"], clip="", status="frame")
                     except (StudioError, OSError) as exc:

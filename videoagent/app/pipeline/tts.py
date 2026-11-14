@@ -133,11 +133,15 @@ def synthesize(text: str, voice: str, rate: str, out_path: Path, retries: int = 
     if not SPEAKABLE.search(text or ""):
         _silence(out_path)
         return []
+    from ..pronounce import apply as say, restore_words  # 🗣 tên riêng đọc đúng; mốc phụ đề giữ chữ gốc
+
+    spoken = say(text)
     last_error: Exception | None = None
     for attempt in range(retries):
         try:
             with _SLOTS:
-                return asyncio.run(_synthesize(text, voice, rate, out_path, pitch))
+                words = asyncio.run(_synthesize(spoken, voice, rate, out_path, pitch))
+            return restore_words(words, text) if spoken != text else words
         except Exception as exc:  # edge-tts ném lỗi mạng/websocket nhiều kiểu
             last_error = exc
             if attempt + 1 < retries:

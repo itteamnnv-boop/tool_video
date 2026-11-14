@@ -79,6 +79,10 @@ class FacebookApi:
         """Lên lịch / đổi lịch app tự đăng (giờ + Fanpage) — chỉ khi người dùng đã xác nhận trên giao diện."""
         return self._post_call("post", self._posts.schedule, pid, page_ids or [], at, confirmed is True)
 
+    def post_reject(self, pid: str) -> dict:
+        """Từ chối bài chờ duyệt (khối Đăng bài trên Canvas gửi vào) — không đăng gì."""
+        return self._post_call("post", self._posts.reject, pid)
+
     def post_unschedule(self, pid: str) -> dict:
         return self._post_call("post", self._posts.unschedule, pid)
 

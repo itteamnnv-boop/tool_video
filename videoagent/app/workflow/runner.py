@@ -41,7 +41,9 @@ def validate(wf: dict) -> list:
         issues.append({"node": "", "level": "warn", "message": "Chưa có block Kết quả — kết quả vẫn nằm trong thư mục từng block"})
     need_key = False
     for nid, n in nodes.items():
-        cfg, kind = config_of(n), n["type"]
+        from .. import api_mode
+
+        cfg, kind = api_mode.config(config_of(n)), n["type"]  # 🔑 model API cũ → bản trình duyệt (không đòi khoá)
         wired = {e["in"] for e in incoming[nid]}
         if kind == "input_text" and not str(cfg.get("text") or "").strip() and not cfg.get("ask"):
             issues.append({"node": nid, "level": "error", "message": "Văn bản đang trống"})
@@ -75,15 +77,24 @@ def validate(wf: dict) -> list:
             media_types = {(_ports(nodes[e["from"]], "outputs").get(e["out"]) or {}).get("type")
                            for e in incoming[nid] if e["in"] == "media"}
             has_caption = "caption" in ins or bool(str(cfg.get("caption") or "").strip())
+            link = str(cfg.get("link") or "").strip()
             if kind == "fb_schedule" and ptype not in SCHEDULABLE:
-                issues.append({"node": nid, "level": "error", "message": "Facebook không cho hẹn giờ Story"})
+                issues.append({"node": nid, "level": "error", "message": f"Facebook không cho hẹn giờ “{POST_TYPES[ptype]}”"})
+            elif kind == "fb_post" and ptype == "dark" and cfg.get("timing") == "app":
+                issues.append({"node": nid, "level": "error", "message": "Bài ẩn không lên lịch được — chọn Đăng ngay"})
+            elif link and not link.startswith(("http://", "https://")):
+                issues.append({"node": nid, "level": "error", "message": "Link phải bắt đầu bằng http:// hoặc https://"})
+            elif ptype == "link" and not link and "caption" not in ins and "http" not in str(cfg.get("caption") or ""):
+                issues.append({"node": nid, "level": "error", "message": "“Chia sẻ link” cần link — nhập ô Link, hoặc có link trong caption"})
+            elif ptype == "dark" and not incoming[nid] and not has_caption and not link:
+                issues.append({"node": nid, "level": "error", "message": "Bài ẩn cần caption, link hoặc ảnh/video"})
             elif ptype == "text" and not has_caption:
                 issues.append({"node": nid, "level": "error", "message": "“Chỉ bài viết” cần caption — tick văn bản trong Tài nguyên từ flow"})
             elif ptype in ("media", "story") and "media" not in ins:
                 issues.append({"node": nid, "level": "error", "message": f"“{POST_TYPES[ptype]}” cần ảnh/video — tick trong Tài nguyên từ flow"})
             elif ptype == "reel" and "video" not in media_types:
                 issues.append({"node": nid, "level": "error", "message": "Reels cần video — tick 1 video trong Tài nguyên từ flow"})
-            elif not incoming[nid] and not has_caption:
+            elif not incoming[nid] and not has_caption and not link:
                 issues.append({"node": nid, "level": "error", "message": "Chưa có caption hoặc ảnh/video để đăng"})
             if kind == "fb_schedule":
                 try:

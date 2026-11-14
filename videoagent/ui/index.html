@@ -37,6 +37,8 @@
 <link rel="stylesheet" href="content.css">
 <link rel="stylesheet" href="studio.css">
 <link rel="stylesheet" href="adbot.css">
+<link rel="stylesheet" href="channel.css">
+<link rel="stylesheet" href="mcp.css">
 <link rel="stylesheet" href="musehub.css">
 <link rel="stylesheet" href="posts.css">
 <link rel="stylesheet" href="cast.css">
@@ -142,6 +144,18 @@
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2.5" y="4" width="7" height="9" rx="1.5"/><rect x="14.5" y="11" width="7" height="9" rx="1.5"/><path d="M9.5 8.5c4 0 1 7 5 7"/></svg></span>
     <span class="sb-label">Canvas</span>
   </button>
+  <button class="sb-item" data-view="fcanvas" title="Grok Canvas — như Canvas, model định sẵn: viết / xử lý / tạo ảnh bằng ChatGPT trình duyệt, tạo video Grok Imagine, điều phối Claude trình duyệt (đổi ở ⚙ Model của màn)">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2.5" y="4" width="7" height="9" rx="1.5"/><rect x="14.5" y="11" width="7" height="9" rx="1.5"/><path d="M9.5 8.5c4 0 1 7 5 7"/><path d="M16 5.5l3 1.7-3 1.7z"/></svg></span>
+    <span class="sb-label">Grok Canvas</span>
+  </button>
+  <button class="sb-item" data-view="channel" title="Trợ lý nuôi kênh — giao việc, Claude điều phối ChatGPT / Gemini / Grok / Muse tạo ảnh bám tài nguyên của kênh, tự chấm, bạn góp ý">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/><path d="M17.5 3.5l1 2 2 1"/></svg></span>
+    <span class="sb-label">Trợ lý nuôi kênh</span>
+  </button>
+  <button class="sb-item" data-view="mcp" title="Kết nối MCP — nối app với nguồn dữ liệu (thư mục, cơ sở dữ liệu, Drive…); Trợ lý Canvas chỉ đọc qua các công cụ bạn cho phép">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 3v4M15 3v4"/><rect x="6" y="7" width="12" height="6" rx="2"/><path d="M12 13v3a4 4 0 0 1-4 4H6"/></svg></span>
+    <span class="sb-label">Kết nối MCP</span>
+  </button>
   <button class="sb-item" data-view="cast" title="Nhân vật & Layout cố định — dùng cho Studio">
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8.5" cy="8" r="3.2"/><path d="M3 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><rect x="14.5" y="4" width="6.5" height="9" rx="1.5"/><path d="M14.5 10.5l2-2 2 2 2.5-2.5"/></svg></span>
     <span class="sb-label">Nhân vật &amp; Layout</span>
@@ -159,10 +173,6 @@
     <span class="sb-label">Template</span><span class="sb-badge" id="sbTplCount">0</span>
   </button>
   <div class="sb-group">FACEBOOK</div>
-  <button class="sb-item" data-view="facebook" title="Fanpage Facebook">
-    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M15.5 7.5h-2a2 2 0 0 0-2 2V21M9 12.5h6"/></svg></span>
-    <span class="sb-label">Fanpage Facebook</span><span class="sb-badge" id="sbFbCount">0</span>
-  </button>
   <button class="sb-item" data-view="ads" title="Quảng cáo Facebook">
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 10v4a1 1 0 0 0 1 1h2l5 4V5L6 9H4a1 1 0 0 0-1 1z"/><path d="M15 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg></span>
     <span class="sb-label">Quảng cáo Facebook</span><span class="sb-badge" id="sbAdsCount">0</span>
@@ -176,11 +186,12 @@
     <span class="sb-label">Quản lý bài đăng</span><span class="sb-badge" id="sbPostCount">0</span>
   </button>
   <div class="sb-group">WORKFLOW</div>
-  <button class="sb-item" data-view="wf-list" title="Danh sách workflow">
+  <button class="sb-item" data-view="wf-list" title="Workflow (cũ) — vẫn dùng khi cần Tạo video theo template / tạo, sửa template video. Quy trình mới nên dựng ở Canvas (nhập workflow cũ: Canvas → ⇩ Từ Workflow / mẫu)">
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="4" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 15.5h7M14 19.5h5"/></svg></span>
-    <span class="sb-label">Danh sách workflow</span><span class="sb-badge" id="sbWfCount">0</span><i class="sb-dot hidden" id="sbWfRunning" title="Đang chạy"></i>
+    <span class="sb-label">Workflow (cũ)</span><span class="sb-badge" id="sbWfCount">0</span><i class="sb-dot hidden" id="sbWfRunning" title="Đang chạy"></i>
   </button>
-  <button class="sb-item" data-view="workflow" title="Thiết kế workflow">
+  <!-- Thiết kế workflow: mở từ Danh sách workflow (nút Mở / + Tạo workflow) — bỏ class hidden để hiện lại trên thanh bên -->
+  <button class="sb-item hidden" data-view="workflow" title="Thiết kế workflow">
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2.5" y="4" width="6" height="5" rx="1.5"/><rect x="15.5" y="4" width="6" height="5" rx="1.5"/><rect x="9" y="15" width="6" height="5" rx="1.5"/><path d="M8.5 6.5h7M18.5 9v3a2 2 0 0 1-2 2H12v1M5.5 9v3a2 2 0 0 0 2 2H12"/></svg></span>
     <span class="sb-label">Thiết kế workflow</span>
   </button>
@@ -546,7 +557,7 @@
         <button class="btn ghost fb-gap" id="fbOpenSettings" type="button">Mở Cài đặt</button>
       </div>
     </div>
-    <div class="fb-col">
+    <div class="fb-col" id="fbPagesPane"><!-- 📣 cột này được chuyển vào Cài đặt → Facebook · Meta -->
       <div class="results-head">
         <span class="muted" id="fbPagesTotal">③ Chưa có fanpage</span>
         <button class="btn ghost" id="fbLoadPages" type="button">Tải danh sách Fanpage</button>
@@ -582,6 +593,14 @@
       một hoặc nhiều Fanpage, đăng ngay hoặc hẹn giờ. Mỗi lần đăng đều cần bạn xác nhận và được ghi lại.</p>
   </div>
   <div id="postsBody"></div>
+</section>
+
+<section class="panel page hidden" id="page-channel">
+  <div id="channelBody"></div>
+</section>
+
+<section class="panel page hidden" id="page-mcp">
+  <div id="mcpBody"></div>
 </section>
 
 <section class="panel page hidden" id="page-adbot">
@@ -704,7 +723,7 @@
   <div class="page-head">
     <small class="eyebrow">STUDIO</small>
     <h2>Ý tưởng → storyboard → video dài</h2>
-    <p class="muted">AI viết storyboard 5–10 cảnh (sửa được), mỗi cảnh tạo ảnh khung đầu rồi model video làm chuyển động; app đọc giọng,
+    <p class="muted">AI viết storyboard 5–24 cảnh (sửa được), mỗi cảnh tạo ảnh khung đầu rồi model video làm chuyển động; app đọc giọng,
       thêm phụ đề, nhạc nền và ghép thành video 30–90 giây. Ảnh / clip chạy trong hàng đợi Tạo hình ảnh / Tạo video.</p>
   </div>
   <div id="studioBody"></div>
@@ -713,6 +732,10 @@
 <!-- ============================== CANVAS ============================== -->
 <section class="panel page hidden cv-page" id="page-canvas">
   <div id="canvasBody"></div>
+</section>
+<!-- 🎬 Grok Canvas (trước là Canvas Google Flow): cùng giao diện Canvas (createCanvasPage), bảng riêng, model định sẵn -->
+<section class="panel page hidden cv-page" id="page-fcanvas">
+  <div id="fcanvasBody"></div>
 </section>
 
 <section class="panel page hidden mh-page" id="page-mstudio">
@@ -974,6 +997,8 @@
 <script src="content.js"></script>
 <script src="studio.js"></script>
 <script src="adbot.js"></script>
+<script src="channel.js"></script>
+<script src="mcp.js"></script>
 <script src="adreq.js"></script>
 <script src="zalo.js"></script>
 <script src="musehub/core.js"></script>

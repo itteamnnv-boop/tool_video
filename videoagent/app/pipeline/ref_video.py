@@ -186,6 +186,59 @@ def contact_sheet(video: Path, work: Path, duration: float) -> tuple[Path, dict]
                   "frames": [round(t, 1) for t, _ in thumbs], "vertical": h > w}
 
 
+MAX_FRAMES = 24  # 📸 khung mẫu độ phân giải gốc (1 khung / đoạn vật liệu)
+
+
+def scene_frames(video: Path, work: Path, times: list[float]) -> list[dict]:
+    """📸 Khung mẫu độ phân giải gốc tại các mốc (đầu mỗi đoạn) → [{"t", "path", "w", "h"}] — làm ảnh bìa cảnh
+    (thay mặt nhân vật). Khung lỗi bỏ qua."""
+    from PIL import Image
+
+    out = []
+    for i, t in enumerate(times[:MAX_FRAMES], 1):
+        dest = work / f"scene_{i:02d}.jpg"
+        try:
+            ffmpeg.run(["-ss", f"{max(0.0, t):.2f}", "-i", video, "-frames:v", "1", "-q:v", "2", dest])
+            with Image.open(dest) as im:
+                w, h = im.size
+        except Exception:  # noqa: BLE001 — mốc quá cuối video
+            continue
+        out.append({"t": round(t, 2), "path": str(dest), "w": w, "h": h})
+    return out
+
+
+def frame_times(materials: dict | None, stats: dict) -> list[float]:
+    """Mốc chụp khung mẫu: đầu mỗi đoạn vật liệu (lùi vào trong đoạn một chút để khỏi dính khung chuyển cảnh);
+    không có đoạn → các mốc của ảnh lưới."""
+    rows = (materials or {}).get("canh") or []
+    if rows:
+        return [r["tu"] + min(0.4, max(0.0, (r["den"] - r["tu"]) / 3)) if r["den"] > r["tu"] else r["tu"] + 0.3
+                for r in rows]
+    return list(stats.get("frames") or [])
+
+
+def clean_frames(raw) -> list[dict]:
+    out = []
+    for f in raw if isinstance(raw, list) else []:
+        if isinstance(f, dict) and f.get("path"):
+            try:
+                out.append({"t": round(float(f.get("t") or 0), 2), "path": str(f["path"])[:1000],
+                            "w": int(f.get("w") or 0), "h": int(f.get("h") or 0)})
+            except (TypeError, ValueError):
+                continue
+    return out[:MAX_FRAMES]
+
+
+def pick_frame(frames: list[dict], t: float | None, index: int) -> dict | None:
+    """Khung mẫu của 1 cảnh: có mốc giây → khung gần mốc nhất; không → theo thứ tự (index từ 1)."""
+    live = [f for f in frames if Path(f["path"]).is_file()]
+    if not live:
+        return None
+    if t is not None:
+        return min(live, key=lambda f: abs(f["t"] - t))
+    return live[min(max(1, index), len(live)) - 1]
+
+
 # ---------------------------------------------------------------- hỏi model
 PROMPT = """Bạn là đạo diễn video ngắn. Hãy PHÂN TÍCH video tham khảo dưới đây để người dùng lấy ý tưởng làm video của họ.
 {sheet_note}
@@ -324,9 +377,12 @@ def analyze(source: str, settings, *, model: str, profile: str = "", show_browse
     head = (f"Video tham khảo: {meta['title']} · {stats['duration']:.0f}s · {stats['cuts']} lần cắt cảnh · "
             f"~{stats['avg_shot']}s / cảnh")
     materials = clean_materials(data)
+    frames = scene_frames(Path(meta["path"]), work, frame_times(materials, stats))  # 📸 trước khi xoá video
+    if frames:
+        log(f"📸 Đã chụp {len(frames)} khung mẫu (độ phân giải gốc) — làm ảnh bìa cảnh, thay mặt nhân vật")
     result = {"source": source.strip(), "title": meta["title"], "duration": stats["duration"],
               "brief": f"{head}\n{brief}", "sheet": str(sheet), "vision": vision,
-              **({"data": materials} if materials else {})}
+              **({"data": materials} if materials else {}), **({"frames": frames} if frames else {})}
     (work / "brief.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), "utf-8")
     if is_link(source):  # chỉ giữ ảnh lưới + phân tích; xoá video đã tải
         for f in work.glob("video.*"):
@@ -351,7 +407,8 @@ def clean(raw) -> dict | None:
     return {"source": str(raw.get("source") or "")[:1000], "title": str(raw.get("title") or "")[:200],
             "duration": float(raw.get("duration") or 0), "brief": brief[:8000],
             "sheet": str(raw.get("sheet") or "")[:1000], "vision": bool(raw.get("vision")),
-            **({"data": materials} if materials else {})}
+            **({"data": materials} if materials else {}),
+            **({"frames": clean_frames(raw.get("frames"))} if clean_frames(raw.get("frames")) else {})}
 
 
 def materials_block(ref: dict | None) -> str:
@@ -393,5 +450,17 @@ def copy_sheet(ref: dict | None, dest_dir: Path) -> dict | None:
         dest_dir.mkdir(parents=True, exist_ok=True)
         target = dest_dir / "ref_video.jpg"
         shutil.copy2(src, target)
-        return {**ref, "sheet": str(target)}
+        ref = {**ref, "sheet": str(target)}
+    frames = []
+    for i, f in enumerate(ref.get("frames") or [], 1):  # 📸 khung mẫu → thư mục dự án
+        path = Path(f["path"])
+        target = dest_dir / "ref_frames" / f"frame_{i:02d}{path.suffix.lower() or '.jpg'}"
+        if path.is_file() and path != target:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+            path = target
+        if path.is_file():
+            frames.append({**f, "path": str(path)})
+    if frames or ref.get("frames"):
+        ref = {**ref, "frames": frames} if frames else {k: v for k, v in ref.items() if k != "frames"}
     return ref

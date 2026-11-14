@@ -108,6 +108,28 @@ SITES = {
         login_markers=("auth.openai.com", "Log in to get smarter responses"),
     ),
     # Dola (dola.com, ByteDance). Selector câu trả lời theo cấu trúc Doubao — chưa kiểm chứng khi đã đăng nhập.
+    # Google Flow: chỉ dùng cho video (app/llm/flow_video.py) + cửa sổ đăng nhập — không phải model viết
+    "flow": ChatSite(
+        name="Google Flow",
+        url="https://labs.google/fx/tools/flow",
+        input_selectors=("textarea", "div[contenteditable='true']"),
+        response_selector="video",
+        bubbles_per_turn=1,
+        stop_selector="button[aria-label*='Stop' i]",
+        headless_ok=False,
+        login_markers=("accounts.google.com",),
+    ),
+    # Qwen Chat: hiện chỉ dùng cho video (app/llm/qwen_video.py) + cửa sổ đăng nhập
+    "qwen": ChatSite(
+        name="Qwen",
+        url="https://chat.qwen.ai/",
+        input_selectors=("textarea.message-input-textarea", "textarea"),
+        response_selector="[class*='response-message' i]",
+        bubbles_per_turn=1,
+        stop_selector="button[aria-label*='Stop' i]",
+        headless_ok=False,
+        login_markers=("Log in",),
+    ),
     "dola": ChatSite(
         name="Dola",
         url="https://www.dola.com/chat/",

@@ -1,37 +1,51 @@
 /* Canvas — bảng node ảnh / video kiểu Kling Canvas.
    Node Ảnh: prompt → model ảnh (ảnh nối vào = ảnh tham chiếu để sửa / ghép). Node Video: ảnh nối vào = khung đầu → model video.
    Node Tải lên: ảnh của bạn. Kéo nền = di chuyển, cuộn = phóng to / thu nhỏ, kéo cổng ＋ sang node khác = nối. */
-window.CanvasPage = (() => {
+/* createCanvasPage(CFG) tạo 1 màn: Canvas (mỗi khối tự chọn model) và 🎬 Grok Canvas (bảng riêng, model định sẵn
+   ở ⚙ Model của màn — chữ / ảnh ChatGPT, video Grok Imagine, trợ lý điều phối Claude; backend khoá model lúc chạy). */
+function createCanvasPage(CFG) {
   const C = { meta: null, boards: [], board: null, sel: '', view: { x: 80, y: 60, k: 0.9 }, promptT: null,
     logs: {}, flash: {}, trayClosed: '' };
-  const body = () => $('#canvasBody');
+  const body = () => $(CFG.body);
+  const FLOWSCREEN = !!CFG.flow;  // 🎬 màn Grok Canvas (tên kỹ thuật cũ: flow / fcanvas)
   const KIND = { image: '🖼 Ảnh', video: '🎬 Video', upload: '⬆ Ảnh tải lên' };
+  const KIND_NAME = { image: 'Ảnh', video: 'Video', upload: 'Ảnh tải lên' };
+  const GROUP_VI = { input: 'Đầu vào', ai: 'AI xử lý', create: 'Tạo nội dung', output: 'Đầu ra' };  // nhóm khối (menu Khối, ô cấu hình)
   const STATUS = { queued: 'Đang chờ', running: 'Đang tạo', done: 'Xong', error: 'Lỗi', idle: '' };
 
   async function call(name, ...args) {
     try {
-      const res = await api(name, ...args);
+      // màn Canvas Google Flow: canvas_* → fcanvas_* (cùng hàm, chạy trên bảng riêng / model định sẵn)
+      const res = await api(name.startsWith('canvas_') ? CFG.api + name.slice(7) : name, ...args);
       if (res && res.ok === false && res.locked) {  // hết phiên mở khoá khi đang sửa → hỏi mật khẩu rồi làm tiếp
         return (await window.requireAdmin('tiếp tục chỉnh sửa quy trình Canvas')) ? call(name, ...args) : null;
       }
       if (res && res.ok === false) { toast(res.error || 'Lỗi', 'error'); return null; }
+      // mọi thao tác sửa trả bảng kèm trạng thái ↶ hoàn tác / ↷ làm lại → cập nhật 2 nút trên thanh trên
+      const b = res && (res.board || (res.result && res.result.board));
+      if (b && b.undo && C.board && b.id === C.board.id) { C.board.undo = b.undo; drawUndo(); }
       return res;
     } catch (err) { toast(String(err), 'error'); return null; }
   }
 
   /* ---------------------------------------------------------------- vào trang */
   async function show() {
-    if (!C.meta) {
-      const res = await call('canvas_meta');
-      if (!res) return;
-      C.meta = res.meta;
-    }
+    // tải lại mỗi lần vào trang: ô chọn của khối 🔌 Tra cứu MCP lấy kết nối / công cụ mới nhất từ màn Kết nối MCP
+    const res = await call('canvas_meta');
+    if (res) C.meta = res.meta;
+    if (!C.meta) return;
+    if (FLOWSCREEN) await loadTemplates();  // 🎞 mẫu video
     if (C.board) return renderBoard();
     await listBoards();
   }
 
   // ================================================================ màn danh sách (kiểu Danh sách workflow)
   const KIND_ICON = { image: '🖼', upload: '⬆', video: '🎬' };
+  // 🎥 khối Google Flow = node Video cố định model Google Flow (dùng chung tách lời / ghép / dây nối của khối Video)
+  const FLOW = 'flow_browser';
+  const isFlow = n => !!n && n.kind === 'video' && n.engine === FLOW;
+  const kindIconOf = n => (isFlow(n) ? '🎥' : KIND_ICON[n.kind]);
+  const kindNameOf = n => (isFlow(n) ? 'Google Flow' : KIND_NAME[n.kind]);
   const kindIcon = k => KIND_ICON[k] || ((C.meta && C.meta.wf_types[k]) || {}).icon || '•';
   const L = { q: '', status: '', sort: 'updated', presets: null };
   const RUN_BADGE = { done: 'Xong', error: 'Lỗi', partial: 'Xong 1 phần', cancelled: 'Đã dừng', running: 'Đang chạy' };
@@ -49,9 +63,13 @@ window.CanvasPage = (() => {
     const stat = (label, value, main) => `<div class="cv-stat ${main ? 'main' : ''}"><small>${esc(label)}</small><b>${value}</b></div>`;
     const bs = C.boards;
     body().innerHTML = `<div class="cv-home">
-      <div class="cv-home-head"><div><small class="eyebrow">CANVAS</small><h2>Danh sách Canvas</h2>
-        <p class="muted">Bảng sáng tạo kiểu Kling — tạo ảnh, video, viết content, đăng bài trên 1 bảng; chạy lại cả quy trình ngay tại đây.</p></div>
-        <div class="row"><button class="btn ghost" data-cv="import" title="Chuyển 1 Workflow đã lưu hoặc quy trình mẫu thành Canvas">⇩ Từ Workflow / mẫu</button>
+      <div class="cv-home-head"><div>${FLOWSCREEN ? `<small class="eyebrow">GROK CANVAS</small><h2>Grok Canvas</h2>
+        <p class="muted">Như Canvas, model định sẵn: ${modelLine()} — đổi ở ⚙ Model.</p>`
+        : `<small class="eyebrow">CANVAS</small><h2>Danh sách Canvas</h2>
+        <p class="muted">Bảng sáng tạo kiểu Kling — tạo ảnh, video, viết content, đăng bài trên 1 bảng; chạy lại cả quy trình ngay tại đây.</p>`}</div>
+        <div class="row">${FLOWSCREEN ? '<button class="btn ghost" data-tpl-lib="" title="Mẫu video: phong cách + Master Prompt + khung cảnh — khối Video chỉ cần vật liệu + lời thoại">🎞 Mẫu video</button>' : ''}${FLOWSCREEN ? '<button class="btn ghost" data-cv="models" title="Model định sẵn của màn này: viết / xử lý, tạo ảnh, tạo video, trợ lý điều phối + profile trình duyệt">⚙ Model</button>' : ''}
+          <button class="btn ghost" data-cv="tasks" title="Quản lý tác vụ: 1 flow chạy nhiều tác vụ (đầu vào riêng, hàng đợi)">📋 Tác vụ</button>
+          <button class="btn ghost" data-cv="import" title="Chuyển 1 Workflow đã lưu hoặc quy trình mẫu thành Canvas">⇩ Từ Workflow / mẫu</button>
           <button class="btn primary" data-cv="new">＋ Tạo Canvas</button></div></div>
       <div class="cv-stats">${stat('Tổng canvas', bs.length, true)}${stat('Đang chạy', bs.filter(b => b.running).length)}
         ${stat('Chạy hôm nay', bs.reduce((a, b) => a + (b.runs_today || 0), 0))}
@@ -69,6 +87,7 @@ window.CanvasPage = (() => {
     const root = body();
     root.querySelector('[data-cv="new"]').onclick = createBoard;
     root.querySelector('[data-cv="import"]').onclick = importDialog;
+    root.querySelector('[data-cv="tasks"]').onclick = () => tasksView('');
     root.querySelectorAll('[data-l]').forEach(el => {
       el.oninput = () => { L[el.dataset.l] = el.value; drawCards(); };
     });
@@ -102,6 +121,7 @@ window.CanvasPage = (() => {
       <div class="cv-bcard-foot"><button class="btn ghost sm" data-act-b="open" type="button">Mở</button><span class="cv-sp"></span>
         ${b.running ? '<button class="btn ghost sm" data-act-b="stop" type="button">⏹ Dừng</button>'
           : '<button class="btn primary sm" data-act-b="run" type="button" title="Chạy cả quy trình (dùng lại kết quả không đổi)">▶ Chạy</button>'}
+        <button class="btn ghost sm" data-act-b="task" type="button" title="＋ Tạo tác vụ: chạy flow này với đầu vào riêng (nhiều tác vụ cùng lúc / hàng đợi)">＋📋</button>
         <button class="btn ghost sm ${b.schedule && b.schedule.on ? 'on' : ''}" data-act-b="sched" type="button" title="Lập lịch chạy tự động">⏰</button>
         <button class="btn ghost sm" data-act-b="dup" type="button" title="Nhân bản Canvas">⧉</button>
         <button class="btn ghost sm" data-act-b="del" type="button" title="Xoá Canvas">🗑</button></div></div>`;
@@ -128,6 +148,7 @@ window.CanvasPage = (() => {
   async function boardAction(what, bid) {
     const b = C.boards.find(x => x.id === bid);
     if (what === 'open') return openBoard(bid);
+    if (what === 'task') return taskDialog(bid);
     if (what === 'sched') {
       if (!(await window.requireAdmin('lập lịch chạy quy trình Canvas'))) return;
       return scheduleDialog(bid, b ? b.name : bid, (b || {}).schedule, () => listBoards());
@@ -144,6 +165,7 @@ window.CanvasPage = (() => {
       return;
     }
     if (what === 'stop') { if (confirm('Dừng quy trình đang chạy?')) await call('canvas_cancel_flow', bid); return; }
+    if (what === 'run' && FLOWSCREEN) return runAsTask(bid, true);  // 🎬 Grok Canvas: ▶ Chạy = tạo tác vụ → màn Tác vụ
     if (what === 'run') {
       // chạy ngay từ danh sách, không mở Canvas: khối “Hỏi khi chạy” → hộp hỏi hiện ngay tại đây; còn lỗi → liệt kê lỗi
       let res = await call('canvas_preview', bid, 'all', '', false);
@@ -155,45 +177,29 @@ window.CanvasPage = (() => {
         const prev = C.board;
         C.board = opened.board;  // hộp hỏi đọc node của Canvas này (màn danh sách không vẽ node nên không ảnh hưởng)
         let ok = false;
-        try { ok = await askInputs(plan.ask); } finally { C.board = prev; }
+        try { ok = await askInputs(plan.ask, { fromList: true }); } finally { C.board = prev; }
         if (!ok) return;
         res = await call('canvas_preview', bid, 'all', '', false);
         if (!res) return;
         plan = res.plan;
       }
-      if (plan.issues.some(i => i.level === 'error')) return listIssues(bid, b ? b.name : bid, plan.issues);
-      if (!plan.run.length) { toast('Mọi node đã có kết quả mới nhất — không cần chạy'); return; }
-      const msg = [`Chạy “${b ? b.name : bid}”:`, `• ${plan.run.length} node sẽ chạy, ${plan.reuse.length} node dùng lại kết quả`,
-        plan.posts.length ? '• Có khối đăng bài / quảng cáo: app DỪNG CHỜ bạn duyệt trên node (mở Canvas khi có thông báo).' : '',
-        (plan.auto_posts || []).length ? `• 🚀 TỰ ĐĂNG KHÔNG CẦN DUYỆT: ${plan.auto_posts.join(', ')}` : '',
-        ...plan.issues.filter(i => i.level === 'warn').map(w => `⚠ ${w.node}: ${w.message}`)].filter(Boolean).join('\n');
-      if (!confirm(msg)) return;
-      if (await call('canvas_run_flow', bid, 'all', '', false)) {
-        toast(`Đang chạy ${plan.run.length} node…`, 'ok');
+      if (!plan.run.length && !plan.issues.some(i => i.level === 'error')) { toast('Mọi khối đã có kết quả mới nhất — không cần chạy'); return; }
+      // bảng xem trước như trong Canvas: khối nào chạy, vì sao, tốn lượt gì; bỏ chọn khối không muốn làm lại
+      const run = await runDialog(bid, 'all', '', false, plan, {
+        onGo: async id => {
+          if ((await openBoard(bid)) === false) return;
+          const res2 = await call('canvas_preview', bid, 'all', '', false);
+          if (res2) { C.issues = Object.fromEntries(res2.plan.issues.map(i => [i.node, i])); drawAll(); showIssues(res2.plan.issues); }
+          focusNode(id);
+        } });
+      if (run) {
+        const rec = ((run.board || {}).runs || []).slice(-1)[0];
+        const total = rec ? Object.keys(rec.nodes || {}).length : plan.run.length;
+        toast(`Đang chạy ${total} khối…`, 'ok');
         const cur = C.boards.find(x => x.id === bid);
-        if (cur) { cur.running = true; cur.flow = { done: 0, total: plan.run.length }; drawCards(); }
+        if (cur) { cur.running = true; cur.flow = { done: 0, total }; drawCards(); }
       }
     }
-  }
-
-  /** Màn danh sách: quy trình còn lỗi → liệt kê lỗi ngay tại đây (mở Canvas chỉ khi bạn muốn sửa). */
-  function listIssues(bid, name, issues) {
-    const box = document.createElement('div');
-    box.className = 'cv-lightbox cv-import';
-    box.innerHTML = `<div class="cv-import-box cv-ask-box"><div class="cv-side-head"><b>⚠ “${esc(name)}” chưa chạy được</b><button class="btn ghost sm" data-x type="button">✕</button></div>
-      <p class="muted">Sửa các lỗi sau rồi bấm ▶ Chạy lại:</p>
-      ${issues.map(i => `<div class="cv-issue ${esc(i.level)}"><b>${esc(i.node || 'Quy trình')}</b><span>${esc(i.message)}</span></div>`).join('')}
-      <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn ghost sm" data-x type="button">Đóng</button>
-        <button class="btn primary sm" data-open type="button">Mở Canvas để sửa</button></div></div>`;
-    box.querySelectorAll('[data-x]').forEach(x => { x.onclick = () => box.remove(); });
-    box.querySelector('[data-open]').onclick = async () => {
-      box.remove();
-      if ((await openBoard(bid)) === false) return;
-      const res = await call('canvas_preview', bid, 'all', '', false);
-      if (res) { C.issues = Object.fromEntries(res.plan.issues.map(i => [i.node, i])); drawAll(); showIssues(res.plan.issues); }
-    };
-    box.onclick = e => { if (e.target === box) box.remove(); };
-    document.body.appendChild(box);
   }
 
   /* ---- ⏰ lập lịch chạy */
@@ -301,18 +307,31 @@ window.CanvasPage = (() => {
     const b = C.board;
     body().innerHTML = `<div class="cv-wrap">
       <div class="cv-top">
-        <button class="btn ghost sm" data-cv="home" title="Danh sách Canvas">⌂</button>
-        <input class="cv-name" value="${esc(b.name)}" maxlength="80" title="Đổi tên Canvas">
-        <span class="muted cv-count"></span>
+        <button class="cv-tbtn" data-cv="home" title="Về danh sách Canvas">⌂</button>
+        <div class="cv-top-title">
+          <input class="cv-name" value="${esc(b.name)}" maxlength="80" title="Đổi tên Canvas">
+          <span class="muted cv-count"></span>
+        </div>
         <span class="cv-flow"></span>
         <span class="cv-sp"></span>
-        <button class="btn primary sm" data-cv="run" title="Chạy cả quy trình theo thứ tự dây nối — node đã có kết quả mà không đổi gì thì dùng lại (không tốn lượt)">▶ Chạy toàn bộ</button>
-        <button class="btn ghost sm" data-cv="rerun" title="Làm lại MỌI node từ đầu (tạo mới hết — tốn lượt model)">⟳ Làm lại tất cả</button>
-        <button class="btn ghost sm" data-cv="sched" title="Lập lịch chạy tự động (một lần / hằng ngày / các thứ / cứ N phút)">⏰ Lịch</button>
-        <button class="btn ghost sm" data-cv="assist" title="Trợ lý Claude: điều phối quy trình, đánh giá kết quả, đề xuất sửa (bạn bấm Áp dụng mới thay đổi)">🤖 Trợ lý</button>
-        <button class="btn ghost sm" data-cv="history" title="Các lần chạy quy trình">🕘 Lịch sử</button>
-        <button class="btn ghost sm" data-cv="folder" title="Mở thư mục lưu file của Canvas này">📁 Thư mục</button>
-        <button class="btn ghost sm" data-cv="del" title="Xoá Canvas này">🗑 Xoá</button>
+        <div class="cv-top-actions">
+          <div class="cv-undo"><button class="cv-tbtn" data-cv="undo" disabled>↶</button><button class="cv-tbtn" data-cv="redo" disabled>↷</button></div>
+          <span class="cv-top-sep"></span>
+          <div class="cv-split">
+            <button class="btn primary sm cv-run-btn" data-cv="run" title="Chạy cả quy trình theo thứ tự dây nối — xem trước khối nào chạy (vì sao, tốn lượt gì) rồi mới bắt đầu; khối đã có kết quả mà không đổi gì thì dùng lại (không tốn lượt)">▶ Chạy toàn bộ</button>
+            <button class="btn primary sm cv-run-more" data-cv="runmenu" title="Kiểu chạy khác">▾</button>
+          </div>
+          <span class="cv-top-sep"></span>
+          <div class="cv-seg">
+            <button data-cv="sched" title="Lập lịch chạy tự động (một lần / hằng ngày / các thứ / cứ N phút)"><i>⏰</i><span>Lịch</span></button>
+            <button data-cv="assist" title="Trợ lý Claude: điều phối quy trình, đánh giá kết quả, đề xuất sửa (bạn bấm Áp dụng mới thay đổi)"><i>🤖</i><span>Trợ lý</span></button>
+            <button data-cv="history" title="Các lần chạy quy trình"><i>🕘</i><span>Lịch sử</span></button>
+            <button data-cv="folder" title="Mở thư mục lưu file của Canvas này"><i>📁</i><span>Thư mục</span></button>
+            ${FLOWSCREEN ? `<button data-cv="models" title="Model định sẵn: ${esc(modelLine())}"><i>⚙</i><span>Model</span></button>` : ''}
+          </div>
+          <span class="cv-top-sep"></span>
+          <button class="cv-tbtn danger" data-cv="del" title="Xoá Canvas này">🗑</button>
+        </div>
       </div>
       <div class="cv-stage" tabindex="0">
         <div class="cv-world"><div class="cv-groups"></div><svg class="cv-edges"></svg><div class="cv-nodes"></div></div>
@@ -321,29 +340,48 @@ window.CanvasPage = (() => {
         <div class="cv-assist hidden"></div>
         <div class="cv-menu hidden"></div>
         <div class="cv-empty ${b.nodes.length ? 'hidden' : ''}">
-          <b>Bắt đầu Canvas</b><span class="muted">Thêm node Ảnh (viết prompt → tạo ảnh) hoặc tải ảnh của bạn lên, rồi nối sang node Video.</span>
-          <div><button class="btn primary sm" data-add="image">🖼 Thêm ảnh</button> <button class="btn ghost sm" data-add="upload">⬆ Tải ảnh lên</button></div>
+          <i class="cv-empty-ic">🧩</i>
+          <b>Bắt đầu Canvas</b><span class="muted">Thêm node Ảnh (viết prompt → tạo ảnh) hoặc tải ảnh của bạn lên rồi nối sang Video;<br>hoặc chọn khối quy trình (văn bản, AI viết, hậu kỳ, đăng bài…).</span>
+          <div class="row"><button class="btn primary sm" data-add="image">🖼 Thêm ảnh</button><button class="btn ghost sm" data-add="upload">⬆ Tải ảnh lên</button><button class="btn ghost sm" data-empty-blocks>🧩 Chọn khối…</button></div>
+          <small class="muted">Kéo nền để di chuyển · cuộn để phóng to · kéo cổng ＋ sang khối khác để nối</small>
         </div>
       </div>
       <div class="cv-tray hidden"></div>
       <div class="cv-dock">
-        <button data-add="image" title="Thêm node Ảnh (tạo ảnh từ prompt)">🖼<small>Ảnh</small></button>
-        <button data-add="video" title="Thêm node Video (nối 1 ảnh vào làm khung đầu)">🎬<small>Video</small></button>
-        <button data-add="upload" title="Tải ảnh trên máy lên">⬆<small>Tải lên</small></button>
-        <button data-blocks title="Các khối như Workflow: Văn bản, AI viết, Tạo content, Ghép video, Video dài, Whiteboard, Đăng bài, Lên lịch, Quảng cáo · Nhóm / ghi chú">🧩<small>Khối</small></button>
-        <button data-arrange title="Tự sắp xếp các khối theo luồng dây nối: trái → phải, khối cùng bước xếp dọc; Nhóm giữ các khối bên trong và co lại vừa khít. Bấm lại trong 15 giây để hoàn tác">⇆<small>Sắp xếp</small></button>
-        <button data-selmode title="Quét chọn nhiều khối: bật lên thì kéo trên nền để quét chọn (tắt = kéo để di chuyển bảng). Lúc nào cũng dùng được: Shift + kéo trên nền để quét · Ctrl / Shift + bấm khối để thêm / bớt · Ctrl + A chọn tất cả · Esc bỏ chọn">⬚<small>Quét chọn</small></button>
+        <button data-add="image" title="Thêm node Ảnh (tạo ảnh từ prompt)"><i>🖼</i><small>Ảnh</small></button>
+        <button data-add="video" title="Thêm node Video (nối 1 ảnh vào làm khung đầu)"><i>🎬</i><small>Video</small></button>
+        ${FLOWSCREEN ? '' : `<button data-add="flow" title="Khối Google Flow: tạo video Veo 8 giây có tiếng trên labs.google/flow (tài khoản Google đã đăng nhập, tốn tín dụng Flow). Nối ảnh, ý tưởng, lời thoại như khối Video — lời dài tự tách nhiều video rồi ghép"><i>🎥</i><small>Flow</small></button>`}
+        <button data-add="upload" title="Tải ảnh trên máy lên"><i>⬆</i><small>Tải lên</small></button>
+        <button data-angles="character" title="Góc nhân vật: từ ảnh người mẫu tạo 1 bảng 5 góc (trước, ¾, nghiêng, sau, cận mặt) — nối vào Video / Storyboard để giữ đúng mặt, trang phục ở mọi góc máy. Đang chọn 1 ảnh thì tự nối ảnh đó vào"><i>🧍</i><small>Góc NV</small></button>
+        <button data-angles="product" title="Góc sản phẩm: từ ảnh sản phẩm tạo 1 bảng 5 góc (trước, ¾, cạnh, sau, trên) — nối vào Video / Storyboard để giữ đúng bao bì, nhãn ở mọi góc máy. Đang chọn 1 ảnh thì tự nối ảnh đó vào"><i>📦</i><small>Góc SP</small></button>
+        <button data-blocks class="cv-dock-main" title="Các khối như Workflow: Văn bản, AI viết, Tạo content, Ghép video, Video dài, Whiteboard, Đăng bài, Lên lịch, Quảng cáo · Nhóm / ghi chú"><i>🧩</i><small>Khối</small></button>
         <span class="cv-dock-sep"></span>
-        <button data-zoom="-" title="Thu nhỏ">−</button><span class="cv-zoom"></span><button data-zoom="+" title="Phóng to">＋</button>
-        <button data-zoom="fit" title="Vừa khung — xem toàn bộ node">⤢</button>
+        <button data-arrange title="Tự sắp xếp các khối theo luồng dây nối: trái → phải, khối cùng bước xếp dọc; Nhóm giữ các khối bên trong và co lại vừa khít. Bấm lại trong 15 giây để hoàn tác"><i>⇆</i><small>Sắp xếp</small></button>
+        <button data-selmode title="Quét chọn nhiều khối: bật lên thì kéo trên nền để quét chọn (tắt = kéo để di chuyển bảng). Lúc nào cũng dùng được: Shift + kéo trên nền để quét · Ctrl / Shift + bấm khối để thêm / bớt · Ctrl + A chọn tất cả · Esc bỏ chọn"><i>⬚</i><small>Quét chọn</small></button>
+        <span class="cv-dock-sep"></span>
+        <div class="cv-zoomer">
+          <button data-zoom="-" title="Thu nhỏ">−</button><span class="cv-zoom"></span><button data-zoom="+" title="Phóng to">＋</button>
+          <button data-zoom="fit" title="Vừa khung — xem toàn bộ node">⤢</button>
+        </div>
       </div>
     </div>`;
     const root = body();
-    root.querySelector('[data-cv="home"]').onclick = listBoards;
+    // 📋 bảng chạy của 1 tác vụ → ⌂ về màn Tác vụ
+    root.querySelector('[data-cv="home"]').onclick = () => (C.board && C.board.task_of ? tasksView() : listBoards());
+    root.querySelector('[data-empty-blocks]').onclick = e => { e.stopPropagation(); showBlocks(root.querySelector('[data-blocks]')); };
     root.querySelector('[data-cv="folder"]').onclick = () => call('canvas_open_folder', b.id);
     root.querySelector('[data-cv="del"]').onclick = deleteBoard;
     root.querySelector('[data-cv="run"]').onclick = () => runFlow('all', '', false);
-    root.querySelector('[data-cv="rerun"]').onclick = () => runFlow('all', '', true);
+    root.querySelector('[data-cv="runmenu"]').onclick = e => {
+      e.stopPropagation();
+      popMenu(e.currentTarget, [['fresh', '⟳ Làm lại tất cả', 'Tạo mới MỌI khối từ đầu (tốn lượt model) — trừ khối 🔒 đã khoá'],
+        ['errors', '↻ Chạy lại khối lỗi / chưa xong', 'Như Chạy toàn bộ: chỉ chạy khối lỗi, chưa chạy hoặc đã đổi']], key => {
+        if (key === 'fresh') runFlow('all', '', true);
+        if (key === 'errors') runFlow('all', '', false);
+      });
+    };
+    root.querySelector('[data-cv="undo"]').onclick = () => undoStep(false);
+    root.querySelector('[data-cv="redo"]').onclick = () => undoStep(true);
     root.querySelector('[data-cv="history"]').onclick = () => toggleHistory();
     root.querySelector('[data-cv="assist"]').onclick = () => toggleAssist();
     root.querySelector('[data-cv="sched"]').onclick = async () => {
@@ -356,7 +394,14 @@ window.CanvasPage = (() => {
     const name = root.querySelector('.cv-name');
     name.onchange = async () => { const res = await call('canvas_rename', b.id, name.value); if (res) C.board.name = res.board.name; };
     root.querySelectorAll('[data-add]').forEach(el => { el.onclick = () => addAt(el.dataset.add); });
-    root.querySelector('[data-blocks]').onclick = e => { e.stopPropagation(); showBlocks(e.currentTarget); };
+    root.querySelectorAll('[data-angles]').forEach(el => { el.onclick = () => addAngles(el.dataset.angles); });
+    root.querySelector('[data-blocks]').onclick = e => {  // bấm lại = đóng
+      e.stopPropagation();
+      const m = root.querySelector('.cv-menu');
+      if (m && !m.classList.contains('hidden') && m.classList.contains('cv-menu-blocks')) return hideMenu();
+      showBlocks(e.currentTarget);
+    };
+    bindMenuClose();
     root.querySelector('[data-arrange]').onclick = () => (C.undoArrange ? undoArrange() : arrange());
     const selBtn = root.querySelector('[data-selmode]');
     selBtn.classList.toggle('on', !!C.selMode);
@@ -383,10 +428,76 @@ window.CanvasPage = (() => {
   const defaultWidth = n => (n.kind === 'wf' ? 300 : ratio(n) < 1 ? 340 : 230);
   const widthOf = n => (n.kind !== 'wf' && n.w ? n.w : defaultWidth(n));  // Ảnh / Video / Tải lên: kéo góc để đổi cỡ
   const wspec = n => (n.kind === 'wf' ? C.meta.wf_types[n.wtype] : null);
-  const nameOf = n => (n.kind === 'wf' ? `${wspec(n).icon} ${wspec(n).name}` : KIND[n.kind]);
+  const nameOf = n => (n.kind === 'wf' ? `${wspec(n).icon} ${wspec(n).name}` : isFlow(n) ? '🎥 Google Flow' : KIND[n.kind]);
   const labelOf = n => (n && n.title ? n.title : n ? nameOf(n) : '');  // tên riêng (đặt ở ô Tên) hoặc tên loại
   const tagOf = x => `<b>${esc(x.id)}</b>${x.title ? ` · ${esc(x.title)}` : ''}`;
-  const titleInput = n => `<input class="cv-title" data-title value="${esc(n.title || '')}" maxlength="60" placeholder="Tên khối — VD: Thông tin sản phẩm, Lời thoại cảnh 1 (dễ phân biệt khi chạy)">`;
+  const titleInput = n => `<input class="cv-title" data-title value="${esc(n.title || '')}" maxlength="60" placeholder="Đặt tên khối (VD: Thông tin sản phẩm, Lời thoại cảnh 1)…" title="Tên riêng của khối — dễ phân biệt khi chạy, trong nhật ký và khi nhờ trợ lý">`;
+  /** Đầu ô cấu hình: biểu tượng · loại khối · mã khối · nút đóng (bỏ chọn). */
+  const panelHead = (n, sub) => `<div class="cv-panel-head"><span class="cv-node-ic">${esc(n.kind === 'wf' ? wspec(n).icon : kindIconOf(n))}</span>
+    <div class="cv-panel-ttl"><b>${esc(n.kind === 'wf' ? wspec(n).name : kindNameOf(n))}</b><small>${esc(n.id)}${sub ? ` · ${esc(sub)}` : ''}</small></div>
+    <button class="cv-x" data-close-panel type="button" title="Đóng (Esc)">✕</button></div>`;
+  const bindPanelHead = panel => { const x = panel.querySelector('[data-close-panel]'); if (x) x.onclick = () => selectNode(''); };
+  /* ---- ⇢ đầu vào của khối: vai trò từng dây ("cổng có tên"), thứ tự, bỏ nối */
+  // 📎 khối Ảnh: vai trò ảnh tham chiếu (backend dặn model giữ đúng mặt / sản phẩm / nền / phong cách)
+  const IMG_REFS = [['character', '🧍', 'Nhân vật'], ['product', '📦', 'Sản phẩm'], ['scene', '🏞', 'Bối cảnh'], ['style', '🎨', 'Phong cách']];
+  const ROLE_OPTS = {
+    image: [['', 'Tham chiếu chung'], ...IMG_REFS.map(([v, i, l]) => [v, `${i} ${l}`])],
+    product_studio: [['', 'Tự nhận theo tên'], ['character', '🧍 Nhân vật'], ['product', '📦 Sản phẩm']],
+    video: [['', 'Tự động'], ['first', 'Khung đầu'], ['ref', 'Tham chiếu']],
+    edit_pro: [['', 'Tự động'], ['main', 'Video chính'], ['clip', 'Clip minh hoạ']],
+  };
+  const iconOf = x => (x.kind === 'wf' ? (wspec(x) || {}).icon || '🧩' : kindIconOf(x) || '•');
+  function inputsHtml(n) {
+    const ins = (n.inputs || []).map(node).filter(Boolean);
+    if (!ins.length) return '';
+    const key = n.kind === 'wf' ? n.wtype : n.kind;
+    const opts = ROLE_OPTS[key];
+    const roles = n.roles || {};
+    const roleFor = x => opts && (((key === 'video' || key === 'image' || key === 'product_studio') && isPic(x)) || (key === 'edit_pro' && outTypes(x).has('video')));
+    return `<div class="cv-ins"><div class="cv-ins-head"><b>⇢ Đầu vào (${ins.length})</b><small class="muted">${ins.length > 1 ? 'thứ tự = thứ tự gửi model / ghép' : ''}</small></div>
+      ${ins.map((x, i) => `<div class="cv-in-row"><span class="cv-node-ic">${esc(iconOf(x))}</span>
+        <span class="cv-in-name" title="${esc(labelOf(x))}"><code>${esc(x.id)}</code> ${esc(labelOf(x))}</span>
+        ${roleFor(x) ? `<select data-role="${esc(x.id)}" title="Vai trò của đầu vào này">${opts.map(([v, l]) => `<option value="${v}" ${(roles[x.id] || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>` : ''}
+        ${ins.length > 1 ? `<button data-in-move="${i}:-1" type="button" title="Đưa lên" ${i ? '' : 'disabled'}>↑</button><button data-in-move="${i}:1" type="button" title="Đưa xuống" ${i < ins.length - 1 ? '' : 'disabled'}>↓</button>` : ''}
+        <button data-in-rm="${esc(x.id)}" type="button" title="Bỏ nối (hoàn tác được)">✕</button></div>`).join('')}</div>`;
+  }
+  function drawInputs(panel, n) {
+    const box = panel.querySelector('.cv-ins-box');
+    if (!box) return;
+    box.innerHTML = inputsHtml(n);
+    box.querySelectorAll('[data-role]').forEach(s => {
+      s.onchange = () => setOption(n.id, 'roles', { ...(node(n.id).roles || {}), [s.dataset.role]: s.value });
+    });
+    box.querySelectorAll('[data-in-move]').forEach(b => {
+      b.onclick = async () => {
+        const [i, d] = b.dataset.inMove.split(':').map(Number);
+        const ids = [...(node(n.id).inputs || [])].filter(x => node(x));
+        if (i + d < 0 || i + d >= ids.length) return;
+        [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
+        const res = await call('canvas_reorder_inputs', C.board.id, n.id, ids);
+        if (res) { C.board = res.board; drawAll(); }
+      };
+    });
+    box.querySelectorAll('[data-in-rm]').forEach(b => {
+      b.onclick = async () => {
+        const res = await call('canvas_connect', C.board.id, b.dataset.inRm, n.id, false);
+        if (res) { C.board = res.board; drawAll(); toast(`Đã bỏ nối ${b.dataset.inRm} → ${n.id} — Ctrl+Z để hoàn tác`, 'ok'); }
+      };
+    });
+  }
+
+  /** Dòng báo 🔒 ngay dưới đầu ô cấu hình khi khối đang khoá (sửa prompt chỉ có tác dụng khi mở khoá). */
+  function lockNote(panel, n) {
+    let note = panel.querySelector('.cv-lock-note');
+    if (!n.locked) { if (note) note.remove(); return; }
+    if (!note) {
+      note = document.createElement('div');
+      note.className = 'cv-lock-note';
+      const head = panel.querySelector('.cv-panel-head');
+      if (head) head.after(note); else panel.prepend(note);
+    }
+    note.innerHTML = '🔒 <b>Đang khoá kết quả</b> — chạy quy trình luôn giữ nguyên kết quả này (kể cả Làm lại tất cả). Sửa prompt / cấu hình chỉ có tác dụng khi mở khoá.';
+  }
   function bindTitle(panel, id) {
     const inp = panel.querySelector('[data-title]');
     if (!inp) return;
@@ -409,7 +520,8 @@ window.CanvasPage = (() => {
   const isBusy = n => ['queued', 'running', 'waiting'].includes(n.status);
   const isPic = n => n.kind === 'image' || n.kind === 'upload';
 
-  const POST_KIND = { feed: 'Bài viết', text: 'Bài viết chữ', media: 'Ảnh / video', reel: 'Reels', story: 'Story' };
+  const POST_KIND = { feed: 'Bài viết', text: 'Bài viết chữ', media: 'Ảnh / video', reel: 'Reels', story: 'Story',
+    link: 'Chia sẻ link', dark: 'Bài ẩn (quảng cáo)' };
   const shortUrl = u => {
     const s = String(u || '').replace(/^https?:\/\/(www\.|m\.)?/, '');
     return s.length > 34 ? `${s.slice(0, 24)}…${s.slice(-7)}` : s;
@@ -432,7 +544,7 @@ window.CanvasPage = (() => {
     // thẻ bài đăng kiểu Facebook: Fanpage, loại bài, thời gian, trạng thái, ảnh / khung hình, caption, link + nút
     const page = p.page || 'Fanpage';
     const when = p.at ? `${String(p.at).slice(11, 16)} ${String(p.at).slice(8, 10)}/${String(p.at).slice(5, 7)}` : '';
-    const state = p.queued ? ['wait', `🕒 Hẹn đăng ${p.when || ''}`] : p.scheduled ? ['wait', `🗓 Facebook hẹn ${p.when || ''}`] : ['ok', '✓ Đã đăng'];
+    const state = p.pending ? ['wait', '📥 Chờ duyệt'] : p.queued ? ['wait', `🕒 Hẹn đăng ${p.when || ''}`] : p.scheduled ? ['wait', `🗓 Facebook hẹn ${p.when || ''}`] : ['ok', '✓ Đã đăng'];
     const video = p.media === 'video' || p.post_type === 'reel';
     return `<div class="cv-post">
       <div class="cv-post-head"><span class="cv-post-av">${esc(page.trim().charAt(0).toUpperCase() || 'F')}</span>
@@ -454,10 +566,14 @@ window.CanvasPage = (() => {
     const cfgText = n.wtype === 'input_text' ? (n.config || {}).text : '';
     const ap = n.status === 'waiting' ? n.approval || {} : null;
     const body = ap ? `<div class="cv-approve">
-        <b>📣 Duyệt ${esc(ap.kind === 'schedule' ? `hẹn giờ ${ap.when || ''}` : 'đăng bài')} lên “${esc(ap.page || '')}”</b>
+        <b>📣 Duyệt ${esc(ap.kind === 'schedule' ? `hẹn giờ ${ap.when || ''}` : 'đăng bài')}${ap.page ? ` lên “${esc(ap.page)}”` : ' — chọn Fanpage bên dưới'}</b>
         <small class="muted">${esc(ap.post_type_label || '')}</small>
+        ${ap.link ? `<div class="cv-post-link" title="${esc(ap.link)}">🔗 ${esc(shortUrl(ap.link))}</div>` : ''}
         ${(ap.media_urls || []).length ? `<div class="cv-ap-media">${ap.media_urls.map(u => (/\.(mp4|mov|webm|m4v)/i.test(u)
           ? `<video src="${esc(u)}" muted></video>` : `<img src="${esc(thumbUrl(u, 200))}" alt="">`)).join('')}</div>` : ''}
+        ${ap.choose_page ? `<label class="cv-ap-page" title="Khối chưa chọn Fanpage — chọn trang để đăng bài này"><span>📣 Đăng lên Fanpage</span><select data-ap-page>
+          <option value="">— Chọn Fanpage —</option>${(ap.pages || []).map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select>
+          ${(ap.pages || []).length ? '' : '<small class="warn-text">Chưa có Fanpage nào bật Kết nối (Cài đặt → Facebook · Meta)</small>'}</label>` : ''}
         ${ap.post_type === 'media' || ap.post_type === 'story' ? '' : `<textarea data-ap-caption rows="5">${esc(ap.caption || '')}</textarea>`}
         <div class="row"><button class="btn primary sm" data-ap="yes" type="button">✓ Đồng ý đăng</button>
           <button class="btn ghost sm" data-ap="no" type="button">✕ Không đăng</button></div></div>`
@@ -469,13 +585,39 @@ window.CanvasPage = (() => {
               : n.status === 'error' ? `<b>⚠ Lỗi</b><small>${esc(n.error || '')}</small>`
                 : `<b>${esc(s.icon)}</b><small>${esc(s.desc)}</small>`}</div>`;
     const ins = s.inputs.map(p => TYPE_VI[p.type === 'any' ? 'images' : p.type] && p.label).filter(Boolean);
-    return `<div class="cv-node-label"><span title="${esc(nameOf(n))}">${esc(n.title ? `${wspec(n).icon} ${n.title}` : nameOf(n))}${n.ask ? ' · ❓' : ''}${n.auto_post ? ' · 🚀' : ''}</span>
-        <em class="cv-st ${esc(n.status || '')}">${n.status === 'waiting' ? 'Chờ duyệt' : busy ? `${Math.round(n.pct || 0)}%` : esc(STATUS[n.status] || '')}</em></div>
+    const flags = [n.locked ? ['🔒', 'Đã khoá kết quả — chạy quy trình giữ nguyên'] : null, qcFlag(n),
+      n.ask ? ['❓', 'Hỏi lại các ô này mỗi lần chạy'] : null, n.optional ? ['✏', 'Không bắt buộc nhập — để trống vẫn chạy'] : null,
+      n.auto_post ? ['🚀', 'Tự đăng không cần duyệt'] : null,
+      n.to_posts && !n.auto_post && ['fb_post', 'fb_schedule'].includes(n.wtype) ? ['📥', 'Lưu vào Quản lý bài đăng — chờ duyệt'] : null];
+    const st = n.status === 'waiting' ? 'Chờ duyệt' : busy ? `${Math.round(n.pct || 0)}%` : STATUS[n.status] || '';
+    return `<div class="cv-card">${nodeHead(n, s.icon, n.title || s.name, n.title ? s.name : '', flags, st)}
       <div class="cv-media wf ${url ? 'has-video' : ''}">${body}${n.status === 'running' ? `<div class="cv-prog"><i style="width:${Math.max(3, Math.round(n.pct || 0))}%"></i></div>` : ''}${busy && (url || out.text) ? `<div class="cv-busy"><div class="cv-spin"></div>${Math.round(n.pct || 0)}%</div>` : ''}</div>
       ${n.status === 'error' && (url || out.text) ? `<div class="cv-err">⚠ ${esc(n.error || '')}</div>` : ''}
-      ${n.status === 'idle' && n.error ? `<div class="cv-err muted">${esc(n.error)}</div>` : ''}
+      ${n.status === 'idle' && n.error ? `<div class="cv-err muted">${esc(n.error)}</div>` : ''}</div>
       ${ins.length ? `<button class="cv-port in" title="Nhận: ${esc(ins.join(', '))}" type="button"></button>` : ''}
       ${s.outputs.length ? `<button class="cv-port out" title="Đưa ra: ${esc(s.outputs.map(o => o.label).join(', '))} — kéo sang node khác để nối · bấm để tạo tiếp" type="button">＋</button>` : ''}`;
+  }
+
+  /** Thanh tiêu đề của thẻ khối: biểu tượng · tên (tên riêng, loại khối hiện khi rê chuột) · cờ (❓ 🚀 💬) · mã khối · trạng thái. */
+  function nodeHead(n, icon, name, sub, flags, st) {
+    return `<div class="cv-node-head"><span class="cv-node-ic" title="${esc(sub || name)}">${esc(icon)}</span>
+      <span class="cv-node-name" title="${esc(sub ? `${name} · ${sub}` : name)}">${esc(name)}</span>
+      ${(flags || []).filter(Boolean).map(([ic, tip]) => `<i class="cv-node-flag" title="${esc(tip)}">${ic}</i>`).join('')}
+      <code class="cv-node-id" title="Mã khối — dùng khi nhắc tới khối này (nhật ký, trợ lý)">${esc(n.id)}</code>
+      <em class="cv-st ${esc(n.status || '')}">${esc(st)}</em></div>`;
+  }
+
+  /** Thẻ cảnh tách từ Storyboard: dưới ảnh bìa (hoặc dưới video khi không có ảnh bìa) hiện mô tả + lời thoại của cảnh. */
+  function sceneCap(n) {
+    const src = node(n.cover_of || n.scene_of || '');
+    if (!src || (n.scene_of && (n.inputs || []).some(i => (node(i) || {}).cover_of))) return '';  // video đã có ảnh bìa hiện
+    const sc = sceneOf(src, n);
+    if (!sc || !sc.noi_dung) return '';
+    const line = String(sc.loi || '').trim();
+    const meta = [['💡', sc.y_tuong, 'Ý tưởng'], ['🎥', sc.goc_quay, 'Góc quay']].filter(x => x[1])
+      .map(([ic, v, tip]) => `<p class="cv-scene-meta" title="${esc(tip)}: ${esc(v)}">${ic} ${esc(v)}</p>`).join('');
+    return `<div class="cv-scene-cap"><p class="cv-scene-desc"><b>Cảnh ${esc(n.scene)}</b>${esc(sc.noi_dung)}</p>${meta}
+      ${line ? `<p class="cv-scene-line" title="${esc(line)}">💬 ${esc(line)}</p>` : '<p class="cv-scene-line muted">🔇 Cảnh không lời</p>'}</div>`;
   }
 
   function nodeHtml(n) {
@@ -487,18 +629,28 @@ window.CanvasPage = (() => {
         : `<img src="${esc(n.kind === 'upload' ? url : thumbUrl(url, 640))}" alt="" draggable="false">`)
       : `<div class="cv-ph">${busy ? `<div class="cv-spin"></div><b>${Math.round(n.pct || 0)}%</b><small>${esc(n.stage || STATUS[n.status])}</small>`
         : n.status === 'error' ? `<b>⚠ Lỗi</b><small>${esc(n.error || '')}</small>`
-          : n.kind === 'upload' ? `<b>🖼</b><small>${n.ask ? 'Chưa có ảnh — sẽ hỏi chọn ảnh khi chạy quy trình' : 'Chưa có ảnh — bấm ⬆ Chọn ảnh'}</small>`
+          : n.kind === 'upload' ? `<b>🖼</b><small>${(n.inputs || []).length ? `Chưa có ảnh — sẽ lấy ảnh sản phẩm từ ${esc(n.inputs.join(', '))} (Tra cứu web);<br>web không có ảnh thì bấm ⬆ Chọn ảnh`
+            : n.ask ? 'Chưa có ảnh — sẽ hỏi chọn ảnh khi chạy quy trình' : 'Chưa có ảnh — bấm ⬆ Chọn ảnh'}</small>`
+          : n.kind === 'video' && n.chain_from && node(n.chain_from) ? `<b>⛓</b><small>Quay tiếp từ khung cuối ${esc(node(n.chain_from).title || n.chain_from).split(' · ')[0]}<br>— liền mạch, ảnh bìa làm tham chiếu</small>`
+          : n.kind === 'video' && (n.inputs || []).some(i => (node(i) || {}).cover_of) ? '<b>🎬</b><small>Quay từ ảnh bìa bên trái —<br>ưng ảnh bìa rồi bấm ▶ Chạy toàn bộ</small>'
+          : isFlow(n) ? '<b>🎥</b><small>📎 Thêm ảnh nhân vật / sản phẩm,<br>viết cảnh + lời thoại rồi bấm Tạo</small>'
           : n.kind === 'video' ? '<b>🎬</b><small>Nối 1 ảnh vào làm khung đầu,<br>viết chuyển động rồi bấm Tạo</small>'
             : `<b>🖼</b><small>${promptSrc(n) && promptSrc(n) !== 'own' ? `Prompt lấy từ ${esc(promptSrc(n))} — bấm Tạo<br>(hoặc ▶ Chạy toàn bộ)`
               : dialogueSources(n).length && promptSrc(n) !== 'own' ? 'Prompt = chữ từ khối nối vào<br>+ phần viết thêm — bấm Tạo' : 'Viết prompt rồi bấm Tạo'}</small>`}</div>`;
     const variants = (n.urls || []).length > 1 ? `<div class="cv-variants">${n.urls.map((u, i) =>
       `<img src="${esc(thumbUrl(u, 120))}" data-pick="${i}" class="${i === (n.pick || 0) ? 'on' : ''}" alt="" draggable="false">`).join('')}</div>` : '';
-    return `<div class="cv-node-label"><span>${KIND[n.kind]}${n.ask ? ' · ❓' : ''}${(n.dialogue || '').trim() ? ' · 💬' : ''}${n.title ? ` · ${esc(n.title)}` : ''}</span>
-        <em class="cv-st ${esc(n.status || '')}">${busy ? `${Math.round(n.pct || 0)}%` : esc(STATUS[n.status] || '')}</em></div>
+    const kindName = kindNameOf(n);
+    const flags = [n.locked ? ['🔒', 'Đã khoá kết quả — chạy quy trình giữ nguyên'] : null, qcFlag(n),
+      n.ask ? ['❓', n.kind === 'upload' ? 'Hỏi chọn ảnh mỗi lần chạy' : 'Hỏi lại prompt mỗi lần chạy'] : null,
+      n.optional ? ['✏', 'Không bắt buộc nhập — để trống vẫn chạy'] : null,
+      (n.dialogue || '').trim() ? ['💬', 'Có lời thoại'] : null, (n.vers || []).length ? ['🕘', `${n.vers.length} phiên bản trước`] : null];
+    return `<div class="cv-card${isFlow(n) ? ' cv-gflow' : ''}">${nodeHead(n, kindIconOf(n), n.title || kindName, n.title ? kindName : '', flags,
+      busy ? `${Math.round(n.pct || 0)}%` : STATUS[n.status] || '')}${refStrip(n)}
       <div class="cv-media" style="aspect-ratio:${1 / ratio(n)}">${media}${n.status === 'running' ? `<div class="cv-prog"><i style="width:${Math.max(3, Math.round(n.pct || 0))}%"></i></div>` : ''}${busy && url ? `<div class="cv-busy"><div class="cv-spin"></div>${Math.round(n.pct || 0)}%</div>` : ''}</div>
       ${n.status === 'error' && url ? `<div class="cv-err">⚠ ${esc(n.error || '')}</div>` : ''}
-      ${variants}
-      ${n.kind !== 'upload' ? '<button class="cv-port in" title="Ảnh nối vào (kéo từ cổng ＋ của ảnh khác sang đây)" type="button"></button>' : ''}
+      ${variants}${sceneCap(n)}</div>
+      ${n.kind !== 'upload' ? '<button class="cv-port in" title="Ảnh nối vào (kéo từ cổng ＋ của ảnh khác sang đây)" type="button"></button>'
+        : '<button class="cv-port in" title="Nối khối 🌐 Tra cứu web vào đây: tìm được ảnh sản phẩm thì thay ảnh này, không có thì nhắc bạn tải ảnh lên" type="button"></button>'}
       <button class="cv-port out" title="${n.kind === 'video' ? 'Đưa video ra: kéo sang Đăng bài, Lên lịch, Ghép video, Video khác, Kết quả…' : 'Đưa ảnh ra: kéo sang node khác để nối'} · bấm để tạo tiếp" type="button">＋</button>`;
   }
 
@@ -511,11 +663,13 @@ window.CanvasPage = (() => {
       el.dataset.node = n.id;
       holder.appendChild(el);
     }
-    el.className = `cv-node ${n.kind} st-${n.status || 'idle'}${n.id === C.sel ? ' sel' : ''}${multi().has(n.id) ? ' msel' : ''}${n.status === 'error' ? ' err' : ''}${C.flash && C.flash[n.id] ? ' flash' : ''}${(C.issues || {})[n.id] ? ' issue' : ''}`;
+    el.className = `cv-node ${n.kind} st-${n.status || 'idle'}${n.id === C.sel ? ' sel' : ''}${multi().has(n.id) ? ' msel' : ''}${n.status === 'error' ? ' err' : ''}${C.flash && C.flash[n.id] ? ' flash' : ''}${(C.issues || {})[n.id] ? ' issue' : ''}${n.locked ? ' locked' : ''}`;
     el.style.left = `${n.x}px`;
     el.style.top = `${n.y}px`;
     el.style.width = `${widthOf(n)}px`;
     el.innerHTML = nodeHtml(n);
+    const media = el.querySelector('.cv-media');  // cổng nối nằm ngang tâm khung ảnh / nội dung (dưới thanh tiêu đề)
+    if (media && media.offsetHeight) el.style.setProperty('--port-y', `${media.offsetTop + media.offsetHeight / 2}px`);  // bảng đang ẩn → đo = 0, giữ mặc định
     if (n.kind !== 'wf') {
       el.insertAdjacentHTML('beforeend', '<i class="cv-node-resize" title="Kéo để phóng to / thu nhỏ khối · nhấp đúp để về cỡ mặc định"></i>');
       el.querySelector('.cv-node-resize').ondblclick = e => { e.stopPropagation(); resizeNodeTo(n.id, 0); };
@@ -544,9 +698,12 @@ window.CanvasPage = (() => {
       ap.querySelectorAll('[data-ap]').forEach(b => {
         b.onclick = async () => {
           const yes = b.dataset.ap === 'yes';
-          if (yes && !confirm('Đăng bài này lên Fanpage?')) return;
+          const pageSel = ap.querySelector('[data-ap-page]');  // 📣 khối chưa chọn Fanpage → chọn lúc duyệt
+          if (yes && pageSel && !pageSel.value) { pageSel.focus(); return toast('Chọn Fanpage để đăng bài này', 'warn'); }
+          const pageName = pageSel && pageSel.value ? pageSel.selectedOptions[0].textContent.trim() : '';
+          if (yes && !confirm(pageName ? `Đăng bài này lên Fanpage “${pageName}”?` : 'Đăng bài này lên Fanpage?')) return;
           const cap = ap.querySelector('[data-ap-caption]');
-          if (await call('canvas_approve', C.board.id, n.id, yes, cap ? cap.value : null)) toast(yes ? 'Đã duyệt — đang đăng…' : 'Đã bỏ qua bài đăng', yes ? 'ok' : '');
+          if (await call('canvas_approve', C.board.id, n.id, yes, cap ? cap.value : null, pageSel ? pageSel.value : '')) toast(yes ? 'Đã duyệt — đang đăng…' : 'Đã bỏ qua bài đăng', yes ? 'ok' : '');
         };
       });
     }
@@ -567,6 +724,7 @@ window.CanvasPage = (() => {
     drawEdges();
     drawPanel();
     drawFlow();
+    drawUndo();
   }
 
   function anchor(id, side) {
@@ -574,7 +732,7 @@ window.CanvasPage = (() => {
     const n = node(id);
     if (!el || !n) return null;
     const media = el.querySelector('.cv-media');
-    const y = n.y + (media ? media.offsetTop + media.offsetHeight / 2 : el.offsetHeight / 2);
+    const y = n.y + (media ? media.offsetTop + media.offsetHeight / 2 : el.offsetHeight / 2);  // = tâm cổng nối (--port-y)
     return { x: side === 'out' ? n.x + el.offsetWidth : n.x, y };
   }
 
@@ -836,15 +994,51 @@ window.CanvasPage = (() => {
     body().querySelectorAll('.cv-node').forEach(el => el.classList.toggle('sel', el.dataset.node === id));
     hideMenu();
     drawPanel(true);
+    if (id) { keepClear(id); placeTools(); }  // đặt lại thanh công cụ khi ô cấu hình đã hiện (né cột phải)
+  }
+
+  /** Ô cấu hình neo cột phải → khối vừa chọn bị ô (hoặc Trợ lý) che thì trượt canvas sang trái cho khối lộ ra. */
+  function keepClear(id) {
+    const root = body();
+    const n = node(id);
+    const el = n && root.querySelector(`[data-node="${id}"]`);
+    const panel = root.querySelector('.cv-panel');
+    const stage = root.querySelector('.cv-stage');
+    if (!el || !panel || !stage) return;
+    const r = stage.getBoundingClientRect();
+    const edge = panel.getBoundingClientRect().left - r.left - 24;  // mép trái ô cấu hình (toạ độ sân khấu)
+    const x1 = C.view.x + n.x * C.view.k, x2 = x1 + el.offsetWidth * C.view.k;
+    if (x2 <= edge || edge < 160) return;
+    const dx = Math.min(x2 - edge, Math.max(0, x1 - 24));  // khối rộng hơn chỗ trống → giữ mép trái trong màn hình
+    if (dx <= 0) return;
+    const world = root.querySelector('.cv-world');
+    world.classList.add('glide');
+    C.view.x -= dx;
+    applyView();
+    placeTools();
+    setTimeout(() => world.classList.remove('glide'), 260);
   }
 
   function optionsHtml(n) {
     const m = C.meta;
     const sel = (key, items, value, label) => `<label title="${esc(label)}"><select data-f="${key}">${items.map(([v, t]) =>
       `<option value="${esc(v)}" ${String(v) === String(value) ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`;
+    if (isFlow(n)) {  // 🎥 khối Google Flow: không chọn model; video Veo 8 giây có tiếng — bố cục như bảng cài đặt Flow
+      const spec = m.video_engines[FLOW] || { aspects: ['9:16', '16:9'] };
+      const ASP = { '9:16': ['▯', 'Dọc 9:16'], '16:9': ['▭', 'Ngang 16:9'], '1:1': ['□', 'Vuông 1:1'] };
+      return `<div class="cv-flow-set"><div class="cv-flow-set-h">⚙ Cài đặt video</div>
+        <div class="cv-seg2" role="radiogroup" title="Tỉ lệ khung hình">${spec.aspects.map(a => `<button type="button" data-set="aspect" data-val="${esc(a)}"
+          class="${n.aspect === a ? 'on' : ''}" aria-pressed="${n.aspect === a}"><i>${(ASP[a] || ['▢'])[0]}</i>${esc((ASP[a] || [, a])[1])}</button>`).join('')}</div>
+        <div class="cv-flow-chips" title="${esc(spec.note || '')}"><span>🎥 Veo</span><span>⏱ 8 giây</span><span>1 kết quả</span><span>🔊 có tiếng</span></div>
+        ${sel('voice', (m.voices || []).map(v => [v.value, `🗣 ${v.label}`]), n.voice || '', 'Giọng đọc lời thoại')}
+        <label class="cv-opt-check" title="Tắt: mọi ảnh là thành phần (Ingredients) — Flow tự dựng cảnh mới giữ đúng người / sản phẩm"><input type="checkbox" data-f="first_frame" ${n.first_frame !== false ? 'checked' : ''}> Ảnh đầu làm khung mở đầu</label>
+        ${askCheck(n)}</div>`;
+    }
+    // 🎥 màn Canvas Google Flow: model định sẵn → nhãn thay ô chọn model
+    const lockTag = kind => `<span class="cv-flow-tag" title="Model định sẵn của màn — đổi ở ⚙ Model">⚙ ${esc(((m.flow || {}).names || {})[kind] || '')}</span>`;
     if (n.kind === 'video') {
       const spec = m.video_engines[n.engine] || Object.values(m.video_engines)[0];
-      return sel('engine', Object.entries(m.video_engines).map(([k, v]) => [k, v.name]), n.engine, 'Model video')
+      return (FLOWSCREEN && !n.part_of ? tplHtml(n) : '') + (FLOWSCREEN ? lockTag('video') : sel('engine', Object.entries(m.video_engines).filter(([k]) => k !== FLOW).map(([k, v]) => [k, v.name]), n.engine, 'Model video'))
         + sel('aspect', spec.aspects.map(a => [a, a]), n.aspect, 'Tỉ lệ')
         + sel('duration', spec.durations.map(d => [d, d.replace('s', ' giây')]), n.duration, 'Thời lượng')
         + sel('resolution', spec.resolutions.map(r => [r, r]), n.resolution, 'Độ phân giải')
@@ -853,7 +1047,7 @@ window.CanvasPage = (() => {
         + askCheck(n);
     }
     const spec = m.image_engines[n.engine] || Object.values(m.image_engines)[0];
-    return sel('engine', Object.entries(m.image_engines).map(([k, v]) => [k, v.name]), n.engine, 'Model ảnh')
+    return (FLOWSCREEN ? lockTag('image') : sel('engine', Object.entries(m.image_engines).map(([k, v]) => [k, v.name]), n.engine, 'Model ảnh'))
       + sel('aspect', spec.aspects.map(a => [a, a]), n.aspect, 'Tỉ lệ')
       + sel('count', spec.counts.map(c => [c, `${c} ảnh`]), n.count, 'Số ảnh mỗi lần')
       + askCheck(n);
@@ -873,8 +1067,10 @@ window.CanvasPage = (() => {
       const spec = C.meta.video_engines[n.engine] || {};
       const vids = ins.filter(x => outTypes(x).has('video'));
       let room = Math.max(1, spec.max_images || 1) - (vids.length ? 1 : 0);
-      const list = [...pics];
-      const first = list.length && n.first_frame !== false ? list.shift() : null;
+      const roles = n.roles || {};  // vai trò từng ảnh (giống backend _video_images): "Khung đầu" đứng đầu, "Tham chiếu" không làm khung đầu
+      const pinned = pics.find(p => roles[p.id] === 'first') || (n.first_frame !== false ? pics.find(p => roles[p.id] !== 'ref') : null) || null;
+      const list = pics.filter(p => p !== pinned);
+      const first = pinned;
       if (first) room -= 1;
       const refs = list.splice(0, Math.max(0, Math.min(5, room)));
       const b = tagOf;
@@ -902,24 +1098,34 @@ window.CanvasPage = (() => {
     // thanh công cụ nổi (toạ độ màn hình, không phóng theo zoom)
     const has = (n.urls || []).length > 0;
     const busy = isBusy(n);
-    tools.innerHTML = [
+    const vers = (n.vers || []).length;
+    const lockable = canLock(n);
+    const groupsHtml = [[  // nhóm nút cách nhau bằng vạch: tạo tiếp · xem / lấy kết quả · chạy / khoá · dừng / xoá
       isPic(n) && has ? '<button data-act="to-video" title="Tạo node Video dùng ảnh này làm khung đầu">🎬 Tạo video</button>' : '',
       isPic(n) && has ? '<button data-act="edit" title="Tạo node Ảnh mới dùng ảnh này làm tham chiếu (sửa, đổi bối cảnh, thêm sản phẩm…)">🖌 Sửa ảnh</button>' : '',
-      isPic(n) && has ? '<button data-act="upscale" title="Phóng to 2× trên máy (không tốn lượt model)">⤢ Phóng to 2×</button>' : '',
-      isPic(n) && !busy ? '<button data-act="replace" title="Chọn ảnh khác trên máy thay cho ảnh này — giữ nguyên dây nối, node phía sau sẽ dùng ảnh mới">🔄 Thay ảnh</button>' : '',
+      isPic(n) && has ? '<button data-act="upscale" title="Phóng to 2× trên máy (không tốn lượt model)">⤢ 2×</button>' : '',
+      isPic(n) && !busy ? '<button data-act="replace" title="Chọn ảnh khác trên máy thay cho ảnh này — giữ nguyên dây nối, node phía sau sẽ dùng ảnh mới (ảnh cũ vào 🕘 Phiên bản)">🔄 Thay ảnh</button>' : '',
+    ], [
       has ? '<button data-act="view" title="Xem lớn">⛶ Xem</button>' : '',
       has ? '<button data-act="download" title="Lưu file về máy">⬇ Tải về</button>' : '',
       n.kind === 'wf' && (n.out || {}).text ? '<button data-act="copy" title="Sao chép chữ kết quả">📋 Sao chép</button>' : '',
       (n.out || {}).folder ? '<button data-act="open-result" title="Mở thư mục khối Kết quả đã gom">📁 Mở thư mục</button>' : '',
       ((n.out || {}).post || {}).url ? '<button data-act="view-post" title="Mở bài đã đăng trong cửa sổ trình duyệt nhỏ">👁 Xem bài</button>' : '',
-      n.kind !== 'upload' && !(n.kind === 'wf' && n.wtype === 'input_text') ? '<button data-act="run-to" title="Chạy các node phía trước + node này (dùng lại kết quả không đổi)">▶ Đến đây</button>' : '',
-      n.kind !== 'upload' ? '<button data-act="run-from" title="Chạy node này + mọi node phía sau">⏩ Từ đây</button>' : '',
-      n.kind !== 'upload' ? '<button data-act="dup" title="Nhân bản node (giữ prompt, model, nối)">⧉</button>' : '',
-      busy ? '<button data-act="cancel" title="Dừng tạo">⏹ Dừng</button>' : '',
-      '<button data-act="del" class="danger" title="Xoá node (phím Delete)">🗑</button>',
-    ].join('');
+      vers ? `<button data-act="versions" title="${vers} kết quả trước của khối này — xem và chọn lại bản cũ">🕘 ${vers}</button>` : '',
+      n.log_at ? '<button data-act="log" title="Nhật ký lần chạy gần nhất của khối này">📜</button>' : '',
+    ], [
+      n.kind !== 'upload' && !(n.kind === 'wf' && n.wtype === 'input_text') ? '<button data-act="run-menu" title="Chạy đến khối này (các khối phía trước + khối này) hoặc từ khối này trở đi">▶ Chạy ▾</button>' : '',
+      lockable ? `<button data-act="lock" class="${n.locked ? 'on' : ''}" title="${n.locked ? 'Mở khoá — lần chạy sau tạo lại khối này nếu prompt / đầu vào đã đổi'
+        : 'Khoá kết quả — chạy quy trình (kể cả Làm lại tất cả, trợ lý tự làm lại) luôn giữ nguyên kết quả này'}">${n.locked ? '🔓 Mở khoá' : '🔒 Khoá'}</button>` : '',
+      n.kind !== 'upload' ? '<button data-act="dup" title="Nhân bản node (giữ prompt, model, nối)">⧉ Nhân bản</button>' : '',
+      n.kind !== 'upload' && !busy ? '<button data-act="convert" title="Đổi khối này sang loại khác tại chỗ — giữ mã khối, vị trí, tên, chữ và các dây nối còn hợp (hoàn tác được)">🔁 Đổi khối</button>' : '',
+    ], [
+      busy ? '<button data-act="cancel" class="warn" title="Dừng tạo">⏹ Dừng</button>' : '',
+      '<button data-act="del" class="danger" title="Xoá node (phím Delete) — hoàn tác được bằng ↶ / Ctrl+Z">🗑</button>',
+    ]].map(g => g.filter(Boolean).join('')).filter(Boolean);
+    tools.innerHTML = groupsHtml.join('<i class="cv-tools-sep"></i>');
     tools.classList.remove('hidden');
-    tools.querySelectorAll('[data-act]').forEach(b => { b.onclick = () => act(b.dataset.act, n.id); });
+    tools.querySelectorAll('[data-act]').forEach(b => { b.onclick = e => { e.stopPropagation(); act(b.dataset.act, n.id, b); }; });
     placeTools();
     // ô prompt dưới node (nằm trong world → kéo / zoom theo node)
     if (n.kind === 'upload') return drawUploadPanel(n);
@@ -927,22 +1133,35 @@ window.CanvasPage = (() => {
     if (!panel || panel.dataset.for !== n.id) {
       if (panel) panel.remove();
       panel = document.createElement('div');
-      panel.className = 'cv-panel';
+      panel.className = `cv-panel${isFlow(n) ? ' cv-panel-flow' : ''}`;  // 🎥 khối Google Flow: bố cục riêng
       panel.dataset.for = n.id;
       panel.onpointerdown = e => e.stopPropagation();
       panel.onwheel = e => e.stopPropagation();
-      root.querySelector('.cv-nodes').appendChild(panel);
-      panel.innerHTML = `${titleInput(n)}<div class="cv-in-note"></div>
+      root.querySelector('.cv-stage').appendChild(panel);  // neo cột phải (như Trợ lý), không theo zoom
+      panel.innerHTML = `${panelHead(n, n.kind === 'video' ? 'tạo video từ ảnh / prompt'
+        : n.angles === 'character' ? 'bảng 5 góc nhân vật — nối vào Video / Storyboard'
+          : n.angles === 'product' ? 'bảng 5 góc sản phẩm — nối vào Video / Storyboard' : 'tạo ảnh từ prompt')}${titleInput(n)}<div class="cv-in-note"></div><div class="cv-ins-box"></div>
+        ${n.kind === 'image' && !n.angles ? `<div class="cv-refs-add" title="Chọn ảnh trên máy → đính kèm ngay trong khối này (hiện nhỏ trên thẻ) với vai trò — model giữ đúng nhân vật / sản phẩm / bối cảnh / phong cách"><b>📎 Ảnh tham chiếu</b>
+          ${IMG_REFS.map(([r, i, l]) => `<button class="btn ghost sm" data-ref-add="${r}" type="button">${i} ${l}</button>`).join('')}</div>
+          <div class="cv-refs-list"></div>` : ''}
+        ${isFlow(n) && !n.part_of ? `<div class="cv-flow-sec"><div class="cv-refs-add" title="Ảnh thành phần gửi Google Flow (tối đa 3): chọn ảnh trên máy → đính kèm ngay trong khối (hiện nhỏ trên thẻ)"><b>📎 Thành phần</b>
+          ${IMG_REFS.slice(0, 3).map(([r, i, l]) => `<button class="btn ghost sm" data-ref-add="${r}" type="button">${i} ${l}</button>`).join('')}</div>
+          <div class="cv-refs-list"></div><small class="muted">Ảnh nối dây vào khối cũng được gửi kèm · Flow nhận tối đa 3 ảnh</small></div>` : ''}
         <div class="cv-dialogue-head cv-prompt-head"><b>✎ Prompt</b>
           <select data-prompt-src title="Lấy prompt từ khối chữ đang nối vào (Văn bản, AI viết…), viết trực tiếp, hoặc ghép cả hai"></select></div>
         <textarea placeholder="${n.kind === 'video' ? 'Mô tả chuyển động: người làm gì, máy quay thế nào (VD: cô gái mỉm cười giới thiệu sản phẩm, máy đứng yên)…'
           : 'Mô tả ảnh muốn tạo (VD: Ảnh đang livestream trên TikTok, có thiết bị và trưng bày các sản phẩm)…'}"></textarea>
         ${n.kind === 'video' ? `<div class="cv-dialogue"><div class="cv-dialogue-head"><b>💬 Lời thoại</b>
-            <select data-dlg-src title="Lấy lời thoại từ khối chữ đang nối vào (Văn bản, AI viết…) hoặc tự nhập"></select><small data-dlg-count></small></div>
-          <textarea data-dlg rows="3" placeholder="Câu nhân vật nói trong video (tiếng Việt, đúng nguyên văn). Mỗi dòng 1 câu; nhiều người: Tên: câu nói"></textarea></div>` : ''}
-        <div class="cv-panel-row"><div class="cv-opts"></div><span class="cv-sp"></span>
-          <button class="btn ghost sm" data-p="enhance" title="Nhờ model chữ (Cài đặt → Model AI) viết lại prompt chi tiết hơn">✨</button>
+            <select data-dlg-src title="Lấy lời thoại từ khối chữ đang nối vào (Văn bản, AI viết…) hoặc tự nhập"></select><small data-dlg-count></small>
+            <button class="btn ghost sm hidden" data-dlg-split type="button" title="Tách lời thoại ở cuối câu thành nhiều node Video (mỗi node nói kịp trong clip, cùng ảnh / prompt), nối sẵn vào khối phía sau — không tốn lượt AI">✂ Tách</button></div>
+          <textarea data-dlg rows="3" placeholder="Câu nhân vật nói trong video (tiếng Việt, đúng nguyên văn). Mỗi dòng 1 câu; nhiều người: Tên: câu nói"></textarea>
+          <label class="cv-opt-check cv-auto-split${FLOWSCREEN && n.template ? ' hidden' : ''}" title="Khi chạy, lời thoại dài hơn mức nói kịp trong clip → app tự tách ở cuối câu thành nhiều video (cùng ảnh / prompt), quay từng video rồi ghép lại thành 1 — không hỏi lại, không tốn lượt AI để tách"><input type="checkbox" data-auto-split ${n.auto_split === false ? '' : 'checked'}> ✂ Lời dài → tự tách nhiều video rồi ghép thành 1</label></div>` : ''}
+        <div class="cv-opts"></div><div class="cv-qc-box"></div>
+        <div class="cv-panel-row cv-panel-foot"><span class="cv-sp"></span>
+          <button class="btn ghost sm" data-p="enhance" title="Nhờ model chữ (Cài đặt → Model AI) viết lại prompt chi tiết hơn">✨ Viết lại prompt</button>
           <button class="btn primary sm" data-p="go"></button></div>`;
+      bindPanelHead(panel);
+      panel.querySelectorAll('[data-ref-add]').forEach(b => { b.onclick = () => addInlineRef(n.id, b.dataset.refAdd); });
       const ta = panel.querySelector('textarea');
       ta.value = n.prompt || '';
       ta.oninput = () => {
@@ -964,8 +1183,24 @@ window.CanvasPage = (() => {
           clearTimeout(C.dlgT);
           C.dlgT = setTimeout(() => call('canvas_update_nodes', C.board.id, [{ id: n.id, dialogue: dlg.value }]), 600);
         };
+        dlg.onchange = async () => {  // gõ xong (rời ô) → lời dài thì tự tách ngay
+          if (dlg.readOnly) return;
+          clearTimeout(C.dlgT);
+          await call('canvas_update_nodes', C.board.id, [{ id: n.id, dialogue: dlg.value }]);
+          autoSplit(n.id);
+        };
       }
       bindTitle(panel, n.id);
+      const splitBtn = panel.querySelector('[data-dlg-split]');
+      if (splitBtn) splitBtn.onclick = () => splitVideo(n.id);
+      const autoBox = panel.querySelector('[data-auto-split]');
+      if (autoBox) {
+        autoBox.onchange = async () => {
+          await setOption(n.id, 'auto_split', autoBox.checked);
+          dialogueCount(panel, node(n.id));
+          if (autoBox.checked) autoSplit(n.id);
+        };
+      }
       panel.querySelector('[data-p="enhance"]').onclick = () => enhance(n.id);
       panel.querySelector('[data-p="go"]').onclick = () => (isBusy(node(n.id)) ? act('cancel', n.id) : generate(n.id));
       if (focus) setTimeout(() => ta.focus(), 30);
@@ -982,19 +1217,26 @@ window.CanvasPage = (() => {
     psel.value = psrc === 'own' || ptexts.some(x => x.id === psrc) ? psrc : '';
     psel.disabled = !ptexts.length;
     psel.onchange = () => setOption(n.id, 'prompt_src', psel.value);
-    const fromNode = !!(psrc && psrc !== 'own');
+    const head = n.part_of ? node(n.part_of) : null;  // ✂ video con: ảnh + ý tưởng + lời lấy từ khối Video chung
+    const fromNode = !!(psrc && psrc !== 'own') || !!head;
     const modeChanged = ta.readOnly !== fromNode;  // vừa đổi nguồn → luôn thay chữ trong ô (kể cả khi ô đang focus)
     ta.readOnly = fromNode;
     ta.classList.toggle('from-src', fromNode);
     ta.placeholder = fromNode ? `Khối ${psrc} chưa có chữ — chạy khối đó trước, hoặc ▶ Chạy toàn bộ`
       : psrc === '' && ptexts.length ? 'Viết thêm (không bắt buộc) — được ghép sau chữ từ khối nối vào…'
         : n.kind === 'video' ? 'Mô tả chuyển động: người làm gì, máy quay thế nào (VD: cô gái mỉm cười giới thiệu sản phẩm, máy đứng yên)…'
-          : 'Mô tả ảnh muốn tạo (VD: Ảnh đang livestream trên TikTok, có thiết bị và trưng bày các sản phẩm)…';
-    const wantPrompt = fromNode ? sourceText(node(psrc), n, 'prompt') : (n.prompt || '');
+          : n.angles === 'character' ? '🧍 Nối ảnh nhân vật vào — app tự tạo bảng 5 góc (trước, ¾, nghiêng, sau, cận mặt). Ghi thêm nếu cần (VD: giữ nguyên sơ mi trắng, chân váy đen)…'
+            : n.angles === 'product' ? '📦 Nối ảnh sản phẩm vào — app tự tạo bảng 5 góc (trước, ¾, cạnh, sau, trên). Ghi thêm nếu cần (VD: xô nhựa trắng 22kg, nắp có quai)…'
+              : 'Mô tả ảnh muốn tạo (VD: Ảnh đang livestream trên TikTok, có thiết bị và trưng bày các sản phẩm)…';
+    if (head) ta.placeholder = `🔗 Phần ${n.part} của khối Video chung ${head.id} — dùng ảnh + ý tưởng / prompt của khối đó (sửa ở khối chung)`;
+    const wantPrompt = head ? '' : fromNode ? sourceText(node(psrc), n, 'prompt') : (n.prompt || '');
     if ((modeChanged || fromNode || document.activeElement !== ta) && ta.value !== wantPrompt) ta.value = wantPrompt;
     panel.querySelector('[data-p="enhance"]').disabled = fromNode;
     panel.querySelector('.cv-in-note').innerHTML = inputsNote(n) + (n.stage && !busy ? ` · <i>${esc(n.stage)}</i>` : '');
+    drawInputs(panel, n);
     panel.querySelector('.cv-opts').innerHTML = optionsHtml(n);
+    drawRefsList(panel, n);
+    drawQc(panel, n);
     const dlg = panel.querySelector('[data-dlg]');
     if (dlg) {
       const srcSel = panel.querySelector('[data-dlg-src]');
@@ -1003,24 +1245,38 @@ window.CanvasPage = (() => {
         Lấy từ ${esc(x.id)} · ${esc(labelOf(x))}</option>`).join('')}`;
       srcSel.disabled = !srcs.length;
       srcSel.title = srcs.length ? 'Lấy lời thoại từ khối chữ đang nối vào, hoặc tự nhập' : 'Nối khối Văn bản / AI viết vào node này để lấy lời thoại từ đó';
-      srcSel.onchange = () => setOption(n.id, 'dialogue_src', srcSel.value);
-      const fromSrc = !!(n.dialogue_src && node(n.dialogue_src));
+      srcSel.onchange = async () => { await setOption(n.id, 'dialogue_src', srcSel.value); autoSplit(n.id); };
+      const fromSrc = !!(n.dialogue_src && node(n.dialogue_src)) || !!head;
       dlg.readOnly = fromSrc;
       dlg.classList.toggle('from-src', fromSrc);
+      if (head) srcSel.disabled = true;
+      const autoRow = panel.querySelector('.cv-auto-split');
+      if (autoRow) autoRow.classList.toggle('hidden', !!head);
       dlg.placeholder = fromSrc ? `Khối ${n.dialogue_src} chưa có chữ — chạy nó trước, hoặc ▶ Chạy toàn bộ`
         : 'Câu nhân vật nói trong video (tiếng Việt, đúng nguyên văn). Mỗi dòng 1 câu; nhiều người: Tên: câu nói';
-      const want = fromSrc ? sourceText(node(n.dialogue_src), n, 'loi') : (n.dialogue || '');
+      const want = head || !n.dialogue_src ? (n.dialogue || '') : sourceText(node(n.dialogue_src), n, 'loi');
       if (document.activeElement !== dlg && dlg.value !== want) dlg.value = want;
       dialogueCount(panel, n);
     }
-    panel.querySelectorAll('[data-f]').forEach(s => { s.onchange = () => setOption(n.id, s.dataset.f, s.type === 'checkbox' ? s.checked : s.value); });
+    panel.querySelectorAll('[data-f]').forEach(s => {
+      s.onchange = async () => {
+        await setOption(n.id, s.dataset.f, s.type === 'checkbox' ? s.checked : s.value);
+        if (n.kind === 'video' && s.dataset.f === 'duration') autoSplit(n.id);  // clip ngắn lại → lời có thể thành dài
+      };
+    });
+    panel.querySelectorAll('[data-set]').forEach(b => {  // nút chọn dạng bấm (tỉ lệ khối Google Flow)
+      b.onclick = async () => {
+        if (b.classList.contains('on')) return;
+        await setOption(n.id, b.dataset.set, b.dataset.val);
+        if (b.dataset.set === 'build') autoSplit(n.id);  // 🎞 đổi sang Tách khối → tách ngay nếu lời dài
+      };
+    });
     const go = panel.querySelector('[data-p="go"]');
-    go.textContent = busy ? `⏹ Dừng (${Math.round(n.pct || 0)}%)` : has ? '↻ Tạo lại' : '✦ Tạo';
+    go.textContent = busy ? `⏹ Dừng (${Math.round(n.pct || 0)}%)` : n.locked ? '🔒 Đã khoá' : has ? '↻ Tạo lại' : '✦ Tạo';
     go.classList.toggle('danger', busy);
-    const el = root.querySelector(`[data-node="${n.id}"]`);
-    panel.style.left = `${n.x}px`;
-    panel.style.top = `${n.y + (el ? el.offsetHeight : 300) + 14}px`;
-    panel.style.width = `${Math.max(440, el ? el.offsetWidth : 300)}px`;
+    go.disabled = !!n.locked && !busy;
+    go.title = n.locked ? 'Khối đang khoá — bấm 🔓 Mở khoá trên thanh công cụ để tạo lại' : '';
+    lockNote(panel, n);
   }
 
   /* ---------------------------------------------------------------- ô cấu hình node khối (dựng từ fields của Workflow) */
@@ -1057,6 +1313,14 @@ window.CanvasPage = (() => {
           `<option value="${esc(o.id)}" ${o.id === v ? 'selected' : ''}>${esc(o.name)}${o.currency ? ` · ${esc(o.currency)}` : ''}</option>`).join('')}`}</select>
         ${list && !list.length ? `<small class="warn-text">${f.type === 'fb_page' ? 'Chưa có Fanpage nào bật Kết nối (mục Fanpage Facebook)' : `Không có tài khoản quảng cáo${SRC.fb.accounts_error ? ` — ${esc(SRC.fb.accounts_error)}` : ''}`}</small>` : ''}</label>`;
     }
+    if (f.type === 'heygen_avatar' || f.type === 'heygen_voice') {  // 🧑‍💼 danh sách tải từ HeyGen (lưu trên máy)
+      const opts = f.options || [];
+      const cur = String(v ?? '');
+      const known = opts.some(o => String(o.value) === cur);
+      return `<label class="field"><span>${esc(f.label)} <button class="link" data-heygen-reload type="button" title="Lấy avatar / giọng từ tài khoản HeyGen (không tốn credit)">↻ tải từ HeyGen</button></span>
+        <select data-c="${f.key}">${opts.map(o => `<option value="${esc(o.value)}" ${String(o.value) === cur ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}${known ? '' : `<option value="${esc(cur)}" selected>${esc(cur)} (đã chọn)</option>`}</select>
+        ${f.loaded ? '' : '<small class="muted">Chưa tải danh sách — bấm ↻ tải từ HeyGen (cần HeyGen API key ở Cài đặt)</small>'}</label>`;
+    }
     if (f.type === 'studio_preset') {
       const list = SRC.studio;
       return `<label class="field">${lab}<select data-c="${f.key}">${list === null ? '<option>Đang tải…</option>'
@@ -1089,7 +1353,7 @@ window.CanvasPage = (() => {
       panel.dataset.for = n.id;
       panel.onpointerdown = e => e.stopPropagation();
       panel.onwheel = e => e.stopPropagation();
-      root.querySelector('.cv-nodes').appendChild(panel);
+      root.querySelector('.cv-stage').appendChild(panel);  // neo cột phải (như Trợ lý), không theo zoom
     }
     const busy = isBusy(n);
     const cfg = n.config || {};
@@ -1098,9 +1362,12 @@ window.CanvasPage = (() => {
     if (fresh) {
       if (needSrc && (!SRC.fb || !SRC.studio)) loadSources().then(() => { if (C.sel === n.id) drawWfPanel(node(n.id), true); });
       const keep = document.activeElement && panel.contains(document.activeElement) ? document.activeElement.dataset.c : '';
-      panel.innerHTML = `${titleInput(n)}<div class="cv-in-note">${esc(s.desc)}${ins.length ? `<br>Nhận từ: ${ins.map(tagOf).join(', ')}` : s.inputs.length
-          ? `<br>Nối vào: ${s.inputs.map(p => esc(p.label)).join(' · ')}` : ''}</div>
-        ${n.wtype === 'input_video' ? '' : `<label class="cv-opt-check cv-ask-toggle" title="Mỗi lần chạy quy trình, app hỏi lại các ô của khối này (sửa được trước khi chạy)"><input type="checkbox" data-ask-toggle ${n.ask ? 'checked' : ''}> ❓ Hỏi lại các ô này mỗi lần chạy quy trình</label>`}
+      panel.innerHTML = `${panelHead(n, GROUP_VI[s.group] || '')}${titleInput(n)}<div class="cv-in-note">${esc(s.desc)}${ins.length ? '' : s.inputs.length
+          ? `<br>Nối vào: ${s.inputs.map(p => esc(p.label)).join(' · ')}` : ''}</div><div class="cv-ins-box"></div>
+        ${n.wtype === 'product_studio' ? `<div class="cv-refs-add" title="Chọn ảnh trên máy → khối ảnh tải lên, nối vào và đặt vai trò — dùng làm Character Lock / Product Lock cho mọi cảnh"><b>📎 Ảnh tham chiếu</b>
+          ${IMG_REFS.slice(0, 2).map(([r, i, l]) => `<button class="btn ghost sm" data-ref-add="${r}" type="button">${i} ${l}</button>`).join('')}</div>` : ''}
+        ${n.wtype === 'input_video' ? '' : `<label class="cv-opt-check cv-ask-toggle" title="Mỗi lần chạy quy trình, app hỏi lại các ô của khối này (sửa được trước khi chạy)"><input type="checkbox" data-ask-toggle ${n.ask ? 'checked' : ''}> ❓ Hỏi lại các ô này mỗi lần chạy quy trình</label>${askFieldsHtml(n)}`}
+        <label class="cv-opt-check" title="Bật: các ô bắt buộc (prompt, chủ đề…) để trống vẫn chạy — không chặn quy trình"><input type="checkbox" data-opt-toggle ${n.optional ? 'checked' : ''}> ✏ Không bắt buộc nhập</label>
         <div class="cv-wf-fields">${s.fields.filter(f => fieldVisible(f, cfg)).map(f => fieldHtml(f, cfg)
           + (n.wtype === 'post_video' && f.key === 'script' ? `<div class="cv-panel-row cv-listen"><button class="btn sm" data-listen ${busy ? 'disabled' : ''}
             title="Nghe tiếng thật trong video đầu vào (Gemini API) — không nghe được thì lấy lời thoại đã giao cho khối Video nguồn — rồi điền vào ô Lời đọc / phụ đề để bạn sửa">🎧 Phân tích lời thoại từ video</button>
@@ -1109,9 +1376,16 @@ window.CanvasPage = (() => {
           <textarea data-out rows="6">${esc((n.out || {}).text || '')}</textarea></label>` : ''}
         ${['fb_post', 'fb_schedule'].includes(n.wtype) ? `<label class="cv-opt-check cv-auto-post ${n.auto_post ? 'on' : ''}" title="Bật: khi chạy, khối này đăng / hẹn giờ thẳng lên Fanpage, không dừng chờ bạn duyệt"><input type="checkbox" data-auto-post ${n.auto_post ? 'checked' : ''}> 🚀 Tự đăng không cần duyệt</label>
           <small class="${n.auto_post ? 'warn-text' : 'muted'}">${n.auto_post ? '⚠ Khi chạy sẽ ĐĂNG THẲNG lên Fanpage, không hỏi lại — tắt ô trên nếu muốn xem trước.'
-            : '🔒 Dừng chờ bạn bấm “Đồng ý đăng” trên node trước khi đăng.'}</small>` : ''}
+            : n.to_posts ? '📥 Không đăng ngay: bài được lưu vào Quản lý bài đăng ở mục “Chờ duyệt” (có thông báo 🔔 + chuông) — Canvas chạy tiếp, bạn duyệt & đăng ở đó.'
+            : '🔒 Dừng chờ bạn bấm “Đồng ý đăng” trên node trước khi đăng.'}</small>
+          ${n.auto_post ? '' : `<label class="cv-opt-check cv-to-posts ${n.to_posts ? 'on' : ''}" title="Bật: không dừng chờ trên node — lưu bài vào Quản lý bài đăng (Chờ duyệt) và báo bạn"><input type="checkbox" data-to-posts ${n.to_posts ? 'checked' : ''}> 📥 Lưu vào Quản lý bài đăng — chờ duyệt</label>`}` : ''}
         ${n.wtype === 'fb_ad' ? '<small class="muted">Quảng cáo tạo ở trạng thái TẠM DỪNG — bật ở mục Quảng cáo Facebook khi sẵn sàng.</small>' : ''}
-        <div class="cv-panel-row"><span class="cv-sp"></span><button class="btn primary sm" data-p="go"></button></div>`;
+        ${n.wtype === 'product_studio' ? studioHtml(n) : ''}${n.qc_required ? '<div class="cv-qc-box"></div>' : ''}
+        <div class="cv-panel-row cv-panel-foot"><span class="cv-sp"></span><button class="btn primary sm" data-p="go"></button></div>`;
+      panel.querySelectorAll('[data-ref-add]').forEach(b => { b.onclick = () => addRef(n.id, b.dataset.refAdd); });
+      bindStudio(panel, n);
+      drawQc(panel, n);
+      bindPanelHead(panel);
       panel.querySelectorAll('[data-c]').forEach(el => {
         const key = el.dataset.c;
         const field = s.fields.find(f => f.key === key);
@@ -1121,8 +1395,20 @@ window.CanvasPage = (() => {
         el.onchange = () => saveConfig(n.id, { [key]: value() }, redraw && field);
       });
       bindTitle(panel, n.id);
+      const optToggle = panel.querySelector('[data-opt-toggle]');  // ✏ không bắt buộc nhập
+      if (optToggle) optToggle.onchange = () => setOption(n.id, 'optional', optToggle.checked);
       const askToggle = panel.querySelector('[data-ask-toggle]');
-      if (askToggle) askToggle.onchange = () => setOption(n.id, 'ask', askToggle.checked);
+      if (askToggle) {
+        askToggle.onchange = async () => {  // bật / tắt hỏi → vẽ lại bảng để hiện / ẩn ô chọn “Ô hỏi khi chạy”
+          await setOption(n.id, 'ask', askToggle.checked);
+          const p = body().querySelector('.cv-panel');
+          if (p && p.dataset.for === n.id) { p.remove(); drawPanel(); }
+        };
+      }
+      const toPosts = panel.querySelector('[data-to-posts]');
+      if (toPosts) {
+        toPosts.onchange = async () => { await setOption(n.id, 'to_posts', toPosts.checked); drawWfPanel(node(n.id), true); };
+      }
       const autoPost = panel.querySelector('[data-auto-post]');
       if (autoPost) {
         autoPost.onchange = async () => {
@@ -1137,6 +1423,19 @@ window.CanvasPage = (() => {
         };
       }
       panel.querySelectorAll('[data-reload-src]').forEach(b => { b.onclick = async () => { await loadSources(true); drawWfPanel(node(n.id), true); }; });
+      panel.querySelectorAll('[data-heygen-reload]').forEach(b => {
+        b.onclick = async e => {
+          e.preventDefault();
+          b.disabled = true;
+          b.textContent = 'Đang tải…';
+          const r = await call('canvas_heygen_lists', true);
+          if (r && C.meta.wf_types.heygen_video) {
+            C.meta.wf_types.heygen_video.fields = r.fields;
+            toast(`Đã tải ${r.avatars} avatar · ${r.voices} giọng từ HeyGen`, 'ok');
+          }
+          if (C.sel === n.id) drawWfPanel(node(n.id), true);
+        };
+      });
       panel.querySelectorAll('[data-pickfile]').forEach(b => {
         b.onclick = async () => {
           const res = await call('canvas_pick_files', b.dataset.kind);
@@ -1180,12 +1479,13 @@ window.CanvasPage = (() => {
       if (keep) { const el = panel.querySelector(`[data-c="${keep}"]`); if (el) el.focus(); }
     }
     const go = panel.querySelector('[data-p="go"]');
-    go.textContent = busy ? `⏹ Dừng${n.status === 'waiting' ? '' : ` (${Math.round(n.pct || 0)}%)`}` : n.status === 'done' ? '↻ Chạy lại' : '▶ Chạy';
+    go.textContent = busy ? `⏹ Dừng${n.status === 'waiting' ? '' : ` (${Math.round(n.pct || 0)}%)`}` : n.locked ? '🔒 Đã khoá'
+      : n.status === 'done' ? '↻ Chạy lại' : '▶ Chạy';
     go.classList.toggle('danger', busy);
-    const el = root.querySelector(`[data-node="${n.id}"]`);
-    panel.style.left = `${n.x}px`;
-    panel.style.top = `${n.y + (el ? el.offsetHeight : 300) + 14}px`;
-    panel.style.width = `${Math.max(400, el ? el.offsetWidth : 300)}px`;
+    go.disabled = !!n.locked && !busy;
+    go.title = n.locked ? 'Khối đang khoá — bấm 🔓 Mở khoá trên thanh công cụ để chạy lại' : '';
+    lockNote(panel, n);
+    drawInputs(panel, n);
   }
 
   function drawUploadPanel(n) {
@@ -1198,19 +1498,22 @@ window.CanvasPage = (() => {
       panel.className = 'cv-panel';
       panel.dataset.for = n.id;
       panel.onpointerdown = e => e.stopPropagation();
-      root.querySelector('.cv-nodes').appendChild(panel);
+      panel.onwheel = e => e.stopPropagation();
+      root.querySelector('.cv-stage').appendChild(panel);  // neo cột phải (như Trợ lý), không theo zoom
     }
     const has = (n.urls || []).length > 0;
-    panel.innerHTML = `${titleInput(n)}<div class="cv-in-note">${has ? 'Ảnh đã tải sẵn — dùng cho mọi lần chạy' : 'Chưa có ảnh'}${n.ask ? ' · <b>❓ sẽ hỏi chọn ảnh khi chạy quy trình</b>' : ''}</div>
-      <div class="cv-panel-row"><button class="btn ${has ? 'ghost' : 'primary'} sm" data-up-pick type="button">⬆ ${has ? 'Chọn ảnh khác…' : 'Chọn ảnh…'}</button>
-        <label class="cv-opt-check" title="Mỗi lần ▶ Chạy toàn bộ / Đến đây / Từ đây, app hỏi chọn ảnh cho đầu vào này (vd. mỗi lần 1 sản phẩm khác)"><input type="checkbox" data-up-ask ${n.ask ? 'checked' : ''}> ❓ Hỏi chọn ảnh mỗi lần chạy</label></div>`;
+    const web = (n.inputs || []).filter(i => node(i));
+    panel.innerHTML = `${panelHead(n, 'ảnh của bạn')}${titleInput(n)}<div class="cv-in-note">${has ? (String(n.made || '').startsWith('Ảnh sản phẩm lấy từ web') ? `🖼 ${esc(n.made)}` : 'Ảnh đã tải sẵn — dùng cho mọi lần chạy') : 'Chưa có ảnh'}${n.ask ? ' · <b>❓ sẽ hỏi chọn ảnh khi chạy quy trình</b>' : ''}
+      ${web.length ? `<br>🌐 Nối từ <b>${esc(web.join(', '))}</b> (Tra cứu web): mỗi lần khối đó chạy, tìm được ảnh sản phẩm thì <b>thay ảnh này</b> (ảnh cũ vào 🕘 Phiên bản); không có thì ${has ? 'giữ ảnh đang có' : '<b>bạn cần tải ảnh lên</b>'}.` : ''}
+      ${n.status === 'error' && n.error ? `<br><span class="warn-text">⚠ ${esc(n.error)}</span>` : ''}</div>
+      <div class="cv-panel-row cv-panel-foot"><label class="cv-opt-check" title="Mỗi lần ▶ Chạy toàn bộ / Đến đây / Từ đây, app hỏi chọn ảnh cho đầu vào này (vd. mỗi lần 1 sản phẩm khác)"><input type="checkbox" data-up-ask ${n.ask ? 'checked' : ''}> ❓ Hỏi chọn ảnh mỗi lần chạy</label>
+        <label class="cv-opt-check" title="Không chọn ảnh vẫn chạy — khối phía sau chạy không có ảnh này"><input type="checkbox" data-up-opt ${n.optional ? 'checked' : ''}> ✏ Không bắt buộc</label>
+        <span class="cv-sp"></span><button class="btn ${has ? 'ghost' : 'primary'} sm" data-up-pick type="button">⬆ ${has ? 'Chọn ảnh khác…' : 'Chọn ảnh…'}</button></div>`;
+    bindPanelHead(panel);
     bindTitle(panel, n.id);
     panel.querySelector('[data-up-pick]').onclick = () => act('replace', n.id);
     panel.querySelector('[data-up-ask]').onchange = e => setOption(n.id, 'ask', e.target.checked);
-    const el = root.querySelector(`[data-node="${n.id}"]`);
-    panel.style.left = `${n.x}px`;
-    panel.style.top = `${n.y + (el ? el.offsetHeight : 300) + 14}px`;
-    panel.style.width = `${Math.max(380, el ? el.offsetWidth : 300)}px`;
+    panel.querySelector('[data-up-opt]').onchange = e => setOption(n.id, 'optional', e.target.checked);
   }
 
   async function runWf(id) {
@@ -1232,7 +1535,7 @@ window.CanvasPage = (() => {
   // nguồn prompt của node Ảnh / Video ('' = ghép, 'own' = chỉ viết trực tiếp, id = khối nối vào; khối đã bỏ nối → '')
   const promptSrc = n => { const s = n.prompt_src || ''; return s === 'own' || (s && (n.inputs || []).includes(s) && node(s)) ? s : ''; };
   // node Video tách từ Storyboard (n.scene = k): chỉ lấy phần của cảnh k (prompt / lời thoại), không phải cả storyboard
-  const sceneOf = (src, n) => (src && src.wtype === 'storyboard_video' && n && n.scene ? ((src.out || {}).scenes || [])[n.scene - 1] || {} : null);
+  const sceneOf = (src, n) => (src && ['storyboard_video', 'product_studio'].includes(src.wtype) && n && n.scene ? ((src.out || {}).scenes || [])[n.scene - 1] || {} : null);
   const sourceText = (src, n, key) => {
     const sc = sceneOf(src, n);
     if (sc) return sc[key] || '';
@@ -1240,6 +1543,33 @@ window.CanvasPage = (() => {
   };
   const spokenText = n => (n.dialogue_src && node(n.dialogue_src) ? sourceText(node(n.dialogue_src), n, 'loi') : n.dialogue || '');
   const typedDialogue = dlg => (dlg && !dlg.readOnly ? { dialogue: dlg.value } : {});  // lấy từ khối → không ghi đè chữ tự nhập
+
+  async function splitVideo(id) {
+    // ✂ lời thoại dài → nhiều node Video (cùng ảnh / prompt, mỗi node 1 đoạn nói kịp), nối sẵn vào khối phía sau
+    await savePanelNow();
+    const res = await call('canvas_split_video', C.board.id, id);
+    if (!res) return null;
+    C.board = res.result.board;
+    drawAll();
+    const r = res.result;
+    toast(`✂ Đã tách lời thoại thành ${r.parts} video (${r.nodes.join(', ')})${r.merge ? `, ghép lại thành 1 ở ${r.merge}` : ''}${r.unlinked.length ? ` — ${r.unlinked.join(', ')} đã đủ 10 đầu vào, chưa nối thêm được (nối tay nếu cần)` : ''}. Hoàn tác: Ctrl+Z`, 'ok');
+    return r;
+  }
+
+  async function autoSplit(id) {
+    // ✂ tự tách ngay khi lời thoại (tự nhập / lấy từ khối kịch bản) dài hơn mức nói kịp — không cần bấm nút
+    const n = node(id);
+    const tplSplit = n && n.template && n.build === 'split';  // 🎞 mẫu "Tách khối": luôn tự tách
+    if (!n || n.kind !== 'video' || (n.auto_split === false && !tplSplit) || isBusy(n)) return null;
+    const res = await call('canvas_auto_split', C.board.id, id);
+    const r = res && res.result;
+    if (!r || !r.split) return null;
+    C.board = r.board;
+    drawAll();
+    toast(r.parts ? `✂ Lời thoại dài → đã tự tách ${r.parts} video con từ ${id} (${r.nodes.join(', ')})${r.merge ? `, ghép lại thành 1 ở ${r.merge}` : ''} — khối chung giữ nguyên. Hoàn tác: Ctrl+Z`
+      : `✂ Lời thoại ${id} đã vừa 1 clip — bỏ các video con, khối chung tự quay`, 'ok');
+    return r;
+  }
 
   function dialogueCount(panel, n) {
     // đếm chữ lời thoại (bỏ "Tên:" đầu dòng) so với số chữ nói kịp trong thời lượng clip
@@ -1249,7 +1579,18 @@ window.CanvasPage = (() => {
     const secs = parseInt(String(n.duration || '10s'), 10) || 10;
     const limit = Math.max(4, Math.floor((secs - 1) * ((C.meta && C.meta.words_per_sec) || 3.2)));
     el.className = words > limit ? 'warn-text' : 'muted';
-    el.textContent = words ? `${words}/${limit} chữ cho ${secs} giây${words > limit ? ' — dài, dễ nói vội / bị cắt' : ''}` : `nói kịp ~${limit} chữ trong ${secs} giây`;
+    const split = panel.querySelector('[data-dlg-split]');
+    if (split) {  // ✂ lời dài → gợi ý tách (số video thật do app tính khi tách, cắt ở cuối câu)
+      split.classList.toggle('hidden', !(words > limit) || isBusy(n) || n.auto_split !== false);  // tự tách bật → không cần nút
+      split.textContent = `✂ Tách thành ~${Math.ceil(words / limit)} video`;
+    }
+    const kids = (C.board.nodes || []).filter(x => x.part_of === n.id).length;
+    const tplOne = FLOWSCREEN && n.template && n.build !== 'split';  // 🎞 mẫu Không tách: khối tự chia + ghép bên trong
+    if (split && tplOne) split.classList.add('hidden');
+    const long = kids ? ` — ✂ đã chia ${kids} video con` : tplOne ? ` — 🎞 tự chia ~${Math.ceil(words / limit)} đoạn rồi ghép trong khối` : n.auto_split === false ? ' — dài, dễ nói vội / bị cắt' : ` — tự tách ~${Math.ceil(words / limit)} video rồi ghép`;
+    if (kids) el.className = 'muted';
+    el.textContent = n.part_of ? `phần ${n.part} · ${words}/${limit} chữ — sửa lời ở khối chung ${n.part_of}`
+      : words ? `${words}/${limit} chữ cho ${secs} giây${words > limit ? long : ''}` : `nói kịp ~${limit} chữ trong ${secs} giây`;
   }
 
   function placeTools() {
@@ -1265,7 +1606,10 @@ window.CanvasPage = (() => {
     }
     if (!tools || !el || tools.classList.contains('hidden')) return;
     const { x, y, k } = C.view;
-    tools.style.left = `${x + (n.x + el.offsetWidth / 2) * k}px`;
+    let left = x + (n.x + el.offsetWidth / 2) * k;
+    const panel = root.querySelector('.cv-panel');  // không đè lên ô cấu hình cột phải
+    if (panel) left = Math.max(tools.offsetWidth / 2 + 8, Math.min(left, panel.offsetLeft - 10 - tools.offsetWidth / 2));
+    tools.style.left = `${left}px`;
     tools.style.top = `${y + n.y * k - 12}px`;
   }
 
@@ -1306,6 +1650,185 @@ window.CanvasPage = (() => {
     drawPanel(true);
   }
 
+  /* ================================================================ 🎬 Product Video Studio · ✅ kiểm duyệt */
+  const QC_VI = { empty: 'Chưa có clip', pending: '⏳ Chờ duyệt', approved: '✅ Đã duyệt', rejected: '❌ Từ chối' };
+  const QC_DEFAULT = ['Khuôn mặt nhân vật đúng bộ ảnh tham chiếu', 'Trang phục, kiểu tóc và vóc dáng nhất quán',
+    'Hình dáng bao bì, nắp và màu sắc đúng', 'Nhãn, logo, chữ và tên sản phẩm không bị biến dạng hoặc thay đổi',
+    'Công dụng, thành phần và thông điệp đã được phê duyệt', 'Lời thoại chính xác, phát âm phù hợp',
+    'Không có sản phẩm, logo hoặc vật thể ngoài ý muốn', 'Bố cục / tỷ lệ khung hình phù hợp nền tảng đăng tải'];
+  const qcFlag = n => (n.qc_required && n.qc_state && n.qc_state !== 'empty'
+    ? [{ pending: '⏳', approved: '✅', rejected: '❌' }[n.qc_state] || '⏳', `${n.qc_final ? 'Bản cuối' : 'Clip'}: ${QC_VI[n.qc_state] || ''}`] : null);
+  const qcOwner = n => node(n.scene_of || n.studio_of || n.concat_of || '');
+  const approver = () => { try { return localStorage.getItem('cv-qc-by') || ''; } catch { return ''; } };
+
+  function studioHtml(n) {  // khối Studio: sao chép storyboard / prompt (dán vào Grok / Flow nếu làm tay)
+    const st = (n.out || {}).studio;
+    if (!st) return `<small class="muted">🎬 Chạy khối → AI chia cảnh, mỗi cảnh 1 khối Video (${FLOWSCREEN ? 'Grok · quay từ ảnh bìa đã duyệt' : 'Google Flow'}), duyệt từng clip rồi mới ghép.</small>`;
+    return `<div class="cv-studio">
+      <div class="cv-panel-row"><button class="btn ghost sm" data-studio-copy="all" type="button" title="Toàn bộ storyboard: cảnh, lời thoại, prompt">📋 Sao chép storyboard + prompt</button>
+        <button class="btn ghost sm" data-studio-copy="prompts" type="button" title="Chỉ prompt tiếng Anh từng cảnh — dán vào ${FLOWSCREEN ? 'Grok Imagine' : 'Google Flow'} nếu làm tay">📋 Chỉ prompt tiếng Anh</button></div></div>`;
+  }
+
+  function bindStudio(panel, n) {
+    panel.querySelectorAll('[data-studio-copy]').forEach(b => {
+      b.onclick = async () => {
+        const cur = node(n.id);
+        const st = (cur.out || {}).studio || {};
+        const text = b.dataset.studioCopy === 'all' ? String((cur.out || {}).text || '')
+          : (st.prompts || []).map((p, i) => `Scene ${i + 1}:\n${p}`).join('\n\n');
+        try { await navigator.clipboard.writeText(text); toast('📋 Đã sao chép', 'ok'); } catch { toast('Không sao chép được — chọn chữ ở ô Kết quả', 'warn'); }
+      };
+    });
+  }
+
+  function qcHtml(n) {
+    const st = n.qc_state || 'empty';
+    const q = n.qc || {};
+    const owner = qcOwner(n);
+    const list = (((owner || {}).out || {}).studio || {}).checklist || QC_DEFAULT;
+    const same = st === q.status;
+    const done = new Set(same ? q.checks || [] : []);
+    const hist = (q.history || []).slice(-6).reverse();
+    return `<div class="cv-qc ${st}"><div class="cv-qc-head"><b>✅ Kiểm duyệt ${n.qc_final ? 'bản cuối (trước khi đăng)' : 'clip'}</b>
+        <span class="cv-qc-st">${QC_VI[st] || st}</span></div>
+      ${st === 'empty' ? '<small class="muted">Chưa có kết quả — tạo xong rồi duyệt</small>' : `
+      <div class="cv-qc-list">${list.map(x => `<label class="cv-opt-check"><input type="checkbox" data-qc-check value="${esc(x)}" ${done.has(x) ? 'checked' : ''}> ${esc(x)}</label>`).join('')}</div>
+      <textarea data-qc-notes rows="2" placeholder="Nhận xét — bắt buộc ghi lý do khi từ chối (VD: nhãn bị méo, sai khuôn mặt)">${esc(same ? q.notes || '' : '')}</textarea>
+      <div class="cv-panel-row"><input data-qc-by placeholder="Người duyệt" value="${esc(approver())}">
+        <button class="btn primary sm" data-qc-do="approved" type="button">✅ Duyệt</button>
+        <button class="btn ghost sm" data-qc-do="rejected" type="button">❌ Từ chối</button>
+        ${q.status && q.status !== 'pending' ? '<button class="btn ghost sm" data-qc-do="reset" type="button" title="Bỏ quyết định">↺</button>' : ''}</div>`}
+      ${hist.length ? `<details class="cv-qc-hist"><summary>Lịch sử duyệt (${(q.history || []).length})</summary>${hist.map(h =>
+        `<div><b>${esc(QC_VI[h.status] || h.status)}</b> · ${esc(h.by || '—')} · ${esc(String(h.at || '').slice(0, 16))}${h.notes ? ` — ${esc(h.notes)}` : ''}</div>`).join('')}</details>` : ''}
+      <small class="muted">Video AI không bảo đảm tuyệt đối đúng khuôn mặt / chữ trên nhãn — đối chiếu ảnh gốc trước khi duyệt.</small></div>`;
+  }
+
+  function drawQc(panel, n) {
+    const box = panel && panel.querySelector('.cv-qc-box');
+    if (!box) return;
+    if (!n.qc_required) { box.innerHTML = ''; return; }
+    const sig = JSON.stringify([n.qc_state, (n.qc || {}).at, (n.files || [])[0]]);
+    if (box.dataset.sig === sig) return;  // không vẽ lại khi đang tích / gõ nhận xét
+    box.dataset.sig = sig;
+    box.innerHTML = qcHtml(n);
+    box.querySelectorAll('[data-qc-do]').forEach(b => {
+      b.onclick = async () => {
+        const decision = b.dataset.qcDo;
+        const checks = [...box.querySelectorAll('[data-qc-check]')];
+        const picked = checks.filter(c => c.checked).map(c => c.value);
+        const notes = (box.querySelector('[data-qc-notes]') || {}).value || '';
+        const by = ((box.querySelector('[data-qc-by]') || {}).value || '').trim();
+        if (decision === 'approved' && picked.length < checks.length
+            && !confirm(`Mới tích ${picked.length}/${checks.length} mục checklist. Vẫn duyệt ${n.id}?`)) return;
+        if (decision === 'rejected' && !notes.trim()) { toast('Ghi lý do từ chối vào ô nhận xét', 'warn'); return; }
+        try { localStorage.setItem('cv-qc-by', by); } catch { /* bộ nhớ trình duyệt bị chặn */ }
+        const res = await call('canvas_qc', C.board.id, n.id, decision, notes, picked, by);
+        if (!res) return;
+        C.board = res.board;
+        drawAll();
+        const cur = node(n.id);
+        box.dataset.sig = '';
+        drawQc(panel, cur);
+        toast(`${n.id}: ${QC_VI[cur.qc_state] || decision}`, decision === 'approved' ? 'ok' : '');
+      };
+    });
+  }
+
+  /* ---- 📎 ảnh tham chiếu đính kèm NGAY trong khối Ảnh: ảnh nhỏ trên thẻ + danh sách đổi vai trò / bỏ trong ô cấu hình */
+  const refIcon = role => (IMG_REFS.find(r => r[0] === role) || ['', '📎', 'Tham chiếu chung']);
+  function refStrip(n) {
+    const refs = n.ref_urls || [];
+    const tc = tplChip(n);
+    const chips = tc || isFlow(n) ? tc + (isFlow(n) ? `<div class="cv-flow-card-chips"><span>Veo</span><span>${esc(n.duration || '8s').replace('s', ' giây')}</span><span>${esc(n.aspect || '9:16')}</span>${refs.length ? `<span>📎 ${refs.length}</span>` : ''}</div>` : '') : '';
+    if (!refs.length) return chips;
+    return chips + refStripImgs(refs);
+  }
+  function refStripImgs(refs) {
+    return `<div class="cv-refstrip">${refs.map(r => { const [, i, l] = refIcon(r.role);
+      return `<span class="cv-refthumb" title="${esc(l)}"><img src="${esc(thumbUrl(r.url, 120))}" alt="" draggable="false"><i>${i}</i></span>`; }).join('')}</div>`;
+  }
+  function drawRefsList(panel, n) {
+    const box = panel.querySelector('.cv-refs-list');
+    if (!box) return;
+    const refs = n.ref_urls || [];
+    const sig = JSON.stringify(refs.map(r => [r.file, r.role]));
+    if (box.dataset.sig === sig) return;
+    box.dataset.sig = sig;
+    box.innerHTML = refs.map((r, k) => `<div class="cv-refrow"><img src="${esc(thumbUrl(r.url, 120))}" alt="">
+      <select data-ref-role="${k}" title="Ảnh này dùng để">${[['', '📎 Tham chiếu chung'], ...IMG_REFS.map(([v, i, l]) => [v, `${i} ${l}`])]
+        .map(([v, l]) => `<option value="${v}" ${(r.role || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <button class="btn ghost sm" data-ref-rm="${k}" type="button" title="Bỏ ảnh này (↶ hoàn tác được)">✕</button></div>`).join('');
+    const save = async list => {
+      const res = await call('canvas_update_nodes', C.board.id, [{ id: n.id, ref_files: list }]);
+      if (res) { C.board = res.board; drawAll(); drawPanel(); }
+    };
+    const cur = () => (node(n.id).ref_urls || []).map(r => ({ file: r.file, role: r.role }));
+    box.querySelectorAll('[data-ref-role]').forEach(s => {
+      s.onchange = () => { const list = cur(); list[+s.dataset.refRole].role = s.value; save(list); };
+    });
+    box.querySelectorAll('[data-ref-rm]').forEach(b => {
+      b.onclick = () => save(cur().filter((_, k) => k !== +b.dataset.refRm));
+    });
+  }
+  async function addInlineRef(id, role) {
+    if (!C.board || !node(id)) return;
+    const res = await call('canvas_add_ref', C.board.id, id, role);
+    if (!res || !res.result) return;  // không chọn ảnh
+    C.board = res.result.board;
+    C.sel = id;
+    drawAll();
+    drawPanel();
+    const [, , label] = refIcon(role);
+    toast(`📎 Đã đính kèm ảnh ${label.toLowerCase()} vào ${id} — bấm Tạo`, 'ok');
+  }
+
+  /** 📎 khối Ảnh → chọn ảnh trên máy làm tham chiếu `role` (nhân vật / sản phẩm / bối cảnh / phong cách): tạo khối ảnh tải
+      lên bên trái, đặt tên theo vai trò, nối vào khối Ảnh và đặt vai trò cho dây đó (↶ hoàn tác từng bước). */
+  async function addRef(id, role) {
+    const n = node(id);
+    if (!C.board || !n) return;
+    const [, icon, label] = IMG_REFS.find(r => r[0] === role) || ['', '📎', 'Tham chiếu'];
+    const before = new Set(C.board.nodes.map(x => x.id));
+    // đặt dưới khối tham chiếu cuối cùng (theo chiều cao thật trên bảng — ảnh dọc cao hơn) để không chồng lên nhau
+    const last = (n.inputs || []).map(node).filter(x => x && x.kind === 'upload').pop();
+    const el = last && body().querySelector(`[data-node="${last.id}"]`);
+    const y = last ? last.y + (el ? el.offsetHeight : 420) + 40 : n.y;
+    const up = await call('canvas_upload', C.board.id, last ? last.x : n.x - 360, y);
+    if (!up || !up.result) return;  // không chọn ảnh
+    const added = up.result.board.nodes.filter(x => !before.has(x.id) && x.kind === 'upload');
+    let res = null;
+    for (const a of added) {
+      await call('canvas_connect', C.board.id, a.id, id, true);
+      res = await call('canvas_update_nodes', C.board.id, [{ id: a.id, title: `${icon} ${label}` }]);
+    }
+    const cur = res && res.board ? res.board.nodes.find(x => x.id === id) : null;
+    const roles = { ...((cur || n).roles || {}) };
+    added.forEach(a => { roles[a.id] = role; });
+    res = await call('canvas_update_nodes', C.board.id, [{ id, roles }]);
+    if (!res) return;
+    C.board = res.board;
+    C.sel = id;
+    body().querySelector('.cv-panel')?.remove();
+    drawAll();
+    drawPanel(true);
+    toast(`📎 Đã thêm ${added.length} ảnh ${label.toLowerCase()} vào ${id} — bấm Tạo`, 'ok');
+  }
+
+  // 🧍 / 📦 khối Ảnh preset "bảng nhiều góc" — đang chọn 1 ảnh (tải lên / ảnh đã tạo) thì nối ảnh đó vào luôn
+  async function addAngles(kind) {
+    if (!C.board) return;
+    const sel = C.sel && node(C.sel);
+    const src = sel && ['image', 'upload'].includes(sel.kind) ? sel : null;
+    const at = src ? { x: src.x + 400, y: src.y } : {};
+    await addAt('image', { ...at, inputs: src ? [src.id] : [] });
+    const id = C.sel;
+    if (!id || (src && id === src.id)) return;
+    const title = kind === 'character' ? '🧍 Góc nhân vật' : '📦 Góc sản phẩm';
+    const res = await call('canvas_update_nodes', C.board.id, [{ id, angles: kind, title, aspect: '16:9' }]);
+    if (res) { C.board = res.board; body().querySelector('.cv-panel')?.remove(); drawAll(); drawPanel(true); }
+    toast(src ? `${title}: đã nối ảnh ${src.id} — bấm Tạo` : `${title}: nối ảnh ${kind === 'character' ? 'người mẫu' : 'sản phẩm'} vào rồi bấm Tạo`, 'ok');
+  }
+
   function freeSpot(x, y) {
     // node mới không chồng lên node cũ (kể cả ô prompt bên dưới): dịch sang phải tới chỗ trống
     const W = 360, H = 560;
@@ -1324,10 +1847,30 @@ window.CanvasPage = (() => {
     return { x: n.x + (el ? el.offsetWidth : 240) + 140, y: n.y };
   }
 
-  async function act(what, id) {
+  async function act(what, id, btn) {
     const n = node(id);
     if (!n) return;
     const bid = C.board.id;
+    if (what === 'run-menu') {
+      return popMenu(btn, [['to', '▶ Chạy đến khối này', 'Các khối phía trước còn thiếu / đã đổi + khối này'],
+        ['from', '⏩ Chạy từ khối này trở đi', 'Khối này + mọi khối phía sau']], k => runFlow(k, id, false));
+    }
+    if (what === 'lock') {
+      const res = await call('canvas_lock', bid, id, !n.locked);
+      if (res) {
+        C.board = res.result.board;
+        drawAll();
+        toast(n.locked ? `🔓 Đã mở khoá ${id}` : `🔒 Đã khoá ${id} — chạy quy trình sẽ giữ nguyên kết quả này`, 'ok');
+      }
+      return;
+    }
+    if (what === 'versions') return versionsMenu(n, btn);
+    if (what === 'convert') return convertMenu(n, btn);
+    if (what === 'log') {
+      const res = await call('canvas_log', bid, 'node', id);
+      if (res) logDialog(`📜 Nhật ký lần chạy gần nhất · ${id}${n.title ? ` · ${n.title}` : ''}`, res.entries);
+      return;
+    }
     if (what === 'to-video') return addAt('video', { ...rightOf(n), inputs: [id] });
     if (what === 'edit') return addAt('image', { ...rightOf(n), inputs: [id] });
     if (what === 'view') return lightbox(n);
@@ -1371,11 +1914,127 @@ window.CanvasPage = (() => {
       return;
     }
     if (what.startsWith('wf:')) return addAt('wf', { ...rightOf(n), inputs: [id], wtype: what.slice(3) });
-    if (what === 'del') {
-      if ((n.urls || []).length && !confirm('Xoá node này và kết quả của nó?')) return;
+    if (what === 'del') {  // hoàn tác được (↶ / Ctrl+Z trả lại khối cùng kết quả) → chỉ hỏi lại khi khối đang khoá / đang chạy
+      if (n.locked && !confirm(`Khối ${id} đang 🔒 khoá — vẫn xoá?`)) return;
+      if (isBusy(n) && !confirm(`Khối ${id} đang chạy — dừng và xoá?`)) return;
       const res = await call('canvas_delete_node', bid, id);
-      if (res) { C.board = res.board; C.sel = ''; drawAll(); }
+      if (res) { C.board = res.board; C.sel = ''; drawAll(); toast(`Đã xoá ${id} — bấm ↶ hoặc Ctrl+Z để hoàn tác`, 'ok'); }
     }
+  }
+
+  // khoá được: khối đã có kết quả và có tạo nội dung bằng model (không phải khối nhập / đăng bài / kết quả)
+  const canLock = n => n.status === 'done' && n.kind !== 'upload' && !['input_text', 'input_video', 'fb_post', 'fb_schedule', 'fb_ad', 'output'].includes(n.wtype);
+
+  /** 🔁 Đổi khối: chọn loại mới — đổi tại chỗ (giữ mã, vị trí, tên, chữ, dây nối hợp kiểu); kết quả cũ bỏ, ↶ hoàn tác được. */
+  function convertMenu(n, anchorEl) {
+    const menu = body().querySelector('.cv-menu');
+    const stage = body().querySelector('.cv-stage');
+    if (!menu || !stage) return;
+    if (!menu.classList.contains('hidden') && C.menuFor === `conv:${n.id}`) { hideMenu(); return; }
+    C.menuFor = `conv:${n.id}`;
+    anchorEl.dataset.menuAnchor = '1';
+    const cur = n.kind === 'wf' ? `wf:${n.wtype}` : isFlow(n) ? 'flow' : n.kind;
+    const types = Object.entries(C.meta.wf_types).filter(([, s]) => s.menu !== 'hidden');
+    const item = (key, icon, name, desc) => `<button data-conv="${esc(key)}" type="button" ${key === cur ? 'disabled' : ''}
+        title="${esc(desc)}"><i>${esc(icon)}</i><span><b>${esc(name)}${key === cur ? ' · đang dùng' : ''}</b><small>${esc(desc)}</small></span></button>`;
+    menu.className = 'cv-menu cv-menu-blocks';
+    const media = item('image', KIND_ICON.image, 'Ảnh', 'Tạo ảnh từ prompt / ảnh tham chiếu')
+      + item('video', KIND_ICON.video, 'Video', 'Tạo video từ ảnh / prompt')
+      + (FLOWSCREEN ? '' : item('flow', '🎥', 'Google Flow', 'Video Veo 8 giây có tiếng trên Google Flow (tài khoản Google, tốn tín dụng Flow)'));
+    menu.innerHTML = `<div class="cv-menu-title">🔁 Đổi khối ${esc(n.id)}<small class="muted">giữ mã, vị trí, tên, chữ và dây nối còn hợp — kết quả cũ bỏ (↶ hoàn tác được)</small></div>`
+      + Object.entries(GROUP_VI).map(([g, label]) => {  // Ảnh / Video đứng đầu nhóm Tạo nội dung
+        const rows = types.filter(([, s]) => s.group === g).map(([k, s]) => item(`wf:${k}`, s.icon, s.name, s.desc)).join('');
+        const all = (g === 'create' ? media : '') + rows;
+        return all ? `<b>${esc(label)}</b>${all}` : '';
+      }).join('');
+    menu.classList.remove('hidden');
+    const s = stage.getBoundingClientRect(), r = anchorEl.getBoundingClientRect();
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+    menu.style.left = `${Math.max(8, Math.min(s.width - menu.offsetWidth - 8, r.left - s.left))}px`;
+    menu.style.top = `${Math.max(8, Math.min(s.height - menu.offsetHeight - 8, r.bottom - s.top + 6))}px`;
+    menu.querySelectorAll('[data-conv]:not([disabled])').forEach(b => {
+      b.onclick = async () => {
+        const key = b.dataset.conv;
+        if (n.locked && !confirm(`Khối ${n.id} đang 🔒 khoá — đổi loại sẽ bỏ kết quả đã chốt. Vẫn đổi?`)) return;
+        hideMenu();
+        const [kind, wtype] = key.startsWith('wf:') ? ['wf', key.slice(3)] : [key, ''];
+        const res = await call('canvas_convert', C.board.id, n.id, kind, wtype);
+        if (!res) return;
+        const r2 = res.result;
+        C.board = r2.board;
+        C.sel = n.id;
+        const panel = body().querySelector('.cv-panel');
+        if (panel) panel.remove();  // bảng cấu hình của loại cũ
+        drawAll();
+        const lost = [...(r2.lost_in || []).map(i => `${i} → ${n.id}`), ...(r2.lost_out || []).map(i => `${n.id} → ${i}`)];
+        toast(`🔁 ${n.id}: ${r2.old} → ${r2.name}${r2.kept_text ? ' · giữ chữ' : ''}`
+          + (lost.length ? ` · gỡ ${lost.length} dây không hợp (${lost.join(', ')})` : '') + ' — ↶ để hoàn tác', lost.length ? '' : 'ok');
+      };
+    });
+  }
+
+  /** 🕘 Phiên bản: kết quả trước của khối (ảnh / video / chữ) — xem, chọn lại bản cũ (bản đang có được cất vào danh sách). */
+  function versionsMenu(n, anchorEl) {
+    const menu = body().querySelector('.cv-menu');
+    const stage = body().querySelector('.cv-stage');
+    if (!menu || !stage) return;
+    if (!menu.classList.contains('hidden') && C.menuFor === `vers:${n.id}`) { hideMenu(); return; }
+    C.menuFor = `vers:${n.id}`;
+    anchorEl.dataset.menuAnchor = '1';
+    const video = n.kind === 'video' || (n.out || {}).video;
+    const thumb = (urls, pick) => {
+      const u = urls[Math.min(pick || 0, Math.max(0, urls.length - 1))];
+      if (!u) return '<span class="cv-ver-ph">📝</span>';
+      return video ? `<video src="${esc(u)}#t=0.4" muted preload="metadata"></video>` : `<img src="${esc(thumbUrl(u, 200))}" alt="">`;
+    };
+    const fmt = t => (t ? `${String(t).slice(11, 16)} ${String(t).slice(8, 10)}/${String(t).slice(5, 7)}` : '');
+    menu.className = 'cv-menu cv-vers';
+    menu.innerHTML = `<div class="cv-menu-title">🕘 Phiên bản · ${esc(n.id)}<small class="muted">chọn lại 1 bản cũ — bản đang dùng được cất vào đây</small></div>
+      <div class="cv-ver cur">${thumb(n.urls || [], n.pick)}<div><b>Đang dùng</b><small>${esc(fmt(n.done_at))}</small>
+        ${n.made ? `<small class="cv-ver-p" title="${esc(n.made)}">${esc(n.made)}</small>` : ''}${(n.out || {}).text && !video ? `<small class="cv-ver-t">${esc(String(n.out.text).slice(0, 160))}</small>` : ''}</div></div>
+      ${(n.vers || []).map((v, i) => `<div class="cv-ver">${thumb(v.urls || [], v.pick)}<div><b>Bản ${i + 1} trước</b><small>${esc(fmt(v.at))}</small>
+        ${v.prompt ? `<small class="cv-ver-p" title="${esc(v.prompt)}">${esc(v.prompt)}</small>` : ''}${v.text ? `<small class="cv-ver-t">${esc(v.text.slice(0, 160))}</small>` : ''}
+        <button class="btn ghost sm" data-ver="${i}" type="button" ${isBusy(n) ? 'disabled' : ''}>Dùng bản này</button></div></div>`).join('')}`;
+    const s = stage.getBoundingClientRect(), r = anchorEl.getBoundingClientRect();
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+    menu.style.left = `${Math.max(8, Math.min(s.width - menu.offsetWidth - 8, r.left - s.left))}px`;
+    menu.style.top = `${Math.max(8, Math.min(s.height - menu.offsetHeight - 8, r.bottom - s.top + 6))}px`;
+    menu.querySelectorAll('[data-ver]').forEach(b => {
+      b.onclick = async () => {
+        const res = await call('canvas_restore_version', C.board.id, n.id, Number(b.dataset.ver));
+        if (!res) return;
+        hideMenu();
+        C.board = res.result.board;
+        drawAll();
+        const after = C.board.nodes.filter(x => (x.inputs || []).includes(n.id)).length;
+        toast(`Đã dùng lại phiên bản cũ của ${n.id}${after ? ` — ${after} khối phía sau sẽ chạy lại ở lần chạy tới` : ''}`, 'ok');
+      };
+    });
+  }
+
+  /** 📜 Xem nhật ký đã lưu (lượt chạy / lần chạy gần nhất của khối). */
+  function logDialog(title, entries) {
+    const box = document.createElement('div');
+    box.className = 'cv-lightbox cv-import';
+    const lines = (entries || []).map(e => `<div class="${esc(e.level || '')}"><span>${esc(e.time || '')}</span> ${esc(e.message || '')}</div>`).join('');
+    box.innerHTML = `<div class="cv-import-box cv-log-box"><div class="cv-side-head"><b>${esc(title)}</b><button class="btn ghost sm" data-x type="button">✕</button></div>
+      <div class="cv-log-lines">${lines || '<div class="muted">Chưa có nhật ký (lượt chạy trước khi có bản cập nhật này không lưu nhật ký).</div>'}</div>
+      <div class="row cv-run-foot"><small class="muted">${(entries || []).length} dòng</small><span class="cv-sp"></span>
+        <button class="btn ghost sm" data-copy type="button">📋 Sao chép</button><button class="btn primary sm" data-x type="button">Đóng</button></div></div>`;
+    const close = () => { document.removeEventListener('keydown', onKey, true); box.remove(); };
+    const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    box.querySelectorAll('[data-x]').forEach(b => { b.onclick = close; });
+    box.onclick = e => { if (e.target === box) close(); };
+    box.querySelector('[data-copy]').onclick = async () => {
+      try { await navigator.clipboard.writeText((entries || []).map(e => `${e.time || ''} ${e.message || ''}`).join('\n')); toast('Đã sao chép nhật ký', 'ok'); }
+      catch (err) { toast('Không sao chép được', 'error'); }
+    };
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(box);
+    const list = box.querySelector('.cv-log-lines');
+    list.scrollTop = list.scrollHeight;
   }
 
   async function generate(id) {
@@ -1414,12 +2073,13 @@ window.CanvasPage = (() => {
   const NEXT = {
     images: [['to-video', '🎬 Video từ ảnh này'], ['edit', '🖌 Ảnh mới dùng ảnh này làm tham chiếu'], ['wf:fb_post', '📣 Đăng bài Facebook'],
       ['wf:ai_text', '✦ AI viết (mô tả ảnh, viết prompt)'], ['wf:storyboard_video', '🧭 Storyboard (ảnh làm tham chiếu)'],
-      ['wf:studio_video', '🎬 Video dài từ storyboard']],
-    video: [['wf:dub_vieneu', '🎙 Lồng tiếng VieNeu'], ['wf:post_video', '🎞 Hậu kỳ video (Claude + Remotion)'], ['vid-ref', '🎬 Video mới dùng video này làm tham chiếu'], ['wf:fb_post', '📣 Đăng bài Facebook'],
-      ['wf:fb_schedule', '🗓 Lên lịch đăng'], ['wf:concat_video', '⧉ Ghép video']],
-    text: [['img-from-text', '🖼 Ảnh từ chữ này (làm prompt)'], ['vid-dialogue', '🎬 Video dùng chữ này làm lời thoại'], ['wf:ai_text', '✦ AI viết / xử lý tiếp'], ['wf:content_post', '📝 Tạo content bài viết'],
+      ['wf:heygen_video', '🧑‍💼 Video HeyGen (người trong ảnh nói)']],
+    video: [['wf:post_video', '🎞 Hậu kỳ video (Claude + Remotion)'], ['wf:edit_pro', '✨ Edit Pro (video nói chuyện → Reels sang trọng)'],
+      ['vid-ref', '🎬 Video mới dùng video này làm tham chiếu'], ['wf:fb_post', '📣 Đăng / lên lịch bài Facebook'],
+      ['wf:concat_video', '⧉ Ghép video'], ['wf:dub_vieneu', '🎙 Lồng tiếng VieNeu']],
+    text: [['img-from-text', '🖼 Ảnh từ chữ này (làm prompt)'], ['vid-dialogue', '🎬 Video dùng chữ này làm lời thoại'], ['wf:heygen_video', '🧑‍💼 Video HeyGen (avatar đọc chữ này)'],['wf:ai_text', '✦ AI viết / xử lý tiếp'], ['wf:web_research', '🌐 Tra cứu web về chủ đề này'], ['wf:content_post', '📝 Tạo content bài viết'],
       ['wf:fb_post', '📣 Đăng bài (làm caption)'], ['wf:storyboard_video', '🧭 Storyboard → tách mỗi cảnh 1 node Video'],
-      ['wf:studio_video', '🎬 Video dài từ storyboard'], ['wf:whiteboard_video', '✍ Whiteboard']],
+      ['wf:whiteboard_video', '✍ Whiteboard']],
     post: [['wf:fb_ad', '🎯 Tạo quảng cáo (tạm dừng)']],
     collect: [['wf:output', '★ Gom vào khối Kết quả']],
   };
@@ -1431,6 +2091,7 @@ window.CanvasPage = (() => {
     const seen = new Set();
     const kinds = [...outTypes(n), ...(n.wtype === 'output' ? [] : ['collect'])];
     const items = kinds.flatMap(t => NEXT[t] || []).filter(([k]) => !seen.has(k) && seen.add(k));
+    menu.className = 'cv-menu';
     menu.innerHTML = `<b>Tạo tiếp từ ${esc(n.id)} · ${esc(nameOf(n))}</b>
       ${items.map(([k, label]) => `<button data-m="${k}" ${ready || k.startsWith('wf:') || k === 'img-from-text' ? '' : 'disabled'}>${esc(label)}</button>`).join('')}
       ${ready ? '' : '<small class="muted">Nối trước được — chạy node này xong thì node sau mới có dữ liệu</small>'}`;
@@ -1452,22 +2113,40 @@ window.CanvasPage = (() => {
 
   function showBlocks(anchorEl) {
     const menu = body().querySelector('.cv-menu');
-    const groups = { input: 'Đầu vào', ai: 'AI xử lý', create: 'Tạo nội dung', output: 'Đầu ra' };
+    const groups = GROUP_VI;
     const types = Object.entries(C.meta.wf_types);
-    menu.innerHTML = Object.entries(groups).map(([g, label]) => {
-      const rows = types.filter(([, s]) => s.group === g);
+    const item = (attrs, icon, name, desc) => `<button ${attrs} title="${esc(desc)}"><i>${esc(icon)}</i><span><b>${esc(name)}</b><small>${esc(desc)}</small></span></button>`;
+    menu.className = 'cv-menu cv-menu-blocks';
+    // 🎥 nhóm Google Flow (đầu menu): các khối của quy trình Flow — không lặp lại ở nhóm khác
+    // 🎬 màn Grok Canvas: cùng nhóm nhưng video = khối Video (Grok Imagine), không có khối Google Flow
+    const FLOW_WF = ['product_studio', 'concat_video', 'dub_vieneu', 'post_video'].filter(k => C.meta.wf_types[k]);
+    const flowGroup = (FLOWSCREEN ? `<b class="cv-menu-flow">🎬 Grok Video</b>`
+      + item('data-blk-node="video"', '🎬', 'Video (Grok)', 'Video Grok Imagine 6 / 10 / 15 giây — nối ảnh khung đầu (nhân vật + sản phẩm), viết chuyển động + lời thoại; lời dài tự tách nhiều video rồi ghép')
+      : `<b class="cv-menu-flow">🎥 Google Flow</b>`
+      + item('data-blk-node="flow"', '🎥', 'Google Flow', 'Video Veo 8 giây có tiếng trên Google Flow — nối ảnh nhân vật / sản phẩm, viết cảnh + lời thoại; lời dài tự tách nhiều video rồi ghép'))
+      + FLOW_WF.slice(0, 1).map(k => item(`data-blk="${k}"`, C.meta.wf_types[k].icon, C.meta.wf_types[k].name, C.meta.wf_types[k].desc)).join('')
+      + item('data-blk-node="image"', '🖼', 'Ảnh', 'Tạo ảnh khung đầu / ảnh tham chiếu (📎 đính kèm nhân vật, sản phẩm ngay trong khối)')
+      + FLOW_WF.slice(1).map(k => item(`data-blk="${k}"`, C.meta.wf_types[k].icon, C.meta.wf_types[k].name, C.meta.wf_types[k].desc)).join('');
+    const adv = types.filter(([k, s]) => s.menu === 'advanced' && !FLOW_WF.includes(k));
+    menu.innerHTML = `<div class="cv-menu-title">🧩 Thêm khối<small class="muted">bấm để thêm vào bảng, rồi kéo cổng ＋ để nối</small></div>` + flowGroup + Object.entries(groups).map(([g, label]) => {
+      const rows = types.filter(([k, s]) => s.group === g && !s.menu && !FLOW_WF.includes(k));  // khối ẩn / nâng cao / nhóm Flow không lặp lại
       // Ảnh đầu vào = node ⬆ ảnh tải lên của Canvas (chọn được nhiều ảnh, mỗi ảnh 1 node)
-      const extra = g === 'input' ? '<button data-blk-upload title="Ảnh sản phẩm, nhân vật, ảnh tham chiếu — chọn nhiều ảnh trên máy">🖼 Ảnh đầu vào</button>' : '';
-      return rows.length || extra ? `<b>${esc(label)}</b>${extra}${rows.map(([k, s]) => `<button data-blk="${k}" title="${esc(s.desc)}">${esc(s.icon)} ${esc(s.name)}</button>`).join('')}` : '';
-    }).join('') + `<b>Bố cục</b><button data-blk-group title="Nhóm / ghi chú (như sticky note n8n): khung màu có tên + ghi chú; kéo nhóm thì các node bên trong đi theo. Đang chọn 1 node → bọc quanh node đó; đang chọn nhiều node → bọc quanh cả nhóm">▢ Nhóm / ghi chú</button>`;
+      const extra = g === 'input' ? item('data-blk-upload', '🖼', 'Ảnh đầu vào', 'Ảnh sản phẩm, nhân vật, ảnh tham chiếu — chọn nhiều ảnh trên máy') : '';
+      return rows.length || extra ? `<b>${esc(label)}</b>${extra}${rows.map(([k, s]) => item(`data-blk="${k}"`, s.icon, s.name, s.desc)).join('')}` : '';
+    }).join('') + `<b>Bố cục</b>${item('data-blk-group', '▢', 'Nhóm / ghi chú', 'Khung màu có tên + ghi chú (như sticky note n8n); kéo nhóm thì các node bên trong đi theo. Đang chọn 1 node → bọc quanh node đó; chọn nhiều → bọc cả nhóm')}`
+      + (adv.length ? `<button class="cv-menu-more" data-blk-adv type="button">${C.advOpen ? '▾' : '▸'} Khối nâng cao (${adv.length})</button>
+        ${C.advOpen ? adv.map(([k, s]) => item(`data-blk="${k}"`, s.icon, s.name, s.desc)).join('') : ''}` : '');
     const stage = body().querySelector('.cv-stage').getBoundingClientRect();
     const r = anchorEl.getBoundingClientRect();
     menu.classList.remove('hidden');
     menu.style.left = `${r.left - stage.left - 40}px`;
     menu.style.top = `${Math.max(8, r.top - stage.top - menu.offsetHeight - 10)}px`;
     menu.querySelectorAll('[data-blk]').forEach(b => { b.onclick = () => { hideMenu(); addAt('wf', { wtype: b.dataset.blk }); }; });
+    menu.querySelectorAll('[data-blk-node]').forEach(b => { b.onclick = () => { hideMenu(); addAt(b.dataset.blkNode); }; });
     const up = menu.querySelector('[data-blk-upload]');
     if (up) up.onclick = () => { hideMenu(); addAt('upload', { empty: true }); };
+    const more = menu.querySelector('[data-blk-adv]');
+    if (more) more.onclick = e => { e.stopPropagation(); C.advOpen = !C.advOpen; showBlocks(anchorEl); };
     menu.querySelector('[data-blk-group]').onclick = () => { hideMenu(); return multi().size > 1 ? multiAct('group') : addGroup(); };
   }
 
@@ -1594,6 +2273,76 @@ window.CanvasPage = (() => {
     toast('Đã trả lại vị trí cũ', 'ok');
   }
   const hideMenu = () => { const m = body().querySelector('.cv-menu'); if (m) m.classList.add('hidden'); };
+  /** Menu (Khối / Tạo tiếp) đóng khi bấm bất kỳ đâu ngoài menu (kể cả thanh bên) hoặc nhấn Esc — gắn 1 lần cho cả trang. */
+  function bindMenuClose() {
+    if (C.menuBound) return;
+    C.menuBound = true;
+    const open = () => { const m = body() && body().querySelector('.cv-menu'); return m && !m.classList.contains('hidden') ? m : null; };
+    document.addEventListener('pointerdown', e => {
+      const m = open();
+      if (m && !e.target.closest('.cv-menu') && !e.target.closest('[data-blocks], [data-menu-anchor]')) hideMenu();
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && open()) hideMenu();
+      // ↶ Ctrl+Z / ↷ Ctrl+Y (Ctrl+Shift+Z) khi đang ở Canvas mà không gõ chữ trong ô nhập (ô nhập tự hoàn tác chữ)
+      const page = document.querySelector(CFG.page);
+      if (!C.board || !page || page.classList.contains('hidden') || !(e.ctrlKey || e.metaKey)) return;
+      if (e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"], .cv-assist')) return;
+      if (document.querySelector('.cv-lightbox')) return;  // đang mở hộp thoại
+      const k = e.key.toLowerCase();
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); undoStep(false); }
+      else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); undoStep(true); }
+    });
+  }
+
+  /** Menu nhỏ thả xuống từ 1 nút (▾ Chạy, ▶ Chạy ▾ của khối…): items = [[key, nhãn, mô tả]]. Bấm lại nút = đóng. */
+  function popMenu(anchorEl, items, onPick) {
+    const menu = body().querySelector('.cv-menu');
+    const stage = body().querySelector('.cv-stage');
+    if (!menu || !stage) return;
+    const id = anchorEl.dataset.cv || anchorEl.dataset.act || '';
+    if (!menu.classList.contains('hidden') && C.menuFor === id) { hideMenu(); return; }
+    anchorEl.dataset.menuAnchor = '1';
+    C.menuFor = id;
+    menu.className = 'cv-menu cv-menu-pop';
+    menu.innerHTML = items.map(([k, label, desc]) => `<button data-pop="${esc(k)}" type="button"><b>${esc(label)}</b>${desc ? `<small>${esc(desc)}</small>` : ''}</button>`).join('');
+    const s = stage.getBoundingClientRect(), r = anchorEl.getBoundingClientRect();
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+    const w = menu.offsetWidth;
+    menu.style.left = `${Math.max(8, Math.min(s.width - w - 8, r.right - s.left - w))}px`;
+    menu.style.top = `${Math.max(8, r.bottom - s.top + 6)}px`;
+    menu.querySelectorAll('[data-pop]').forEach(b => { b.onclick = () => { hideMenu(); onPick(b.dataset.pop); }; });
+  }
+
+  /** Nút ↶ ↷ trên thanh trên: tên bước sẽ hoàn tác / làm lại (lấy từ bảng mỗi lần sửa). */
+  function drawUndo() {
+    const u = (C.board && C.board.undo) || {};
+    const root = body();
+    if (!root) return;
+    const ub = root.querySelector('[data-cv="undo"]'), rb = root.querySelector('[data-cv="redo"]');
+    if (!ub || !rb) return;
+    ub.disabled = !u.undo;
+    rb.disabled = !u.redo;
+    ub.title = u.undo ? `Hoàn tác: ${u.undo} (Ctrl+Z)` : 'Chưa có thao tác nào để hoàn tác (Ctrl+Z)';
+    rb.title = u.redo ? `Làm lại: ${u.redo} (Ctrl+Y)` : 'Không có thao tác nào để làm lại (Ctrl+Y)';
+  }
+
+  async function undoStep(redo) {
+    if (!C.board) return;
+    if (!redo) await savePanelNow();  // đang gõ dở: lưu trước, để bước hoàn tác tính cả chữ vừa gõ
+    const u = C.board.undo || {};
+    if (!(redo ? u.redo : u.undo)) { toast(redo ? 'Không có thao tác nào để làm lại' : 'Chưa có thao tác nào để hoàn tác'); return; }
+    const res = await call(redo ? 'canvas_redo' : 'canvas_undo', C.board.id);
+    if (!res) return;
+    C.board = res.result.board;
+    if (C.sel && !node(C.sel)) C.sel = '';
+    C.multi = new Set([...multi()].filter(id => node(id)));
+    const panel = body().querySelector('.cv-panel');
+    if (panel) panel.remove();  // ô cấu hình dựng lại theo prompt / cấu hình vừa trả lại
+    drawAll();
+    toast(`${redo ? '↷ Đã làm lại' : '↶ Đã hoàn tác'}: ${res.result.label}`, 'ok');
+  }
 
   /* ---------------------------------------------------------------- kéo, nối, zoom */
   function applyView() {
@@ -1603,8 +2352,8 @@ window.CanvasPage = (() => {
     const { x, y, k } = C.view;
     world.style.transform = `translate(${x}px, ${y}px) scale(${k})`;
     const stage = root.querySelector('.cv-stage');
-    stage.style.backgroundPosition = `${x}px ${y}px`;
-    stage.style.backgroundSize = `${22 * k}px ${22 * k}px`;
+    stage.style.backgroundPosition = `${x}px ${y}px, 0 0`;  // lớp 1: lưới chấm theo zoom / kéo; lớp 2: ánh sáng nền cố định
+    stage.style.backgroundSize = `${22 * k}px ${22 * k}px, 100% 100%`;
     root.querySelector('.cv-zoom').textContent = `${Math.round(k * 100)}%`;
     placeTools();
   }
@@ -1757,13 +2506,14 @@ window.CanvasPage = (() => {
     if (what === 'del') {
       if (ids.some(id => isBusy(node(id)))) return toast('Có khối đang chạy — dừng trước khi xoá', 'warn');
       const withFiles = ids.filter(id => (node(id).urls || []).length || (node(id).out || {}).text).length;
-      if (!confirm(`Xoá ${ids.length} khối đã chọn${withFiles ? ` (${withFiles} khối đã có kết quả)` : ''}?`)) return;
+      const locked = ids.filter(id => node(id).locked).length;
+      if (!confirm(`Xoá ${ids.length} khối đã chọn${withFiles ? ` (${withFiles} khối đã có kết quả)` : ''}${locked ? ` — có ${locked} khối đang 🔒 khoá` : ''}?\n\nHoàn tác được bằng ↶ / Ctrl+Z.`)) return;
       const res = await call('canvas_delete_nodes', C.board.id, ids);
       if (!res) return;
       C.board = res.board;
       C.multi = new Set();
       drawAll();
-      toast(`Đã xoá ${ids.length} khối`, 'ok');
+      toast(`Đã xoá ${ids.length} khối — bấm ↶ hoặc Ctrl+Z để hoàn tác`, 'ok');
     }
   }
 
@@ -2044,9 +2794,9 @@ window.CanvasPage = (() => {
         <button class="btn ghost sm" type="button" data-as="close" title="Đóng">✕</button></div>
       ${autoHtml(C.assist.chat || {})}
       <div class="cv-as-msgs">${msgs.length ? msgs.map(m => (m.role === 'user'
-        ? `<div class="cv-as-msg user${m.auto ? ' auto' : ''}">${esc(m.text)}${m.images ? `<small>📎 kèm ${m.images} ảnh kết quả</small>` : ''}${(m.files || []).length ? `<small>📄 ${esc(m.files.join(', '))}</small>` : ''}</div>`
+        ? `<div class="cv-as-msg user${m.auto ? ' auto' : ''}">${esc(m.text)}${m.images ? `<small>📎 kèm ${m.images} ảnh kết quả</small>` : ''}${(m.files || []).length ? `<small>📄 ${esc(m.files.join(', '))}</small>` : ''}${m.mcp ? '<small>🔌 cho đọc dữ liệu qua MCP</small>' : ''}</div>`
         : m.error ? `<div class="cv-as-msg err">⚠ ${esc(m.error)}</div>`
-          : `<div class="cv-as-msg bot">${autoTag(m)}${m.text ? noteHtml(m.text) : ''}${evalHtml(m.eval)}${reworkHtml(m)}${builtHtml(m)}${opsHtml(m)}</div>`)).join('')
+          : `<div class="cv-as-msg bot">${autoTag(m)}${m.text ? noteHtml(m.text) : ''}${(m.mcp_reads || []).length ? `<small class="cv-as-reads">🔌 Đã đọc: ${m.mcp_reads.map(r => `${r.ok ? '✓' : '✗'} ${esc(r.server)} · ${esc(r.tool)}`).join(' · ')}</small>` : ''}${evalHtml(m.eval)}${reworkHtml(m)}${builtHtml(m)}${opsHtml(m)}</div>`)).join('')
         : `<div class="cv-as-intro"><b>Claude đọc toàn bộ Canvas này</b> (khối, prompt, kết quả, lỗi) và có thể xem ảnh kết quả để:
             <ul><li>chấm điểm, chỉ lỗi từng node</li><li>đề xuất sửa prompt / model / thêm & nối khối</li><li>gợi ý bước tiếp theo</li></ul>
             Đề xuất chỉ thay đổi Canvas khi bạn bấm <b>Áp dụng</b>; chạy luôn hỏi xác nhận. Dùng tài khoản claude.ai đã đăng nhập trong app.</div>`}</div>
@@ -2057,8 +2807,14 @@ window.CanvasPage = (() => {
           <button class="link-btn" type="button" data-as-files title="Ảnh (gửi kèm để Claude xem), video .mp4 .mov .webm (gửi ảnh lưới khung hình có mốc giây) hoặc tài liệu .txt .md .csv .json .docx .srt .vtt (đọc thành chữ) — tối đa 8 file">📎 Đính kèm file</button></div>
         <div class="cv-as-row"><label class="cv-opt-check" title="Gửi ảnh kết quả + 1 khung hình mỗi video (tối đa 6) để Claude xem và chấm"><input type="checkbox" data-as-attach ${C.assist.attach === false ? '' : 'checked'}> 📎 Kèm ảnh kết quả</label>
           <label class="cv-opt-check" title="Bật: Claude DỰNG THẬT lên Canvas — thêm khối, viết prompt, chọn model, nối dây ngay (không cần bấm Áp dụng). Không tự chạy."><input type="checkbox" data-as-build ${C.assist.build ? 'checked' : ''}> 🧩 Dựng thật lên Canvas</label>
+          <label class="cv-opt-check" title="Claude đọc dữ liệu qua (1) các kết nối ở màn 🔌 Kết nối MCP của app (chỉ công cụ bạn cho phép, app gọi giúp) và (2) connector MCP trên claude.ai (Drive / Sheets, Canva…) — CHỈ ĐỌC, không tạo / sửa / xoá gì. Connector claude.ai lần đầu có thể hỏi cho phép: bật 🖥 Trình duyệt: hiện để bấm."><input type="checkbox" data-as-mcp ${state.boot.settings.assist_mcp ? 'checked' : ''}> 🔌 Đọc dữ liệu qua MCP</label>
           <button class="link-btn cv-as-browser" type="button" data-as-browser title="Hiện / ẩn cửa sổ trình duyệt dùng chung cho cả app — đổi ở Cài đặt → Trình duyệt">🖥 Trình duyệt: ${state.boot.settings.show_browser ? 'hiện' : 'ẩn'}</button>
-          <span class="cv-sp"></span><button class="btn primary sm" type="button" data-as="send" ${C.assist.sending ? 'disabled' : ''}>${C.assist.sending ? 'Đang chờ…' : 'Gửi ➤'}</button></div></div>`;
+          <span class="cv-sp"></span><button class="btn primary sm" type="button" data-as="send" ${C.assist.sending ? 'disabled' : ''}>${C.assist.sending ? 'Đang chờ…' : 'Gửi ➤'}</button></div>
+        <input class="cv-as-mcp-note ${state.boot.settings.assist_mcp ? '' : 'hidden'}" data-as-mcp-note maxlength="400" placeholder="🔌 Nguồn dữ liệu cho Claude đọc (tuỳ chọn) — VD: Drive thư mục “Sản phẩm”, bảng giá trên Google Sheets" value="${esc(state.boot.settings.assist_mcp_note || '')}"></div>`;
+    const mcpBox = box.querySelector('[data-as-mcp]'), mcpNote = box.querySelector('[data-as-mcp-note]');
+    mcpBox.onchange = () => { state.boot.settings.assist_mcp = mcpBox.checked; mcpNote.classList.toggle('hidden', !mcpBox.checked); };
+    mcpNote.onkeydown = e => e.stopPropagation();
+    mcpNote.oninput = () => { state.boot.settings.assist_mcp_note = mcpNote.value; };
     const ta = box.querySelector('[data-as-text]');
     ta.value = draft;
     ta.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendAssist(); };
@@ -2134,7 +2890,9 @@ window.CanvasPage = (() => {
     C.assist.build = false;  // mỗi lượt dựng bật lại (tránh lượt hỏi sau vô tình sửa Canvas)
     C.assist.buildSet = false;
     drawAssist(true);
-    const res = await call('canvas_assist_send', bid, text, C.assist.attach !== false, false, build, files.map(f => f.path));
+    const st = state.boot.settings;
+    const res = await call('canvas_assist_send', bid, text, C.assist.attach !== false, false, build, files.map(f => f.path),
+      !!st.assist_mcp, st.assist_mcp_note || '');
     if (!C.board || C.board.id !== bid) return;  // đã rời Canvas này trong lúc chờ
     C.assist.sending = false;
     if (res) C.assist.chat = res.chat;
@@ -2181,18 +2939,26 @@ window.CanvasPage = (() => {
   const RUN_VI = { running: 'đang chạy', done: 'xong', error: 'có lỗi', partial: 'xong một phần', cancelled: 'đã dừng' };
   const runs = () => (C.board && C.board.runs) || [];
 
+  /** Lưu ngay prompt / lời thoại / cấu hình đang gõ dở ở ô đang mở (trước khi chạy, trước khi hoàn tác). */
+  async function savePanelNow() {
+    clearTimeout(C.promptT);
+    const panel = body().querySelector('.cv-panel');
+    if (!C.board || !panel || !node(panel.dataset.for)) return;
+    const n = node(panel.dataset.for);
+    const ta = panel.querySelector('textarea:not([data-c]):not([data-out])');
+    clearTimeout(C.dlgT);
+    const dlg = panel.querySelector('[data-dlg]');
+    const patch = { id: n.id, ...(n.kind === 'wf' ? { config: n.config || {} } : { prompt: ta && !ta.readOnly ? ta.value : n.prompt }),
+      ...typedDialogue(dlg) };
+    await call('canvas_update_nodes', C.board.id, [patch]);
+  }
+
   async function runFlow(mode, target, fresh, asked) {
     if (!C.board) return;
-    clearTimeout(C.promptT);
-    const panel = body().querySelector('.cv-panel');  // lưu prompt / cấu hình đang gõ trước khi chạy
-    if (panel && node(panel.dataset.for)) {
-      const n = node(panel.dataset.for);
-      const ta = panel.querySelector('textarea:not([data-c]):not([data-out])');
-      clearTimeout(C.dlgT);
-      const dlg = panel.querySelector('[data-dlg]');
-      const patch = { id: n.id, ...(n.kind === 'wf' ? { config: n.config || {} } : { prompt: ta && !ta.readOnly ? ta.value : n.prompt }),
-        ...typedDialogue(dlg) };
-      await call('canvas_update_nodes', C.board.id, [patch]);
+    await savePanelNow();
+    if (FLOWSCREEN && mode === 'all') {  // 🎬 Grok Canvas: luôn chạy toàn bộ
+      // flow → tạo 1 tác vụ rồi sang màn Tác vụ; bảng của 1 tác vụ → chạy ngay trên bảng đó
+      return C.board.task_of ? runAllDirect(C.board.id, asked) : runAsTask(C.board.id, false);
     }
     const res = await call('canvas_preview', C.board.id, mode, target, !!fresh);
     if (!res) return;
@@ -2203,37 +2969,253 @@ window.CanvasPage = (() => {
     }
     C.issues = Object.fromEntries(plan.issues.map(i => [i.node, i]));
     drawAll();
+    if (!plan.run.length && !plan.issues.some(i => i.level === 'error')) {
+      toast(`Mọi khối đã có kết quả mới nhất — không cần chạy${plan.held.length ? ` (🔒 ${plan.held.length} khối đang khoá)` : ''}. Muốn tạo lại: ▾ → ⟳ Làm lại tất cả`);
+      return;
+    }
+    const run = await runDialog(C.board.id, mode, target, fresh, plan, {
+      onGo: id => { focusNode(id); showIssues(plan.issues); } });
+    if (!run) return;
+    C.board = run.board;
+    C.issues = {};
+    drawAll();
+    const rec = runs()[runs().length - 1];
+    toast(`Đang chạy ${rec ? Object.keys(rec.nodes || {}).length : ''} khối…`);
+  }
+
+  /** 🎬 Grok Canvas: ▶ Chạy toàn bộ = chạy thẳng MỌI khối, làm lại từ đầu — không có bảng chọn khối / xem trước.
+   *  Vẫn hỏi các khối “❓ Hỏi khi chạy”; còn lỗi (khối không “✏ Không bắt buộc nhập”) → liệt kê lỗi, không chạy. */
+  async function runAllDirect(bid, asked, fromList = false) {
+    let res = await call('canvas_preview', bid, 'all', '', true);
+    if (!res) return null;
+    let plan = res.plan;
+    if (!asked && (plan.ask || []).length) {
+      let ok = false;
+      if (fromList) {
+        const opened = await call('canvas_open', bid);
+        if (!opened) return null;
+        const prev = C.board;
+        C.board = opened.board;
+        try { ok = await askInputs(plan.ask, { fromList: true }); } finally { C.board = prev; }
+      } else {
+        ok = await askInputs(plan.ask);
+      }
+      if (!ok) return null;
+      res = await call('canvas_preview', bid, 'all', '', true);
+      if (!res) return null;
+      plan = res.plan;
+    }
     const errors = plan.issues.filter(i => i.level === 'error');
-    if (errors.length) return showIssues(plan.issues);
-    if (!plan.run.length) { toast('Mọi node đã có kết quả mới nhất — không cần chạy (bấm ⟳ Làm lại tất cả để tạo lại)'); return; }
-    const warns = plan.issues.filter(i => i.level === 'warn');
-    const what = mode === 'all' ? 'cả quy trình' : mode === 'to' ? `đến ${target}` : `từ ${target}`;
-    const msg = [`Chạy ${what}${fresh ? ' — LÀM LẠI TẤT CẢ' : ''}:`, `• ${plan.run.length} node sẽ chạy: ${plan.run.map(id => (node(id) && node(id).title ? `${id} (${node(id).title})` : id)).join(' → ')}`,
-      plan.reuse.length ? `• ${plan.reuse.length} node dùng lại kết quả cũ (không tốn lượt): ${plan.reuse.join(', ')}` : '',
-      plan.posts.length ? `• Có khối đăng bài / quảng cáo (${plan.posts.join(', ')}): app sẽ DỪNG CHỜ bạn duyệt trên node trước khi đăng; quảng cáo tạo ở trạng thái tạm dừng.` : '',
-      (plan.auto_posts || []).length ? `• 🚀 TỰ ĐĂNG KHÔNG CẦN DUYỆT: ${plan.auto_posts.map(id => (node(id) && node(id).title ? `${id} (${node(id).title})` : id)).join(', ')} — bài sẽ lên Fanpage ngay khi tới lượt.` : '',
-      ...warns.map(w => `⚠ ${w.node}: ${w.message}`)].filter(Boolean).join('\n');
-    if (!confirm(msg)) return;
-    const run = await call('canvas_run_flow', C.board.id, mode, target, !!fresh);
-    if (run) { C.board = run.board; C.issues = {}; drawAll(); toast(`Đang chạy ${plan.run.length} node…`); }
+    if (errors.length) {
+      if (fromList && (await openBoard(bid)) === false) return null;
+      C.issues = Object.fromEntries(plan.issues.map(i => [i.node, i]));
+      drawAll();
+      showIssues(plan.issues);
+      toast(`Còn ${errors.length} lỗi cần sửa trước khi chạy (hoặc bật “✏ Không bắt buộc nhập” cho khối đó)`, 'error');
+      return null;
+    }
+    const run = await call('canvas_run_flow', bid, 'all', '', true, []);
+    if (!run) return null;
+    const rec = ((run.board || {}).runs || []).slice(-1)[0];
+    const total = rec ? Object.keys(rec.nodes || {}).length : plan.run.length;
+    if (!fromList && C.board && C.board.id === bid) {
+      C.board = run.board;
+      C.issues = {};
+      drawAll();
+    }
+    toast(`▶ Đang chạy toàn bộ ${total} khối…`, 'ok');
+    return { run, total };
+  }
+
+  /** 🎬 Grok Canvas: ▶ Chạy (thẻ flow / trong bảng) = tạo 1 TÁC VỤ chạy toàn bộ flow rồi tự sang màn 📋 Tác vụ.
+   *  Hỏi các khối “❓ Hỏi khi chạy” trước (giá trị nhập thành đầu vào của tác vụ); còn lỗi → liệt kê lỗi, không tạo. */
+  async function runAsTask(bid, fromList) {
+    let res = await call('canvas_preview', bid, 'all', '', true);
+    if (!res) return null;
+    let plan = res.plan;
+    const opened = await call('canvas_open', bid);
+    if (!opened) return null;
+    const prev = C.board;
+    if (fromList) C.board = opened.board;
+    try {
+      if ((plan.ask || []).length && !(await askInputs(plan.ask, { fromList }))) return null;
+      res = await call('canvas_preview', bid, 'all', '', true);
+      if (!res) return null;
+      plan = res.plan;
+      const errors = plan.issues.filter(i => i.level === 'error');
+      if (errors.length) {
+        if (fromList) { C.board = prev; if ((await openBoard(bid)) === false) return null; }
+        C.issues = Object.fromEntries(plan.issues.map(i => [i.node, i]));
+        drawAll();
+        showIssues(plan.issues);
+        toast(`Còn ${errors.length} lỗi cần sửa trước khi chạy (hoặc bật “✏ Không bắt buộc nhập” cho khối đó)`, 'error');
+        return null;
+      }
+      // đầu vào của tác vụ = giá trị các ô “❓ Hỏi khi chạy” vừa nhập (tên tác vụ lấy từ ô chữ đầu tiên)
+      const flow = (await call('canvas_open', bid) || {}).board || opened.board;
+      const inputs = {};
+      flow.nodes.filter(n => n.ask && n.kind !== 'upload').forEach(n => {
+        if (n.kind === 'wf') {
+          const keys = wspec(n).fields.filter(f => ASK_TYPES.includes(f.type) && f.key !== 'ask' && askOn(n, f.key)).map(f => f.key);
+          const config = Object.fromEntries(keys.filter(k => k in (n.config || {})).map(k => [k, n.config[k]]));
+          if (Object.keys(config).length) inputs[n.id] = { config };
+        } else {
+          inputs[n.id] = { ...(askOn(n, 'prompt') ? { prompt: n.prompt || '' } : {}),
+            ...(n.kind === 'video' && askOn(n, 'dialogue') && !n.dialogue_src ? { dialogue: n.dialogue || '' } : {}) };
+        }
+      });
+      const out = await call('canvas_task_create', bid, [{ inputs }]);
+      if (!out) return null;
+      toast('▶ Đã tạo tác vụ chạy toàn bộ — xem ở 📋 Tác vụ', 'ok');
+      C.board = prev;
+      tasksView(bid);
+      return out;
+    } finally {
+      if (C.board === opened.board && fromList) C.board = prev;
+    }
+  }
+
+  const fmtSecs = s => (s >= 90 ? `~${Math.round(s / 60)} phút` : s > 0 ? `~${s} giây` : '');
+
+  /** Bảng xem trước lượt chạy (thay hộp xác nhận chữ): khối nào chạy + vì sao + tốn lượt model gì + thời gian ước tính
+   *  (theo lần chạy trước); bỏ chọn khối không muốn làm lại → giữ kết quả cũ của nó, tính lại kế hoạch ngay. Có lỗi → nêu
+   *  lỗi, cho bỏ khối lỗi khỏi lượt này. Trả kết quả canvas_run_flow khi đã bắt đầu chạy, null khi huỷ. */
+  function runDialog(bid, mode, target, fresh, plan0, opts = {}) {
+    return new Promise(resolve => {
+      const skip = new Set();
+      let plan = plan0;
+      const box = document.createElement('div');
+      box.className = 'cv-lightbox cv-import cv-run-dlg';
+      const title = mode === 'all' ? (fresh ? '⟳ Làm lại tất cả' : '▶ Chạy toàn bộ') : mode === 'to' ? `▶ Chạy đến ${target}` : `⏩ Chạy từ ${target}`;
+      const lab = id => (plan.labels || {})[id] || { name: id, kind: '', title: '' };
+      const icon = l => (l.kind === 'wf' ? (((C.meta && C.meta.wf_types) || {})[l.wtype] || {}).icon || '🧩' : KIND_ICON[l.kind] || '•');
+      const head = id => { const l = lab(id); return `<span class="cv-node-ic">${esc(icon(l))}</span>
+        <span class="cv-run-main"><span><b>${esc(l.title || l.name)}</b> <code>${esc(id)}</code>${l.title ? ` <em>${esc(l.name)}</em>` : ''}</span>`; };
+      const runRow = id => {
+        const info = (plan.info || {})[id] || {}, why = (plan.why || {})[id] || {};
+        const use = (info.usage || []).map(([l, k]) => `${l}${k > 1 ? ` ×${k}` : ''}`).join(' · ');
+        return `<label class="cv-run-row"><input type="checkbox" data-run="${esc(id)}" checked>${head(id)}
+          <small class="why why-${esc(why.code || '')}">${esc(why.text || '')}${(why.up || []).length ? `: ${esc(why.up.join(', '))}` : ''}</small></span>
+          <span class="cv-run-meta">${use ? `<small>${esc(use)}</small>` : ''}${info.secs ? `<small>${esc(fmtSecs(info.secs))}</small>` : ''}</span></label>`;
+      };
+      const offRow = id => {
+        const blocked = plan.blocked.includes(id), mine = skip.has(id);
+        return `<label class="cv-run-row off"><input type="checkbox" data-run="${esc(id)}" ${mine ? '' : 'disabled'}>${head(id)}
+          <small class="why">${blocked ? 'Bỏ — khối phía trước không chạy mà chưa có kết quả' : mine ? 'Bạn bỏ chọn — giữ kết quả cũ' : '🔒 Đang khoá nhưng chưa có kết quả'}</small></span></label>`;
+      };
+      const keepRow = (id, why) => `<div class="cv-run-row keep">${head(id)}<small class="why">${esc(why)}</small></span></div>`;
+      const close = value => { document.removeEventListener('keydown', onKey, true); box.remove(); resolve(value); };
+      const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(null); } };
+      const recalc = async () => {
+        const res = await call('canvas_preview', bid, mode, target, !!fresh, [...skip]);
+        if (res) { plan = res.plan; render(); }
+      };
+      const render = () => {
+        const errors = plan.issues.filter(i => i.level === 'error'), warns = plan.issues.filter(i => i.level === 'warn');
+        const est = plan.est || {}, off = plan.skipped.length + plan.blocked.length, keep = plan.held.length + plan.reuse.length;
+        const names = ids => ids.map(id => (lab(id).title ? `${id} (${lab(id).title})` : id)).join(', ');
+        const scroll = (box.querySelector('.cv-run-list') || {}).scrollTop || 0;
+        box.innerHTML = `<div class="cv-import-box cv-run-box">
+          <div class="cv-side-head"><b>${esc(title)}</b><button class="btn ghost sm" data-x type="button">✕</button></div>
+          <div class="cv-run-sum"><span class="cv-chip main">${plan.run.length} khối sẽ chạy</span>
+            ${keep ? `<span class="cv-chip">♻ ${keep} giữ nguyên${plan.held.length ? ` (🔒 ${plan.held.length} khoá)` : ''}</span>` : ''}
+            ${off ? `<span class="cv-chip off">⏭ ${off} bỏ qua</span>` : ''}
+            ${est.secs || est.unknown ? `<span class="cv-chip">⏱ ${est.secs ? fmtSecs(est.secs) : ''}${est.unknown ? `${est.secs ? ' + ' : ''}${est.unknown} khối chưa có số liệu` : ''}</span>` : ''}</div>
+          ${(plan.usage || []).length ? `<div class="cv-run-use"><small class="muted">Tốn lượt</small>${plan.usage.map(([l, k]) =>
+            `<span class="cv-chip use ${l.startsWith('Trên máy') ? 'local' : ''}">${esc(l)} <b>×${k}</b></span>`).join('')}</div>` : ''}
+          ${errors.length ? `<div class="cv-run-errs"><b>⚠ Cần sửa trước khi chạy</b>${errors.map(i => `<div class="cv-issue error"><b>${esc(i.node || 'Quy trình')}</b><span>${esc(i.message)}</span>
+            <div class="row">${i.node && plan.run.includes(i.node) ? `<button class="btn ghost sm" data-skip-err="${esc(i.node)}" type="button">Bỏ khối này ở lượt này</button>` : ''}
+              ${i.node && opts.onGo ? `<button class="btn ghost sm" data-go-err="${esc(i.node)}" type="button">Đến khối để sửa</button>` : ''}</div></div>`).join('')}</div>` : ''}
+          ${plan.posts.length ? `<div class="cv-run-note">📣 ${esc(names(plan.posts))}: app DỪNG CHỜ bạn duyệt trên khối trước khi đăng; quảng cáo tạo ở trạng thái tạm dừng.</div>` : ''}
+          ${(plan.review_posts || []).length ? `<div class="cv-run-note">📥 ${esc(names(plan.review_posts))}: lưu bài vào Quản lý bài đăng (Chờ duyệt) — không đăng ngay, có thông báo khi bài sẵn sàng.</div>` : ''}
+          ${(plan.auto_posts || []).length ? `<div class="cv-run-note danger">🚀 TỰ ĐĂNG KHÔNG CẦN DUYỆT: ${esc(names(plan.auto_posts))} — bài lên Fanpage ngay khi tới lượt.</div>` : ''}
+          ${warns.map(w => `<div class="cv-run-note">⚠ ${esc(w.node)}: ${esc(w.message)}${w.split ? ` <button class="btn ghost sm" data-split-warn="${esc(w.node)}" type="button">✂ Tách thành ${w.split} video</button>` : ''}</div>`).join('')}
+          <div class="cv-run-list">${plan.run.map(runRow).join('')}${[...plan.skipped, ...plan.blocked].map(offRow).join('')}
+            ${plan.run.length || off ? '' : '<p class="muted">Không còn khối nào cần chạy.</p>'}</div>
+          ${keep ? `<details class="cv-run-keep"><summary>Giữ nguyên kết quả (${keep})</summary>
+            ${plan.held.map(id => keepRow(id, '🔒 Đã khoá')).join('')}${plan.reuse.map(id => keepRow(id, '♻ Không đổi — dùng lại kết quả')).join('')}</details>` : ''}
+          <div class="row cv-run-foot"><small class="muted">Bỏ chọn 1 khối = giữ kết quả cũ của nó ở lượt này (không tốn lượt)</small><span class="cv-sp"></span>
+            <button class="btn ghost sm" data-x type="button">Huỷ</button>
+            <button class="btn primary sm" data-go type="button" ${plan.run.length && !errors.length ? '' : 'disabled'}>▶ Chạy ${plan.run.length} khối</button></div></div>`;
+        const list = box.querySelector('.cv-run-list');
+        if (list) list.scrollTop = scroll;
+        box.querySelectorAll('[data-x]').forEach(b => { b.onclick = () => close(null); });
+        box.querySelectorAll('[data-run]').forEach(cb => {
+          cb.onchange = () => { if (cb.checked) skip.delete(cb.dataset.run); else skip.add(cb.dataset.run); recalc(); };
+        });
+        box.querySelectorAll('[data-skip-err]').forEach(b => { b.onclick = () => { skip.add(b.dataset.skipErr); recalc(); }; });
+        box.querySelectorAll('[data-split-warn]').forEach(b => { b.onclick = async () => { b.disabled = true; if (await splitVideo(b.dataset.splitWarn)) recalc(); else b.disabled = false; }; });
+        box.querySelectorAll('[data-go-err]').forEach(b => { b.onclick = () => { close(null); opts.onGo(b.dataset.goErr); }; });
+        box.querySelector('[data-go]').onclick = async e => {
+          const btn = e.currentTarget;
+          btn.disabled = true;
+          const run = await call('canvas_run_flow', bid, mode, target, !!fresh, [...skip]);
+          if (run) close(run); else btn.disabled = false;
+        };
+      };
+      render();
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(box);
+    });
   }
 
   const inputFile = n => (n.kind === 'upload' ? mediaUrl(n) : ((n.config || {}).files || [])[0] || '');
 
   const isFileInput = n => n.kind === 'upload' || n.wtype === 'input_video';
   const ASK_TYPES = ['text', 'textarea', 'select', 'check', 'number', 'datetime', 'fb_page', 'ad_account', 'studio_preset'];
-  const askCheck = n => `<label class="cv-opt-check" title="Mỗi lần ▶ Chạy toàn bộ / Đến đây / Từ đây, app hỏi lại prompt của node này trước khi chạy"><input type="checkbox" data-f="ask" ${n.ask ? 'checked' : ''}> ❓ Hỏi khi chạy</label>`;
+  const askCheck = n => `<label class="cv-opt-check" title="Mỗi lần ▶ Chạy toàn bộ / Đến đây / Từ đây, app hỏi lại prompt của node này trước khi chạy"><input type="checkbox" data-f="ask" ${n.ask ? 'checked' : ''}> ❓ Hỏi khi chạy</label>`
+    + `<label class="cv-opt-check" title="Bật: để trống prompt / lời thoại vẫn chạy — không chặn quy trình"><input type="checkbox" data-f="optional" ${n.optional ? 'checked' : ''}> ✏ Không bắt buộc nhập</label>`
+    + askFieldsHtml(n);
 
-  async function askInputs(ids) {
+  /* ❓ chọn ô hỏi khi chạy: node.ask_fields = các ô được hỏi (rỗng = mọi ô) — chọn ở bảng cấu hình hoặc ngay trong hộp hỏi */
+  function askCandidates(n) {
+    if (n.kind === 'wf') return wspec(n).fields.filter(f => ASK_TYPES.includes(f.type) && f.key !== 'ask').map(f => ({ key: f.key, label: f.label }));
+    if (n.kind === 'image') return [{ key: 'prompt', label: 'Prompt' }];
+    if (n.kind === 'video') return [{ key: 'prompt', label: 'Prompt' }, { key: 'dialogue', label: 'Lời thoại' }];
+    return [];
+  }
+  const askOn = (n, key) => !(n.ask_fields || []).length || n.ask_fields.includes(key);
+  function askFieldsHtml(n, open = false) {
+    const all = askCandidates(n);
+    if (!n.ask || all.length < 2) return '';
+    const on = all.filter(f => askOn(n, f.key)).length;
+    return `<details class="cv-ask-fields" data-askf-node="${esc(n.id)}" ${open ? 'open' : ''}>
+      <summary title="Chọn các ô app hỏi bạn nhập mỗi lần chạy quy trình (kể cả chạy từ Danh sách Canvas) — ô không chọn dùng giá trị đã lưu">⚙ Ô hỏi khi chạy: <b>${on === all.length ? 'tất cả' : `${on}/${all.length}`}</b></summary>
+      <div class="cv-ask-fields-list">${all.map(f => `<label class="cv-opt-check"><input type="checkbox" data-askf="${esc(f.key)}" ${askOn(n, f.key) ? 'checked' : ''}> ${esc(f.label)}</label>`).join('')}</div></details>`;
+  }
+  document.addEventListener('change', async e => {
+    const cb = e.target.closest && e.target.closest('[data-askf]');
+    const box = cb && cb.closest('[data-askf-node]');
+    const pg = document.querySelector(CFG.page);  // 2 màn Canvas cùng nằm trong trang: chỉ màn đang hiện xử lý
+    if (box && (!pg || pg.classList.contains('hidden'))) return;
+    const n = box && C.board && node(box.dataset.askfNode);
+    if (!n) return;
+    const boxes = [...box.querySelectorAll('[data-askf]')];
+    const picked = boxes.filter(x => x.checked).map(x => x.dataset.askf);
+    if (!picked.length) { cb.checked = true; toast('Giữ ít nhất 1 ô để hỏi — hoặc tắt “❓ Hỏi khi chạy”', 'warn'); return; }
+    const list = picked.length === boxes.length ? [] : picked;
+    const res = await call('canvas_update_nodes', C.board.id, [{ id: n.id, ask_fields: list }]);
+    if (!res) return;
+    C.board = res.board;
+    const sum = box.querySelector('summary b');
+    if (sum) sum.textContent = list.length ? `${list.length}/${boxes.length}` : 'tất cả';
+    document.dispatchEvent(new CustomEvent('cv-askf', { detail: n.id }));
+  });
+
+  async function askInputs(ids, { fromList = false } = {}) {
+    // fromList: chạy từ Danh sách Canvas → chỉ nhập các ô đã chọn, KHÔNG cho đổi “⚙ Ô hỏi khi chạy” (chỉ sửa trong Canvas)
+    const askPick = (n, open) => (fromList ? '' : askFieldsHtml(n, open));
     // hộp hỏi khi chạy: khối bật "❓ Hỏi khi chạy" → sửa prompt / cấu hình; ảnh / video đầu vào → chọn file
-    const list = ids.map(node).filter(Boolean);
+    // ↕ thứ tự hiển thị: node.ask_pos (đã sắp xếp trước đó) rồi mới tới thứ tự chạy
+    const list = ids.map(node).filter(Boolean).map((n, i) => [n, i])
+      .sort((a, b) => ((a[0].ask_pos ?? 1e3) - (b[0].ask_pos ?? 1e3)) || a[1] - b[1]).map(x => x[0]);
     if (list.some(n => n.kind === 'wf' && wspec(n).fields.some(f => ['fb_page', 'ad_account', 'studio_preset'].includes(f.type)))) {
       await loadSources();
     }
     return new Promise(resolve => {
       const box = document.createElement('div');
       box.className = 'cv-lightbox cv-import';
-      const title = n => `<div class="cv-ask-title"><b>${esc(n.title || nameOf(n))}</b> <small class="muted">${esc(n.id)} · ${esc(nameOf(n))}</small></div>`;
+      const title = n => `<div class="cv-ask-title"><b>${esc(n.title || nameOf(n))}</b> <small class="muted">${esc(n.id)} · ${esc(nameOf(n))}</small>${n.optional ? ' <small class="cv-opt-tag" title="Để trống vẫn chạy">✏ không bắt buộc</small>' : ''}</div>`;
       const fileInner = n => {
         const f = inputFile(n);
         const video = n.kind !== 'upload';
@@ -2241,28 +3223,38 @@ window.CanvasPage = (() => {
           <div>${title(n)}<small class="${f ? 'muted' : 'warn-text'}">${f ? (video ? esc(String(f).split(/[\\/]/).pop()) : 'Đang dùng ảnh hiện tại') : 'Chưa có file — bắt buộc chọn'}</small></div>
           <button class="btn ${f ? 'ghost' : 'primary'} sm" data-pick-in="${esc(n.id)}" type="button">${video ? '🎞 Chọn video…' : '🖼 Chọn ảnh…'}</button>`;
       };
-      const row = n => {
+      // ❓ chỉ hiện các ô đã chọn (node.ask_fields); khung “⚙ Ô hỏi khi chạy” cuối mỗi khối đổi lựa chọn ngay tại đây.
+      // keep = giá trị đang gõ dở (vẽ lại khối sau khi đổi lựa chọn không làm mất chữ)
+      const row = (n, keep = {}, open = false) => {
         if (isFileInput(n)) return `<div class="cv-ask-row" data-file-row="${esc(n.id)}">${fileInner(n)}</div>`;
         if (n.kind !== 'wf') {
-          return `<div class="cv-ask-block">${title(n)}<textarea data-ask-prompt="${esc(n.id)}" rows="3" placeholder="Prompt cho lần chạy này…">${esc(n.prompt || '')}</textarea>
-            ${n.kind === 'video' && n.dialogue_src && node(n.dialogue_src) ? `<small class="muted">💬 Lời thoại lấy từ khối ${esc(n.dialogue_src)} — sửa ở khối đó</small>`
-              : n.kind === 'video' ? `<small class="muted">💬 Lời thoại (mỗi dòng 1 câu; nhiều người: Tên: câu nói)</small>
-              <textarea data-ask-dialogue="${esc(n.id)}" rows="2" placeholder="Để trống = không thoại">${esc(n.dialogue || '')}</textarea>` : ''}</div>`;
+          const linked = n.kind === 'video' && n.dialogue_src && node(n.dialogue_src);
+          return `<div class="cv-ask-block" data-ask-media="${esc(n.id)}">${title(n)}
+            ${askOn(n, 'prompt') ? `<textarea data-ask-prompt="${esc(n.id)}" rows="3" placeholder="Prompt cho lần chạy này…">${esc(keep.prompt ?? n.prompt ?? '')}</textarea>` : ''}
+            ${n.kind !== 'video' || !askOn(n, 'dialogue') ? ''
+              : linked ? `<small class="muted">💬 Lời thoại lấy từ khối ${esc(n.dialogue_src)} — sửa ở khối đó</small>`
+                : `<small class="muted">💬 Lời thoại (mỗi dòng 1 câu; nhiều người: Tên: câu nói)</small>
+              <textarea data-ask-dialogue="${esc(n.id)}" rows="2" placeholder="Để trống = không thoại">${esc(keep.dialogue ?? n.dialogue ?? '')}</textarea>`}
+            ${askPick(n, open)}</div>`;
         }
-        const cfg = n.config || {};
-        const fields = wspec(n).fields.filter(f => ASK_TYPES.includes(f.type) && f.key !== 'ask' && fieldVisible(f, cfg));
+        const cfg = { ...(n.config || {}), ...keep };
+        const fields = wspec(n).fields.filter(f => ASK_TYPES.includes(f.type) && f.key !== 'ask' && fieldVisible(f, cfg) && askOn(n, f.key));
         return `<div class="cv-ask-block" data-ask-wf="${esc(n.id)}">${title(n)}<div class="cv-wf-fields">${fields.map(f => fieldHtml(f, cfg)).join('')
-          || '<small class="muted">Khối này không có ô nào để sửa</small>'}</div>
+          || '<small class="muted">Không có ô nào cần hỏi ở lượt này</small>'}</div>
           ${['fb_post', 'fb_schedule'].includes(n.wtype) ? `<label class="cv-opt-check cv-auto-post ${n.auto_post ? 'on' : ''}"><input type="checkbox" data-ask-auto="${esc(n.id)}" ${n.auto_post ? 'checked' : ''}>
-            🚀 Tự đăng không cần duyệt <small class="muted">(lần này và các lần chạy sau)</small></label>` : ''}</div>`;
+            🚀 Tự đăng không cần duyệt <small class="muted">(lần này và các lần chạy sau)</small></label>` : ''}
+          ${askPick(n, open)}</div>`;
       };
       box.innerHTML = `<div class="cv-import-box cv-ask-box"><div class="cv-side-head"><b>❓ Kiểm tra trước khi chạy</b><button class="btn ghost sm" data-x type="button">✕</button></div>
-        <p class="muted">Các khối bật “Hỏi khi chạy”: sửa prompt / thông tin / chọn file cho lần chạy này. Khối nào đổi thì nó và các khối phía sau sẽ chạy lại.</p>
-        ${list.map(row).join('')}
+        <p class="muted">Các khối bật “Hỏi khi chạy”: sửa prompt / thông tin / chọn file cho lần chạy này. Khối nào đổi thì nó và các khối phía sau sẽ chạy lại.${list.length > 1 ? ' Kéo ⠿ hoặc bấm ▲ ▼ để sắp xếp (chỉ đổi thứ tự hiển thị, không đổi thứ tự chạy).' : ''}</p>
+        <div class="cv-ask-list">${list.map(n => list.length > 1 ? `<div class="cv-ask-item" data-ask-id="${esc(n.id)}">
+          <div class="cv-ask-move"><button type="button" data-ask-up title="Lên trên">▲</button><span class="cv-ask-grip" title="Kéo để sắp xếp">⠿</span><button type="button" data-ask-down title="Xuống dưới">▼</button></div>
+          <div class="cv-ask-body">${row(n)}</div></div>` : row(n)).join('')}</div>
         <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn ghost sm" data-x type="button">Huỷ</button>
           <button class="btn primary sm" data-go type="button">▶ Tiếp tục chạy</button></div></div>`;
       const go = box.querySelector('[data-go]');
-      const refresh = () => { go.disabled = !list.every(n => !isFileInput(n) || inputFile(node(n.id))); };
+      // ảnh / video đầu vào bắt buộc chọn — trừ khối ✏ không bắt buộc
+      const refresh = () => { go.disabled = !list.every(n => !isFileInput(n) || node(n.id).optional || inputFile(node(n.id))); };
       const bindPick = scope => scope.querySelectorAll('[data-pick-in]').forEach(b => {
         b.onclick = async () => {
           const res = await call('canvas_pick_input', C.board.id, b.dataset.pickIn);
@@ -2276,7 +3268,21 @@ window.CanvasPage = (() => {
         };
       });
       bindPick(box);
-      box.querySelectorAll('[data-ask-auto]').forEach(cb => {
+      // đổi “⚙ Ô hỏi khi chạy” (đã lưu ở bộ xử lý chung) → vẽ lại khối đó, giữ chữ đang gõ ở các ô còn hiện
+      const onAskf = e => {
+        const id = e.detail;
+        const blk = box.querySelector(`[data-ask-wf="${id}"], [data-ask-media="${id}"]`);
+        if (!blk || !node(id)) return;
+        const keep = {};
+        blk.querySelectorAll('[data-c]').forEach(el => { keep[el.dataset.c] = el.type === 'checkbox' ? el.checked : el.value; });
+        const p = blk.querySelector('[data-ask-prompt]'), d = blk.querySelector('[data-ask-dialogue]');
+        if (p) keep.prompt = p.value;
+        if (d) keep.dialogue = d.value;
+        blk.outerHTML = row(node(id), keep, true);
+        bindAuto(box.querySelector(`[data-ask-wf="${id}"], [data-ask-media="${id}"]`));
+      };
+      document.addEventListener('cv-askf', onAskf);
+      const bindAuto = scope => scope && scope.querySelectorAll('[data-ask-auto]').forEach(cb => {
         cb.onchange = () => {
           const n = node(cb.dataset.askAuto);
           const pageSel = box.querySelector(`[data-ask-wf="${cb.dataset.askAuto}"] [data-c="page_id"]`);
@@ -2285,13 +3291,45 @@ window.CanvasPage = (() => {
           cb.closest('.cv-auto-post').classList.toggle('on', cb.checked);
         };
       });
+      bindAuto(box);
       refresh();
-      box.querySelectorAll('[data-x]').forEach(b => { b.onclick = () => { box.remove(); resolve(false); }; });
+      // ↕ sắp xếp các khối trong hộp (nút ↑ ↓ hoặc kéo ⠿) → lưu node.ask_pos, lần sau hiện đúng thứ tự (giữ chữ đang gõ)
+      const listEl = box.querySelector('.cv-ask-list');
+      const saveOrder = async () => {
+        const order = [...listEl.querySelectorAll(':scope > .cv-ask-item')].map(el => el.dataset.askId);
+        const res = await call('canvas_update_nodes', C.board.id, order.map((id, i) => ({ id, ask_pos: i })));
+        if (res) C.board = res.board;
+      };
+      listEl.querySelectorAll(':scope > .cv-ask-item').forEach(item => {
+        item.querySelector('[data-ask-up]').onclick = () => {
+          const prev = item.previousElementSibling;
+          if (prev) { listEl.insertBefore(item, prev); saveOrder(); }
+        };
+        item.querySelector('[data-ask-down]').onclick = () => {
+          const next = item.nextElementSibling;
+          if (next) { listEl.insertBefore(next, item); saveOrder(); }
+        };
+        const grip = item.querySelector('.cv-ask-grip');
+        grip.onmousedown = () => { item.draggable = true; };
+        item.ondragstart = e => { item.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.dataset.askId); };
+        item.ondragend = () => { item.draggable = false; item.classList.remove('dragging'); listEl.querySelectorAll('.drop-before,.drop-after').forEach(x => x.classList.remove('drop-before', 'drop-after')); saveOrder(); };
+        item.ondragover = e => {
+          const dragging = listEl.querySelector('.cv-ask-item.dragging');
+          if (!dragging || dragging === item) return;
+          e.preventDefault();
+          const r = item.getBoundingClientRect();
+          const after = e.clientY > r.top + r.height / 2;
+          listEl.insertBefore(dragging, after ? item.nextElementSibling : item);
+        };
+      });
+      document.addEventListener('mouseup', () => listEl.querySelectorAll('.cv-ask-item[draggable="true"]:not(.dragging)').forEach(x => { x.draggable = false; }), { once: true });
+      const close = ok => { document.removeEventListener('cv-askf', onAskf); box.remove(); resolve(ok); };
+      box.querySelectorAll('[data-x]').forEach(b => { b.onclick = () => close(false); });
       go.onclick = async () => {
         const patches = [];
-        box.querySelectorAll('[data-ask-prompt]').forEach(ta => {
-          const dlg = box.querySelector(`[data-ask-dialogue="${ta.dataset.askPrompt}"]`);
-          patches.push({ id: ta.dataset.askPrompt, prompt: ta.value, ...(dlg ? { dialogue: dlg.value } : {}) });
+        box.querySelectorAll('[data-ask-media]').forEach(blk => {  // chỉ các ô đang hỏi (prompt / lời thoại)
+          const ta = blk.querySelector('[data-ask-prompt]'), dlg = blk.querySelector('[data-ask-dialogue]');
+          if (ta || dlg) patches.push({ id: blk.dataset.askMedia, ...(ta ? { prompt: ta.value } : {}), ...(dlg ? { dialogue: dlg.value } : {}) });
         });
         box.querySelectorAll('[data-ask-wf]').forEach(blk => {
           const n = node(blk.dataset.askWf);
@@ -2306,8 +3344,7 @@ window.CanvasPage = (() => {
           C.board = res.board;
           drawAll();
         }
-        box.remove();
-        resolve(true);
+        close(true);
       };
       document.body.appendChild(box);
     });
@@ -2358,9 +3395,18 @@ window.CanvasPage = (() => {
     if (!rec || (rec.status !== 'running' && C.trayClosed === rec.id)) { tray.classList.add('hidden'); return; }
     const ids = Object.keys(rec.nodes || {});
     const finished = ids.filter(id => ['done', 'error', 'skipped'].includes(rec.nodes[id])).length;
-    const cur = rec.status === 'running' && rec.current ? node(rec.current) : null;
-    const part = cur && rec.nodes[cur.id] === 'running' ? (cur.pct || 0) / 100 : 0;
+    // nhiều khối chạy song song: current = "n3, n5" → cộng phần đã xong của từng khối đang chạy
+    const curIds = rec.status === 'running' && rec.current ? String(rec.current).split(/,\s*/) : [];
+    const part = curIds.reduce((a, id) => a + (node(id) && rec.nodes[id] === 'running' ? (node(id).pct || 0) / 100 : 0), 0);
     const pct = ids.length ? Math.round(100 * (finished + part) / ids.length) : 0;
+    if (!(C.logs[rec.task] || []).length && rec.status !== 'running' && !(C.logFetched || {})[rec.id]) {
+      // mở lại app / bảng: nhật ký trong bộ nhớ đã mất → đọc bản đã lưu ra file của lượt này
+      C.logFetched = { ...(C.logFetched || {}), [rec.id]: true };
+      const bid = C.board.id;
+      call('canvas_log', bid, 'run', rec.id).then(r => {
+        if (r && r.entries.length && C.board && C.board.id === bid) { C.logs[rec.task] = r.entries; drawTray(); }
+      });
+    }
     const logs = (C.logs[rec.task] || []).slice(-80);
     tray.className = `cv-tray ${rec.status}`;
     tray.innerHTML = `<div class="cv-tray-head"><b>${RUN_ICON[rec.status] || ''} ${esc(rec.label)}</b>
@@ -2376,7 +3422,7 @@ window.CanvasPage = (() => {
           <b>${esc(id)}</b><small>${esc(labelOf(n))}${extra}</small></button>`;
       }).join('')}${(rec.reused || []).length ? `<small class="muted">♻ dùng lại: ${rec.reused.map(esc).join(', ')}</small>` : ''}</div>
         <div class="cv-tray-log">${logs.length ? logs.map(l => `<div class="${esc(l.level || '')}"><span>${esc(l.time || '')}</span> ${esc(l.message || '')}</div>`).join('')
-          : '<div class="muted">Đang bắt đầu…</div>'}</div></div>`;
+          : `<div class="muted">${rec.status === 'running' ? 'Đang bắt đầu…' : 'Chưa có nhật ký cho lượt này'}</div>`}</div></div>`;
     tray.classList.remove('hidden');
     const log = tray.querySelector('.cv-tray-log');
     log.scrollTop = log.scrollHeight;
@@ -2393,14 +3439,24 @@ window.CanvasPage = (() => {
     side.dataset.view = 'history';
     const list = [...runs()].reverse();
     side.innerHTML = `<div class="cv-side-head"><b>🕘 Lịch sử chạy</b><button class="btn ghost sm" data-close type="button">✕</button></div>
-      ${list.length ? list.map(r => `<div class="cv-run ${esc(r.status)}"><div><b>${RUN_ICON[r.status] || ''} ${esc(r.label)}</b>
+      ${list.length ? list.map(r => `<div class="cv-run ${esc(r.status)}"><div class="cv-run-top"><div><b>${RUN_ICON[r.status] || ''} ${esc(r.label)}</b>
           <small class="muted">${esc(r.at)}${r.ended ? ` → ${esc(r.ended.slice(11))}` : ''} · ${esc(RUN_VI[r.status] || r.status)}</small></div>
+          <button class="btn ghost sm" data-runlog="${esc(r.id)}" type="button" title="Nhật ký chi tiết của lượt chạy này">📜 Nhật ký</button></div>
         <div class="cv-run-nodes">${Object.entries(r.nodes || {}).map(([id, s]) => `<button class="cv-run-node ${esc(s)}" data-go="${esc(id)}" title="${esc(labelOf(node(id)) + ' · ' + s)}" type="button">${RUN_ICON[s] || ''} ${esc(id)}${node(id) && node(id).title ? ` · ${esc(node(id).title)}` : ''}</button>`).join('')}
-          ${(r.reused || []).length ? `<small class="muted">dùng lại: ${r.reused.map(esc).join(', ')}</small>` : ''}</div></div>`).join('')
+          ${(r.reused || []).length ? `<small class="muted">♻ dùng lại: ${r.reused.map(esc).join(', ')}</small>` : ''}
+          ${(r.held || []).length ? `<small class="muted">🔒 giữ: ${r.held.map(esc).join(', ')}</small>` : ''}
+          ${(r.skipped || []).length ? `<small class="muted">⏭ bỏ qua: ${r.skipped.map(esc).join(', ')}</small>` : ''}</div></div>`).join('')
         : '<p class="muted">Chưa chạy quy trình lần nào — bấm ▶ Chạy toàn bộ.</p>'}`;
     side.classList.remove('hidden');
     side.querySelector('[data-close]').onclick = () => side.classList.add('hidden');
     side.querySelectorAll('[data-go]').forEach(b => { b.onclick = () => focusNode(b.dataset.go); });
+    side.querySelectorAll('[data-runlog]').forEach(b => {
+      b.onclick = async () => {
+        const r = list.find(x => x.id === b.dataset.runlog);
+        const res = await call('canvas_log', C.board.id, 'run', b.dataset.runlog);
+        if (res) logDialog(`📜 Nhật ký · ${r ? r.label : b.dataset.runlog}${r ? ` · ${r.at}` : ''}`, res.entries.length ? res.entries : (C.logs[(r || {}).task] || []));
+      };
+    });
   }
 
   async function importDialog() {
@@ -2436,7 +3492,7 @@ window.CanvasPage = (() => {
   function update(event, data) {
     if (event === 'canvas_tasks') {  // chấm nhấp nháy ở mục Canvas trên thanh bên khi có tác vụ đang chạy
       const busy = (data.tasks || []).some(t => t.status === 'queued' || t.status === 'running');
-      const item = document.querySelector('.sb-item[data-view="canvas"]');
+      const item = document.querySelector(`.sb-item[data-view="${CFG.view}"]`);
       if (item) item.classList.toggle('cv-busy-dot', busy);
       return;
     }
@@ -2482,6 +3538,15 @@ window.CanvasPage = (() => {
       }
       return;
     }
+    if (event === 'canvas_drop' && C.board && data.board === C.board.id) {  // Storyboard ít cảnh hơn → gỡ khối cảnh thừa
+      const gone = new Set(data.nodes || []);
+      C.board.nodes = C.board.nodes.filter(n => !gone.has(n.id));
+      for (const n of C.board.nodes) n.inputs = (n.inputs || []).filter(i => !gone.has(i));
+      for (const id of gone) C.multi?.delete(id);
+      if (gone.has(C.sel)) C.sel = '';
+      drawAll();
+      return;
+    }
     if (event === 'canvas_node' && C.board && data.board === C.board.id) {
       const i = C.board.nodes.findIndex(n => n.id === data.node.id);
       if (i < 0) {  // node do app tạo (Storyboard tách cảnh → node Video + khối Ghép) → thêm vào bảng
@@ -2516,5 +3581,456 @@ window.CanvasPage = (() => {
     }
   }
 
-  return { show, update };
-})();
+  // ================================================================ 🎥 màn Canvas Google Flow: ⚙ Model định sẵn
+  function modelLine() {
+    const f = (C.meta && C.meta.flow) || {};
+    const n = f.names || {};
+    return `viết / xử lý ${n.text || 'ChatGPT'} · ảnh ${n.image || 'ChatGPT'} · video ${n.video || 'Grok'} · điều phối ${n.assist || 'Claude'}`;
+  }
+
+  /* ---------------------------------------------------------------- 🎞 mẫu video (Grok Canvas) */
+  async function loadTemplates() {
+    const res = await call('canvas_video_templates');
+    if (res) C.tpls = res;
+    return C.tpls;
+  }
+  const tplOf = id => ((C.tpls || {}).templates || []).find(t => t.id === id) || null;
+  function tplChip(n) {
+    const t = n.kind === 'video' && !n.part_of && n.template ? tplOf(n.template) : null;
+    if (!t) return '';
+    return `<div class="cv-flow-card-chips cv-tpl-chips"><span>${esc(t.icon)} ${esc(t.name)}</span>`
+      + `<span>${n.build === 'split' ? '✂ Tách khối' : '🎬 Tự chia + ghép'}</span></div>`;
+  }
+  function tplHtml(n) {
+    const list = (C.tpls || {}).templates || [];
+    const t = n.template ? tplOf(n.template) : null;
+    const secs = parseInt(n.duration || '10', 10) || 10;
+    const opts = `<option value="">— Không dùng mẫu (Video thường) —</option>`
+      + list.map(x => `<option value="${esc(x.id)}" ${x.id === n.template ? 'selected' : ''}>${esc(x.icon)} ${esc(x.name)}${x.user && !x.builtin ? ' (của bạn)' : ''}</option>`).join('');
+    const head = `<div class="cv-tpl-sec"><div class="cv-tpl-h"><b>🎞 Mẫu video</b>
+      <button class="btn ghost sm" type="button" data-tpl-lib="${esc(n.id)}" title="Xem / sửa / tạo mẫu: phong cách, Master Prompt, khung cảnh">📚 Thư viện mẫu</button></div>
+      <label title="Chọn mẫu → khối chỉ cần ảnh vật liệu + lời thoại"><select data-f="template">${opts}</select></label>`;
+    if (!t) return `${head}<small class="muted">Chọn 1 mẫu: chỉ cần nối ảnh vật liệu (nhân vật, sản phẩm, bối cảnh) + lời thoại — khối tự làm video chuyên nghiệp.</small></div>`;
+    const cont = ((C.tpls || {}).continuity || {})[t.continuity] || '';
+    const mats = (t.materials || []).map(k => ((C.tpls || {}).materials || {})[k]).filter(Boolean).join(' · ');
+    return `${head}<small class="muted">${esc(t.desc)}</small>
+      <div class="cv-flow-chips"><span>${esc(cont.split('—')[0].trim())}</span><span>~${t.segments} cảnh mẫu</span><span>${secs} giây / đoạn</span></div>
+      ${mats ? `<small class="muted">Vật liệu nên có: ${esc(mats)}</small>` : ''}
+      <div class="cv-seg2" role="radiogroup" title="Cách dựng video dài">
+        <button type="button" data-set="build" data-val="one" class="${n.build !== 'split' ? 'on' : ''}" aria-pressed="${n.build !== 'split'}"><i>🎬</i>Không tách</button>
+        <button type="button" data-set="build" data-val="split" class="${n.build === 'split' ? 'on' : ''}" aria-pressed="${n.build === 'split'}"><i>✂</i>Tách khối</button></div>
+      <small class="muted">${n.build === 'split'
+    ? 'Lời dài → mỗi đoạn 1 khối Video con + khối Ghép (xem / tạo lại từng đoạn). Mỗi khối con lấy khung cảnh của mẫu.'
+    : 'Khối tự chia lời thành các đoạn vừa 1 clip, quay lần lượt rồi ghép thành 1 video. Đoạn lỗi → chạy lại chỉ quay đoạn đó.'}</small>
+      ${n.build !== 'split' ? `<label class="cv-opt-check" title="Tắt: điền prompt theo khung cảnh của mẫu (không tốn lượt model chữ)"><input type="checkbox" data-f="tpl_ai" ${n.tpl_ai !== false ? 'checked' : ''}> ✍ AI viết prompt từng đoạn (1 lượt ${esc(((C.meta.flow || {}).names || {}).text || 'ChatGPT')})</label>` : ''}</div>`;
+  }
+
+  async function templatesDialog(forNode) {
+    if (!(await loadTemplates())) return;
+    const box = document.createElement('div');
+    box.className = 'cv-lightbox cv-import cv-tpl-dlg';
+    let edit = null;  // mẫu đang sửa (bản nháp)
+    const T = () => C.tpls;
+    const target = forNode && C.board ? node(forNode) : null;
+    const close = () => box.remove();
+    const drawList = () => {
+      const list = T().templates || [];
+      box.innerHTML = `<div class="cv-import-box cv-tpl-box"><div class="cv-side-head"><b>🎞 Thư viện mẫu video</b>
+        <button class="btn ghost sm" data-x type="button">✕</button></div>
+        <p class="muted">Mẫu = phong cách hình + Master Prompt + khung cảnh quay + kiểu nối cảnh. Khối Video chọn mẫu chỉ cần ảnh vật liệu + lời thoại.${target ? ` Đang chọn mẫu cho khối <b>${esc(target.id)}</b>.` : ''}</p>
+        <div class="cv-tpl-grid">${list.map(t => `<div class="cv-tpl-card${target && target.template === t.id ? ' on' : ''}" data-tid="${esc(t.id)}">
+          <div class="cv-tpl-card-h"><i>${esc(t.icon)}</i><b>${esc(t.name)}</b>
+            <small class="cv-tpl-badge">${t.builtin ? (t.edited ? 'Có sẵn · đã sửa' : 'Có sẵn') : 'Của bạn'}</small></div>
+          <small class="muted">${esc(t.desc)}</small>
+          <div class="cv-flow-chips"><span>${t.continuity === 'flow' ? '⛓ Liền mạch' : '✂ Cắt cảnh'}</span><span>${t.shots.length} khung cảnh</span></div>
+          <div class="row">${target ? `<button class="btn primary sm" type="button" data-use="${esc(t.id)}">Dùng cho ${esc(target.id)}</button>` : ''}
+            <button class="btn ghost sm" type="button" data-edit="${esc(t.id)}">✏ Sửa</button>
+            <button class="btn ghost sm" type="button" data-dup="${esc(t.id)}">⧉ Nhân bản</button>
+            ${t.user ? `<button class="btn ghost sm" type="button" data-del="${esc(t.id)}">${t.builtin ? '↺ Về mặc định' : '🗑 Xoá'}</button>` : ''}</div></div>`).join('')}</div>
+        <div class="row cv-run-foot"><button class="btn ghost sm" type="button" data-new>＋ Mẫu mới</button><span class="cv-sp"></span>
+          <button class="btn ghost sm" data-x type="button">Đóng</button></div></div>`;
+      box.querySelectorAll('[data-x]').forEach(b => { b.onclick = close; });
+      box.querySelectorAll('[data-use]').forEach(b => {
+        b.onclick = async () => {
+          close();
+          await setOption(target.id, 'template', b.dataset.use);
+          toast(`🎞 ${target.id}: dùng mẫu “${(tplOf(b.dataset.use) || {}).name || ''}”`, 'ok');
+        };
+      });
+      box.querySelectorAll('[data-edit]').forEach(b => { b.onclick = () => { edit = JSON.parse(JSON.stringify(tplOf(b.dataset.edit))); drawEdit(); }; });
+      box.querySelectorAll('[data-dup]').forEach(b => {
+        b.onclick = () => { const src = tplOf(b.dataset.dup); edit = { ...JSON.parse(JSON.stringify(src)), id: '', name: `${src.name} (bản sao)`, builtin: false, user: false }; drawEdit(); };
+      });
+      box.querySelectorAll('[data-del]').forEach(b => {
+        b.onclick = async () => {
+          const t = tplOf(b.dataset.del);
+          if (!confirm(t.builtin ? `Bỏ bản sửa, đưa “${t.name}” về mặc định?` : `Xoá mẫu “${t.name}”?`)) return;
+          const res = await call('canvas_video_template_delete', t.id);
+          if (res) { C.tpls.templates = res.templates; drawList(); if (C.board) { drawAll(); drawPanel(); } }
+        };
+      });
+      box.querySelector('[data-new]').onclick = () => {
+        edit = { id: '', name: '', icon: '🎞', desc: '', continuity: 'cut', segments: 3, materials: ['character', 'product'],
+          style: '', master: '', shots: [''], builtin: false, user: false };
+        drawEdit();
+      };
+    };
+    const drawEdit = () => {
+      const e = edit;
+      const mats = T().materials || {};
+      box.innerHTML = `<div class="cv-import-box cv-tpl-box"><div class="cv-side-head"><b>${e.id ? `✏ Sửa mẫu “${esc(e.name)}”` : '＋ Mẫu mới'}</b>
+        <button class="btn ghost sm" data-back type="button">← Thư viện</button></div>
+        ${e.builtin ? '<p class="muted">Mẫu có sẵn: lưu = lưu bản sửa của bạn (bấm “↺ Về mặc định” ở thư viện để bỏ).</p>' : ''}
+        <div class="inline"><label class="field" style="max-width:80px"><span>Biểu tượng</span><input data-e="icon" value="${esc(e.icon)}" maxlength="4"></label>
+          <label class="field" style="flex:1"><span>Tên mẫu *</span><input data-e="name" value="${esc(e.name)}" maxlength="80"></label></div>
+        <label class="field"><span>Mô tả ngắn</span><input data-e="desc" value="${esc(e.desc)}" maxlength="300"></label>
+        <div class="inline"><label class="field" style="flex:1"><span>Kiểu nối cảnh</span><select data-e="continuity">${Object.entries(T().continuity || {}).map(([k, v]) =>
+          `<option value="${esc(k)}" ${k === e.continuity ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
+          <label class="field" style="max-width:150px"><span>Số đoạn khi không có lời</span><input data-e="segments" type="number" min="1" max="${T().max_segments || 12}" value="${esc(e.segments)}"></label></div>
+        <div class="field"><span>Vật liệu nên có</span><div class="inline">${Object.entries(mats).map(([k, v]) =>
+          `<label class="cv-opt-check"><input type="checkbox" data-mat="${esc(k)}" ${(e.materials || []).includes(k) ? 'checked' : ''}> ${esc(v)}</label>`).join('')}</div></div>
+        <label class="field"><span>🎨 Phong cách hình (tiếng Anh — gắn vào prompt mọi đoạn)</span><textarea data-e="style" rows="2">${esc(e.style)}</textarea></label>
+        <label class="field"><span>🧠 Master Prompt (hướng dẫn AI viết prompt từng đoạn)</span><textarea data-e="master" rows="4">${esc(e.master)}</textarea></label>
+        <label class="field"><span>🎬 Khung cảnh quay — mỗi dòng 1 cảnh (đoạn đầu = dòng đầu, đoạn cuối = dòng cuối, giữa xoay vòng)</span><textarea data-e="shots" rows="5">${esc((e.shots || []).join('\n'))}</textarea></label>
+        <div class="row cv-run-foot"><span class="cv-sp"></span><button class="btn ghost sm" data-back type="button">Huỷ</button>
+          <button class="btn primary sm" data-save type="button">Lưu mẫu</button></div></div>`;
+      box.querySelectorAll('[data-back]').forEach(b => { b.onclick = () => { edit = null; drawList(); }; });
+      box.querySelector('[data-save]').onclick = async () => {
+        const val = k => box.querySelector(`[data-e="${k}"]`).value;
+        const tpl = { id: e.id, name: val('name'), icon: val('icon'), desc: val('desc'), continuity: val('continuity'),
+          segments: Number(val('segments')) || 3, style: val('style'), master: val('master'),
+          shots: val('shots').split('\n').map(x => x.trim()).filter(Boolean),
+          materials: [...box.querySelectorAll('[data-mat]:checked')].map(x => x.dataset.mat) };
+        if (!tpl.name.trim()) return toast('Nhập tên mẫu', 'error');
+        if (!tpl.shots.length) return toast('Nhập ít nhất 1 khung cảnh', 'error');
+        const res = await call('canvas_video_template_save', tpl);
+        if (!res) return;
+        C.tpls.templates = res.templates;
+        toast(`🎞 Đã lưu mẫu “${res.template.name}”`, 'ok');
+        edit = null;
+        drawList();
+        if (C.board) { drawAll(); drawPanel(); }
+      };
+    };
+    drawList();
+    box.onclick = ev => { if (ev.target === box) close(); };
+    document.body.appendChild(box);
+  }
+
+
+  /* ================================================================ 📋 màn Tác vụ: 1 flow chạy nhiều tác vụ */
+  const TASK_BADGE = { queued: '⏳ Đang chờ', running: '▶ Đang chạy', reviewing: '🤖 Trợ lý đang chấm', done: '✔ Xong',
+    partial: 'Xong 1 phần', error: '✖ Lỗi', cancelled: '⏹ Đã dừng', interrupted: '⚠ Gián đoạn' };
+  const AUTO_VI = { reviewing: 'đang chấm', reworking: 'đang làm lại', passed: 'đạt', failed: 'chưa đạt', stopped: 'đã dừng' };
+  function autoLine(a) {  // 🤖 tự điều phối của 1 tác vụ: vòng, điểm, nhận xét
+    if (!a || (!a.on && !a.status)) return '';
+    const st = AUTO_VI[a.status] || (a.on ? 'chờ chạy xong để chấm' : '');
+    const score = a.score != null ? ` · ${a.score}/10${a.pass_score ? ` (đạt ≥ ${a.pass_score})` : ''}` : '';
+    return `<small class="cv-task-auto ${esc(a.status || '')}" title="${esc(a.note || '')}">🤖 Tự điều phối: ${esc(st)}${a.round ? ` · vòng làm lại ${a.round}/${a.rounds}` : ''}${score}${a.note ? ` — ${esc(String(a.note).slice(0, 120))}` : ''}</small>`;
+  }
+  const T = { q: '', flow: '', status: '', timer: null, data: null };
+  const fmtSize = b => (b >= 1 << 30 ? `${(b / (1 << 30)).toFixed(1)} GB` : b >= 1 << 20 ? `${(b / (1 << 20)).toFixed(1)} MB` : `${Math.round(b / 1024)} KB`);
+  const tasksVisible = () => !!body() && !!body().querySelector('.cv-tasks') && !document.querySelector(CFG.page).classList.contains('hidden');
+
+  async function tasksView(flowFilter) {
+    C.board = null;
+    C.sel = '';
+    if (flowFilter !== undefined) T.flow = flowFilter;
+    body().innerHTML = `<div class="cv-home cv-tasks">
+      <div class="cv-home-head"><div><small class="eyebrow">${FLOWSCREEN ? 'GROK CANVAS' : 'CANVAS'} · TÁC VỤ</small><h2>📋 Quản lý tác vụ</h2>
+        <p class="muted">Mỗi tác vụ là 1 bản chạy riêng của flow với đầu vào riêng — 1 flow chạy được nhiều tác vụ, kết quả không đè nhau, flow gốc giữ nguyên.</p></div>
+        <div class="row"><button class="btn ghost" data-t="home" type="button">⌂ Danh sách Canvas</button>
+          <button class="btn primary" data-t="new" type="button">＋ Tạo tác vụ</button></div></div>
+      <div class="cv-stats cv-task-stats"></div>
+      <div class="cv-filter"><input data-tf="q" placeholder="Tìm theo tên tác vụ / đầu vào…" value="${esc(T.q)}">
+        <select data-tf="flow"></select>
+        <select data-tf="status">${[['', 'Mọi trạng thái'], ...Object.entries(TASK_BADGE)].map(([v, t]) => `<option value="${v}" ${T.status === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+        <label class="cv-task-par" title="Số tác vụ chạy cùng lúc — còn lại chờ, tự chạy khi có chỗ. Khối dùng chung 1 model trình duyệt vẫn chạy lần lượt.">Chạy cùng lúc
+          <select data-tf="parallel">${[1, 2, 3, 4, 5, 6].map(n => `<option value="${n}">${n}</option>`).join('')}</select></label>
+        <button class="btn ghost sm" data-t="stopall" type="button">⏹ Dừng tất cả</button>
+        <button class="btn ghost sm" data-t="clear" type="button">🧹 Xoá tác vụ đã xong</button></div>
+      <div class="cv-task-list"><p class="muted">Đang tải…</p></div></div>`;
+    const root = body();
+    root.querySelector('[data-t="home"]').onclick = () => { stopTaskPoll(); listBoards(); };
+    root.querySelector('[data-t="new"]').onclick = async () => {
+      const flows = (await call('canvas_list') || {}).boards || [];
+      if (!flows.length) return toast('Chưa có flow nào — tạo Canvas trước', 'warn');
+      const pick = T.flow && flows.find(f => f.id === T.flow) ? T.flow : flows.length === 1 ? flows[0].id : await chooseFlow(flows);
+      if (pick) taskDialog(pick);
+    };
+    root.querySelectorAll('[data-tf]').forEach(el => {
+      el.oninput = el.onchange = async () => {
+        if (el.dataset.tf === 'parallel') {
+          const res = await call('canvas_task_parallel', Number(el.value));
+          if (res) toast(`Chạy cùng lúc tối đa ${res.parallel} tác vụ`, 'ok');
+          return refreshTasks();
+        }
+        T[el.dataset.tf] = el.value;
+        drawTasks();
+      };
+    });
+    root.querySelector('[data-t="stopall"]').onclick = async () => {
+      if (!confirm('Dừng mọi tác vụ đang chạy / đang chờ?')) return;
+      const res = await call('canvas_task_cancel_all');
+      if (res) { toast(`Đã dừng ${res.cancelled} tác vụ`, 'ok'); refreshTasks(); }
+    };
+    root.querySelector('[data-t="clear"]').onclick = async () => {
+      if (!confirm('Xoá mọi tác vụ đã xong (kèm ảnh / video kết quả của chúng)?')) return;
+      const res = await call('canvas_task_clear', ['done']);
+      if (res) { toast(`Đã xoá ${res.removed} tác vụ`, 'ok'); refreshTasks(); }
+    };
+    await refreshTasks();
+    stopTaskPoll();
+    T.timer = setInterval(() => { if (tasksVisible()) refreshTasks(); else stopTaskPoll(); }, 2500);
+  }
+  function stopTaskPoll() { if (T.timer) clearInterval(T.timer); T.timer = null; }
+
+  async function refreshTasks() {
+    const res = await call('canvas_tasks', '');
+    if (!res || !tasksVisible()) return;
+    T.data = res.result;
+    const s = T.data.stats;
+    const stat = (label, value, main) => `<div class="cv-stat ${main ? 'main' : ''}"><small>${esc(label)}</small><b>${value}</b></div>`;
+    body().querySelector('.cv-task-stats').innerHTML = stat('Tổng tác vụ', s.total, true) + stat('Đang chạy', s.running + (s.reviewing || 0))
+      + stat('Đang chờ', s.queued) + stat('Xong', s.done + s.partial) + stat('Lỗi / dừng', s.error + s.cancelled + s.interrupted)
+      + stat('Dung lượng', fmtSize(T.data.tasks.reduce((a, x) => a + (x.size || 0), 0)));
+    const fsel = body().querySelector('[data-tf="flow"]');
+    fsel.innerHTML = [['', 'Mọi flow'], ...T.data.flows.map(f => [f.id, f.name])]
+      .map(([v, t]) => `<option value="${esc(v)}" ${T.flow === v ? 'selected' : ''}>${esc(t)}</option>`).join('');
+    body().querySelector('[data-tf="parallel"]').value = String(T.data.parallel);
+    drawTasks();
+  }
+
+  function drawTasks() {
+    const box = body().querySelector('.cv-task-list');
+    if (!box || !T.data) return;
+    const q = T.q.trim().toLowerCase();
+    const list = T.data.tasks.filter(x => (!T.flow || x.flow === T.flow) && (!T.status || x.status === T.status)
+      && (!q || `${x.name} ${x.inputs.map(i => i.value).join(' ')}`.toLowerCase().includes(q)));
+    box.innerHTML = list.map(x => {
+      const pct = x.total ? Math.round(100 * x.done / x.total) : 0;
+      const live = ['running', 'queued', 'reviewing'].includes(x.status);
+      return `<div class="cv-task ${esc(x.status)}" data-tid="${esc(x.id)}">
+        <div class="cv-task-res">${x.results.length ? x.results.map(r => r.video
+          ? `<a href="${esc(r.url)}" target="_blank" title="${esc(r.title)}"><video src="${esc(r.url)}" muted preload="metadata"></video><i>▶</i></a>`
+          : `<a href="${esc(r.url)}" target="_blank" title="${esc(r.title)}"><img src="${esc(thumbUrl(r.url, 200))}" alt=""></a>`).join('') : '<span class="muted">—</span>'}</div>
+        <div class="cv-task-main"><div class="row"><b>${esc(x.name)}</b><span class="cv-badge ${esc(x.status)}">${TASK_BADGE[x.status] || esc(x.status)}</span></div>
+          <small class="muted">Flow: ${esc(x.flow_name)} · tạo ${esc(fmtTime(x.created_at))}${x.started_at ? ` · bắt đầu ${esc(fmtTime(x.started_at))}` : ''}${x.ended_at ? ` · kết thúc ${esc(fmtTime(x.ended_at))}` : ''} · ${fmtSize(x.size || 0)}</small>
+          ${x.total ? `<div class="cv-task-bar"><i style="width:${pct}%"></i></div><small class="muted">${x.done}/${x.total} khối${x.current && x.status === 'running' ? ` · đang chạy: ${esc(x.current)}` : ''}</small>` : ''}
+          ${x.inputs.length ? `<div class="cv-task-in">${x.inputs.slice(0, 6).map(i => `<span title="${esc(i.label)}">${esc(i.value)}</span>`).join('')}</div>` : ''}
+          ${autoLine(x.auto)}
+          ${x.error ? `<small class="warn-text">${esc(x.error)}</small>` : ''}</div>
+        <div class="cv-task-act">
+          <button class="btn ghost sm" data-ta="open" type="button" title="Mở bảng chạy của tác vụ (xem / làm lại khối)">Mở</button>
+          <button class="btn ghost sm ${x.auto && x.auto.on ? 'on' : ''}" data-ta="assist" type="button" title="🤖 Trợ lý của tác vụ: chat với Claude, chấm kết quả, bật / tắt Tự điều phối">🤖 Trợ lý</button>
+          ${live ? '<button class="btn ghost sm" data-ta="stop" type="button">⏹ Dừng</button>'
+            : x.status === 'done' ? ''
+              : '<button class="btn primary sm" data-ta="resume" type="button" title="Chạy tiếp — chỉ chạy khối chưa xong / lỗi">▶ Chạy tiếp</button>'}
+          <button class="btn ghost sm" data-ta="dup" type="button" title="Tạo tác vụ mới cùng đầu vào (sửa trước khi tạo)">⧉</button>
+          <button class="btn ghost sm" data-ta="folder" type="button" title="Mở thư mục kết quả">📁</button>
+          <button class="btn ghost sm" data-ta="del" type="button" title="Xoá tác vụ">🗑</button></div></div>`;
+    }).join('') || `<p class="muted">${T.data.tasks.length ? 'Không có tác vụ nào khớp bộ lọc.' : 'Chưa có tác vụ — bấm “＋ Tạo tác vụ” hoặc nút “＋ Tác vụ” trên thẻ flow.'}</p>`;
+    box.querySelectorAll('[data-ta]').forEach(b => {
+      b.onclick = () => taskAction(b.dataset.ta, b.closest('[data-tid]').dataset.tid);
+    });
+  }
+
+  async function taskAction(what, tid) {
+    const x = (T.data.tasks || []).find(t => t.id === tid);
+    if (what === 'open') { stopTaskPoll(); return openBoard(tid); }
+    if (what === 'assist') {  // 🤖 mở bảng của tác vụ + khung Trợ lý
+      stopTaskPoll();
+      if ((await openBoard(tid)) === false) return;
+      return toggleAssist(true);
+    }
+    if (what === 'folder') return call('canvas_open_folder', tid);
+    if (what === 'stop') { if (await call('canvas_task_cancel', tid)) toast('Đã dừng tác vụ', 'ok'); return refreshTasks(); }
+    if (what === 'resume') { if (await call('canvas_task_resume', tid)) toast('Đã xếp hàng chạy tiếp', 'ok'); return refreshTasks(); }
+    if (what === 'dup' && x) return taskDialog(x.flow, { name: `${x.name} (2)`, raw: x.raw });
+    if (what === 'del') {
+      if (!confirm(`Xoá tác vụ “${x ? x.name : tid}” và ảnh / video kết quả của nó?`)) return;
+      if (await call('canvas_task_delete', tid)) toast('Đã xoá tác vụ', 'ok');
+      return refreshTasks();
+    }
+  }
+
+  function chooseFlow(flows) {
+    return new Promise(resolve => {
+      const box = document.createElement('div');
+      box.className = 'cv-lightbox cv-import';
+      box.innerHTML = `<div class="cv-import-box"><div class="cv-side-head"><b>Chọn flow để tạo tác vụ</b><button class="btn ghost sm" data-x type="button">✕</button></div>
+        ${flows.map(f => `<button class="cv-import-row" data-f="${esc(f.id)}" type="button"><b>${esc(f.name)}</b><small class="muted">${f.nodes} khối · ${f.runs} lần chạy</small></button>`).join('')}</div>`;
+      const done = v => { box.remove(); resolve(v); };
+      box.querySelectorAll('[data-x]').forEach(b => { b.onclick = () => done(''); });
+      box.querySelectorAll('[data-f]').forEach(b => { b.onclick = () => done(b.dataset.f); });
+      box.onclick = e => { if (e.target === box) done(''); };
+      document.body.appendChild(box);
+    });
+  }
+
+  /* ＋ tạo tác vụ: các ô “❓ Hỏi khi chạy” của flow (+ ảnh tải lên) → 1 tác vụ, hoặc hàng loạt: mỗi dòng của 1 ô = 1 tác vụ */
+  async function taskDialog(bid, preset = {}) {
+    const res = await call('canvas_open', bid);
+    if (!res) return;
+    const flow = res.board;
+    const raw = preset.raw || {};
+    const ar = await call('canvas_assist_get', bid);  // 🤖 Tự điều phối mặc định theo Trợ lý của flow
+    const fauto = (ar && ar.chat && ar.chat.auto) || {};
+    const nodes = flow.nodes.filter(n => n.ask || n.kind === 'upload');
+    const prev = C.board;
+    C.board = flow;  // fieldHtml / wspec đọc meta khối theo bảng đang mở
+    const cfgOf = n => ({ ...(n.config || {}), ...((raw[n.id] || {}).config || {}) });
+    const textFields = [];
+    const block = n => {
+      const head = `<div class="cv-ask-title"><b>${esc(n.title || nameOf(n))}</b> <small class="muted">${esc(n.id)} · ${esc(nameOf(n))}</small></div>`;
+      if (n.kind === 'upload') {
+        const file = (raw[n.id] || {}).file || '';
+        return `<div class="cv-ask-block" data-tk-up="${esc(n.id)}" data-file="${esc(file)}">${head}
+          <div class="row"><small class="muted" data-tk-fname>${file ? esc(file.split(/[\\/]/).pop()) : 'Dùng ảnh hiện tại của flow'}</small><span class="cv-sp"></span>
+          <button class="btn ghost sm" data-tk-pick type="button">🖼 Chọn ảnh khác…</button></div></div>`;
+      }
+      if (n.kind !== 'wf') {
+        if (askOn(n, 'prompt')) textFields.push([`${n.id}|prompt`, `${n.title || nameOf(n)} · Prompt`]);
+        if (n.kind === 'video' && askOn(n, 'dialogue') && !n.dialogue_src) textFields.push([`${n.id}|dialogue`, `${n.title || nameOf(n)} · Lời thoại`]);
+        return `<div class="cv-ask-block" data-tk-media="${esc(n.id)}">${head}
+          ${askOn(n, 'prompt') ? `<textarea data-tk-prompt rows="2" placeholder="Prompt…">${esc((raw[n.id] || {}).prompt ?? n.prompt ?? '')}</textarea>` : ''}
+          ${n.kind === 'video' && askOn(n, 'dialogue') && !n.dialogue_src ? `<textarea data-tk-dialogue rows="2" placeholder="Lời thoại…">${esc((raw[n.id] || {}).dialogue ?? n.dialogue ?? '')}</textarea>` : ''}</div>`;
+      }
+      const cfg = cfgOf(n);
+      const fields = wspec(n).fields.filter(f => ASK_TYPES.includes(f.type) && f.key !== 'ask' && fieldVisible(f, cfg) && askOn(n, f.key));
+      fields.filter(f => ['text', 'textarea'].includes(f.type)).forEach(f => textFields.push([`${n.id}|config.${f.key}`, `${n.title || nameOf(n)} · ${f.label}`]));
+      return `<div class="cv-ask-block" data-tk-wf="${esc(n.id)}">${head}<div class="cv-wf-fields">${fields.map(f => fieldHtml(f, cfg)).join('') || '<small class="muted">Không có ô nào</small>'}</div></div>`;
+    };
+    const blocksHtml = nodes.map(block).join('');
+    C.board = prev;
+    const box = document.createElement('div');
+    box.className = 'cv-lightbox cv-import';
+    box.innerHTML = `<div class="cv-import-box cv-ask-box"><div class="cv-side-head"><b>＋ Tạo tác vụ · ${esc(flow.name)}</b><button class="btn ghost sm" data-x type="button">✕</button></div>
+      <p class="muted">Đầu vào riêng của tác vụ (các khối bật “❓ Hỏi khi chạy” + ảnh tải lên). Flow gốc giữ nguyên.</p>
+      <label class="field"><span>Tên tác vụ (để trống = lấy giá trị ô đầu tiên)</span><input data-tk-name value="${esc(preset.name || '')}"></label>
+      ${textFields.length ? `<details class="cv-task-batch"><summary>📚 Tạo hàng loạt — mỗi dòng 1 tác vụ</summary>
+        <label class="field"><span>Ô thay đổi theo từng dòng</span><select data-tk-bfield>${textFields.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join('')}</select></label>
+        <label class="field"><span>Mỗi dòng = 1 tác vụ (tối đa 50); các ô khác dùng chung giá trị bên dưới</span><textarea data-tk-lines rows="5" placeholder="VD:\nPHÂN BÓN KINGER 1\nPHÂN BÓN QUEEN 2"></textarea></label></details>` : ''}
+      ${blocksHtml || '<p class="muted">Flow không có khối “❓ Hỏi khi chạy” — tác vụ chạy đúng như flow (bật “Hỏi khi chạy” ở khối để nhập đầu vào riêng).</p>'}
+      <details class="cv-task-batch cv-task-autobox" ${fauto.on ? 'open' : ''}><summary>🤖 Tự điều phối ${fauto.on ? '<b>(đang bật theo flow)</b>' : ''}</summary>
+        <p class="muted">Chạy xong → Claude chấm theo tiêu chí; khối chưa đạt được sửa prompt / cấu hình rồi chạy lại (không chạy lại khối Đăng bài / Quảng cáo), tới khi đạt hoặc hết số vòng. Mỗi vòng tốn 1 lượt Claude + lượt tạo lại ảnh / video.</p>
+        <label class="cv-opt-check"><input type="checkbox" data-tk-auto ${fauto.on ? 'checked' : ''}> Bật tự điều phối cho tác vụ này</label>
+        <label class="field"><span>Tiêu chí đạt *</span><textarea data-tk-crit rows="3" placeholder="VD: Ảnh đúng nhân vật + đúng bao bì sản phẩm, video 9:16 rõ nét, lời thoại đúng tên sản phẩm…">${esc(fauto.criteria || '')}</textarea></label>
+        <div class="inline"><label class="field"><span>Điểm đạt (5–10)</span><input data-tk-pass type="number" min="5" max="10" step="0.5" value="${esc(fauto.pass_score ?? 8)}"></label>
+          <label class="field"><span>Số vòng làm lại (1–3)</span><input data-tk-rounds type="number" min="1" max="3" value="${esc(fauto.rounds ?? 2)}"></label></div></details>
+      <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn ghost sm" data-x type="button">Huỷ</button>
+        <button class="btn primary sm" data-go type="button">＋ Tạo &amp; xếp hàng chạy</button></div></div>`;
+    const close = () => box.remove();
+    box.querySelectorAll('[data-x]').forEach(b => { b.onclick = close; });
+    box.querySelectorAll('[data-tk-pick]').forEach(b => {
+      b.onclick = async () => {
+        const files = await api('pick_files', 'image');
+        if (!files || !files.length) return;
+        const blk = b.closest('[data-tk-up]');
+        blk.dataset.file = files[0];
+        blk.querySelector('[data-tk-fname]').textContent = files[0].split(/[\\/]/).pop();
+      };
+    });
+    const linesEl = box.querySelector('[data-tk-lines]');
+    const goBtn = box.querySelector('[data-go]');
+    if (linesEl) linesEl.oninput = () => {
+      const n = linesEl.value.split('\n').filter(x => x.trim()).length;
+      goBtn.textContent = n > 1 ? `＋ Tạo ${Math.min(50, n)} tác vụ` : '＋ Tạo & xếp hàng chạy';
+    };
+    goBtn.onclick = async () => {
+      const inputs = {};
+      box.querySelectorAll('[data-tk-wf]').forEach(blk => {
+        const config = {};
+        blk.querySelectorAll('[data-c]').forEach(el => { config[el.dataset.c] = el.type === 'checkbox' ? el.checked : el.value; });
+        inputs[blk.dataset.tkWf] = { config };
+      });
+      box.querySelectorAll('[data-tk-media]').forEach(blk => {
+        const p = blk.querySelector('[data-tk-prompt]'), d = blk.querySelector('[data-tk-dialogue]');
+        inputs[blk.dataset.tkMedia] = { ...(p ? { prompt: p.value } : {}), ...(d ? { dialogue: d.value } : {}) };
+      });
+      box.querySelectorAll('[data-tk-up]').forEach(blk => { if (blk.dataset.file) inputs[blk.dataset.tkUp] = { file: blk.dataset.file }; });
+      const name = box.querySelector('[data-tk-name]').value.trim();
+      const lines = linesEl ? linesEl.value.split('\n').map(x => x.trim()).filter(Boolean).slice(0, 50) : [];
+      const autoOn = box.querySelector('[data-tk-auto]').checked;
+      const auto = { on: autoOn, criteria: box.querySelector('[data-tk-crit]').value.trim(),
+        pass_score: Number(box.querySelector('[data-tk-pass]').value) || 8, rounds: Number(box.querySelector('[data-tk-rounds]').value) || 2 };
+      if (autoOn && !auto.criteria) { box.querySelector('[data-tk-crit]').focus(); return toast('Nhập tiêu chí đạt để bật tự điều phối', 'warn'); }
+      let items = [{ name, inputs, auto }];
+      if (lines.length) {
+        const [nid, path] = box.querySelector('[data-tk-bfield]').value.split('|');
+        items = lines.map(line => {
+          const copy = JSON.parse(JSON.stringify(inputs));
+          copy[nid] = copy[nid] || {};
+          if (path.startsWith('config.')) copy[nid].config = { ...(copy[nid].config || {}), [path.slice(7)]: line };
+          else copy[nid][path] = line;
+          return { name: lines.length > 1 ? '' : name, inputs: copy, auto };
+        });
+      }
+      goBtn.disabled = true;
+      const out = await call('canvas_task_create', bid, items);
+      goBtn.disabled = false;
+      if (!out) return;
+      close();
+      toast(`Đã tạo ${out.created.length} tác vụ — chạy theo hàng đợi`, 'ok');
+      tasksView(bid);
+    };
+    box.onclick = e => { if (e.target === box) close(); };
+    document.body.appendChild(box);
+  }
+
+  async function modelsDialog() {
+    const res = await call('fcanvas_models_get');
+    if (!res) return;
+    const ROWS = [['text', '✍ Viết / xử lý / viết prompt', 'Khối AI viết, Tra cứu web, Tạo content, Storyboard, Hậu kỳ… và nút Viết lại prompt'],
+      ['image', '🖼 Tạo ảnh', 'Khối Ảnh (khung đầu, ảnh sản phẩm, góc nhân vật…)'],
+      ['video', '🎬 Tạo video', 'Khối Video + cảnh Product Video Studio — mặc định Grok Imagine (6 / 10 / 15 giây)'],
+      ['assist', '🤖 Điều phối (Trợ lý)', 'Trợ lý dựng quy trình, chấm kết quả, tự điều phối']];
+    const m = res.models;
+    const profOpts = (kind, cur) => {
+      const model = m[kind];
+      const site = ((res.options[kind] || []).find(o => o.value === model) || {}).site || '';
+      const list = res.profiles.filter(p => !site || (p.sites || []).includes(site));
+      return `<option value="">Tự chọn profile rảnh${site ? '' : ' (model API: không cần)'}</option>${list.map(p =>
+        `<option value="${esc(p.id)}" ${p.id === cur ? 'selected' : ''}>👤 ${esc(p.name)}</option>`).join('')}`;
+    };
+    const box = document.createElement('div');
+    box.className = 'cv-lightbox cv-import cv-models-dlg';
+    const draw = () => {
+      box.innerHTML = `<div class="cv-import-box cv-models-box"><div class="cv-side-head"><b>⚙ Model của Grok Canvas</b>
+        <button class="btn ghost sm" data-x type="button">✕</button></div>
+        <p class="muted">Mọi khối trên các bảng của màn này dùng các model dưới đây (khối không còn ô chọn model). Đổi model → khối chạy lại ở lần chạy sau.</p>
+        ${ROWS.map(([k, label, hint]) => `<label class="field"><span>${esc(label)} <small class="muted">— ${esc(hint)}</small></span>
+          <div class="inline set-model-row"><select data-m="${k}">${(res.options[k] || []).map(o => `<option value="${esc(o.value)}" ${o.value === m[k] ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select>
+          <select data-p="${k}">${profOpts(k, m[`${k}_profile`])}</select></div></label>`).join('')}
+        <div class="row cv-run-foot"><span class="cv-sp"></span><button class="btn ghost sm" data-x type="button">Huỷ</button>
+          <button class="btn primary sm" data-save type="button">Lưu</button></div></div>`;
+      box.querySelectorAll('[data-x]').forEach(b => { b.onclick = () => box.remove(); });
+      box.querySelectorAll('[data-m]').forEach(s => { s.onchange = () => { m[s.dataset.m] = s.value; m[`${s.dataset.m}_profile`] = ''; draw(); }; });
+      box.querySelectorAll('[data-p]').forEach(s => { s.onchange = () => { m[`${s.dataset.p}_profile`] = s.value; }; });
+      box.querySelector('[data-save]').onclick = async () => {
+        const values = {};
+        ROWS.forEach(([k]) => { values[`fcanvas_model_${k}`] = m[k]; values[`fcanvas_profile_${k}`] = m[`${k}_profile`] || ''; });
+        const saved = await call('fcanvas_models_save', values);
+        if (!saved) return;
+        box.remove();
+        const meta = await call('canvas_meta');
+        if (meta) C.meta = meta.meta;
+        toast(`⚙ Đã lưu model: ${modelLine()}`, 'ok');
+        if (C.board) { const r = await call('canvas_open', C.board.id); if (r) { C.board = r.board; renderBoard(); } } else listBoards();
+      };
+    };
+    draw();
+    box.onclick = e => { if (e.target === box) box.remove(); };
+    document.body.appendChild(box);
+  }
+  document.addEventListener('click', e => {  // nút ⚙ Model (danh sách + thanh bảng) của màn này
+    const b = FLOWSCREEN && e.target.closest && e.target.closest('[data-cv="models"]');
+    if (b && body() && body().contains(b)) modelsDialog();
+    const t = FLOWSCREEN && e.target.closest && e.target.closest('[data-tpl-lib]');  // 🎞 Thư viện mẫu video
+    if (t && body() && body().contains(t)) templatesDialog(t.dataset.tplLib || '');
+  });
+
+  return { show, update, openBoard };
+}
+window.CanvasPage = createCanvasPage({ body: '#canvasBody', page: '#page-canvas', view: 'canvas', api: 'canvas_' });
+window.FlowCanvasPage = createCanvasPage({ body: '#fcanvasBody', page: '#page-fcanvas', view: 'fcanvas', api: 'fcanvas_', flow: true });

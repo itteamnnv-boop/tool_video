@@ -6,7 +6,7 @@ import threading
 import webview
 
 from ..osutil import open_path
-from .. import __version__, browser_profiles
+from .. import __version__, api_mode, browser_profiles
 from ..config import settings
 from ..genres import GENRES
 from ..license import LicenseError, LicenseManager
@@ -85,9 +85,16 @@ class CoreApi:
                                     facebook=self._facebook, ads=self._ads, studio=self._studio)  # Canvas
         # chạy quy trình xong → trợ lý Claude tự điều phối (chỉ khi Canvas đó bật): chấm theo tiêu chí, giao khối làm lại
         self._canvas.on_flow_done = lambda bid, rec: self._assist().after_run(bid, rec)
+        self._canvas.on_auto_stop = lambda bid: self._assist().stop_auto(bid)  # 📋 dừng tác vụ đang 🤖 chấm
         from ..canvas_schedule import CanvasScheduler  # ⏰ lập lịch chạy Canvas (chạy khi app đang mở)
 
         self._canvas_scheduler = CanvasScheduler(self._canvas).start()
+        # 🎬 Grok Canvas: cùng chức năng Canvas, bảng riêng, model định sẵn ở Cài đặt của màn (sự kiện fcanvas_*)
+        self._fcanvas = CanvasRunner(settings, self._emit, images=self._images, videos=self._runner,
+                                     facebook=self._facebook, ads=self._ads, studio=self._studio, variant="flow")
+        self._fcanvas.on_flow_done = lambda bid, rec: self._fcanvas_assist().after_run(bid, rec)
+        self._fcanvas.on_auto_stop = lambda bid: self._fcanvas_assist().stop_auto(bid)
+        self._fcanvas_scheduler = CanvasScheduler(self._fcanvas).start()
         # Studio Muse AI: cùng chức năng Studio, dự án riêng, mọi bước chỉ dùng Muse (sự kiện mstudio_*)
         self._studio_muse = StudioRunner(settings, self._license, self._emit, images=self._images, videos=self._runner,
                                          variant="muse")
@@ -179,12 +186,12 @@ class CoreApi:
     def bootstrap(self) -> dict:
         return {
             "version": __version__,
-            "settings": settings.all(),
+            "settings": api_mode.settings_view(settings.all()),
             "categories": registry.categories(),
             "template_count": len(registry.listed()),
-            "video_engines": ENGINES,
-            "image_engines": IMAGE_ENGINES,
-            "default_image_engine": DEFAULT_IMAGE_ENGINE,
+            "video_engines": api_mode.engines(ENGINES),  # 🔑 chỉ dùng model trình duyệt → ẩn model API
+            "image_engines": api_mode.engines(IMAGE_ENGINES),
+            "default_image_engine": api_mode.pick(DEFAULT_IMAGE_ENGINE, IMAGE_ENGINES),
             "image_templates": [t.as_dict() for t in registry.image_templates()],
             "image_running": self._images.running,
             "tasks": self._runner.pool.list(),

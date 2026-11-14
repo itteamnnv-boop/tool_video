@@ -4,8 +4,9 @@
    lần trước để biết tác vụ nào vừa kết thúc. Danh sách lưu ở localStorage (chỉ máy này, mất cũng không sao). */
 (() => {
   'use strict';
-  const KEY = 'va.notify', MAX = 60;
-  const N = { list: [], known: null, open: false, filter: 'all' };
+  const KEY = 'va.notify', MAX = 60, SOUND_KEY = 'va.notify.sound';
+  const N = { list: [], known: null, open: false, filter: 'all', sound: true };
+  try { N.sound = localStorage.getItem(SOUND_KEY) !== 'off'; } catch { /* bỏ qua */ }
   const btn = () => $('#notifyBtn');
   const keyOf = i => `${i.source}:${i.id}`;
 
@@ -42,8 +43,47 @@
       save();
     }
     fresh.slice(0, 3).forEach(pop);
+    if (fresh.length) chime(fresh.some(n => n.status === 'failed') ? 'failed' : 'done');
     paintBadge();
     if (N.open && fresh.length) paint();
+  }
+
+  // thông báo do app gửi (VD: 📥 bài đăng chờ duyệt) — note: {key, label, view, title, text, status, url?, results?}
+  function push(note) {
+    const k = note.key || `push:${Date.now()}`;
+    if (N.list.some(n => n.key === k)) return;
+    const n = { source: 'push', id: k, tab: '', folder: null, url: '', results: [], text: '', status: 'done', ...note,
+      key: k, at: Date.now(), read: false };
+    N.list.unshift(n);
+    N.list = N.list.slice(0, MAX);
+    save(); pop(n); chime(n.status); paintBadge();
+    if (N.open) paint();
+  }
+
+  // 🔔 âm thanh thông báo mới (tạo bằng WebAudio, không cần file) — tắt / bật ở nút 🔊 trong bảng thông báo
+  let ctx = null;
+  function chime(kind = 'done') {
+    if (!N.sound) return;
+    try {
+      ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state === 'suspended') ctx.resume();
+      const notes = kind === 'failed' ? [440, 330] : kind === 'review' ? [660, 880, 1175] : [880, 1320];
+      const t0 = ctx.currentTime + 0.02;
+      notes.forEach((f, i) => {
+        const o = ctx.createOscillator(), g = ctx.createGain(), t = t0 + i * 0.14;
+        o.type = 'sine'; o.frequency.value = f;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.18, t + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+        o.connect(g).connect(ctx.destination);
+        o.start(t); o.stop(t + 0.5);
+      });
+    } catch { /* máy không phát được âm thanh — bỏ qua */ }
+  }
+  function setSound(on) {
+    N.sound = !!on;
+    try { localStorage.setItem(SOUND_KEY, on ? 'on' : 'off'); } catch { /* bỏ qua */ }
+    if (on) chime();
   }
 
   function paintBadge() {
@@ -76,10 +116,16 @@
     if (a === 'view') view(note, +(b.dataset.k || 0));
     else if (a === 'folder') folder(note);
     else if (a === 'link') api('open_url', note.url);
-    else if (a === 'go') { toggle(false); openScreen(note.view, note.tab); }  // openScreen ở minivideo.js
+    else if (a === 'go') {
+      toggle(false);
+      if (note.status === 'review' && window.PostsPage && window.PostsPage.filter) window.PostsPage.filter('pending');  // mở thẳng mục Chờ duyệt
+      openScreen(note.view, note.tab);
+    }  // openScreen ở minivideo.js
     else if (a === 'del') { N.list = N.list.filter(n => n !== note); save(); paintBadge(); paint(); }
   }
 
+  const icon = n => (n.status === 'failed' ? '⚠' : n.status === 'review' ? '📥' : '✓');
+  const stLabel = n => (n.status === 'failed' ? 'Lỗi' : n.status === 'review' ? 'Chờ duyệt' : 'Đã xong');
   const thumbs = (n, big) => n.results.length ? `<div class="nt-thumbs ${big ? 'big' : ''}">${n.results.map((r, k) => `<button type="button" class="nt-th" data-nt="view" data-nt-key="${esc(n.key)}" data-k="${k}" title="${r.kind === 'video' ? 'Phát video' : 'Xem ảnh'}">
       <img src="${esc(thumbUrl(r.url, 200))}" alt="" loading="lazy" decoding="async">${r.kind === 'video' ? '<i>▶</i>' : ''}</button>`).join('')}</div>` : '';
   const actions = n => `<div class="nt-acts">
@@ -94,8 +140,8 @@
     if (!stack) { stack = document.createElement('div'); stack.id = 'ntStack'; document.body.appendChild(stack); }
     const el = document.createElement('div');
     el.className = `nt-pop ${note.status}`;
-    el.innerHTML = `<div class="nt-pophead"><span class="nt-ico">${note.status === 'failed' ? '⚠' : '✓'}</span>
-        <div><small>${esc(note.label)} · ${note.status === 'failed' ? 'Lỗi' : 'Đã xong'}</small><b title="${esc(note.title)}">${esc(note.title)}</b></div>
+    el.innerHTML = `<div class="nt-pophead"><span class="nt-ico">${icon(note)}</span>
+        <div><small>${esc(note.label)} · ${stLabel(note)}</small><b title="${esc(note.title)}">${esc(note.title)}</b></div>
         <button type="button" class="nt-popx" title="Đóng">✕</button></div>
       ${note.text ? `<p class="nt-err">${esc(note.text)}</p>` : ''}${thumbs(note, false)}${actions(note)}`;
     stack.prepend(el);
@@ -120,11 +166,12 @@
     const list = N.list.filter(n => N.filter === 'all' || (N.filter === 'failed' ? n.status === 'failed' : n.results.length));
     const chip = (k, t, c) => `<button type="button" class="jb-chip ${N.filter === k ? 'on' : ''}" data-nt-filter="${k}">${t} <b>${c}</b></button>`;
     box.innerHTML = `<div class="jb-head"><b>Thông báo</b><span class="jb-sum">${N.list.length ? `${N.list.length} thông báo` : ''}</span>
+        <button type="button" class="link nt-sound" data-nt-sound title="${N.sound ? 'Đang bật âm thanh khi có thông báo mới — bấm để tắt' : 'Đang tắt âm thanh — bấm để bật'}">${N.sound ? '🔊' : '🔇'}</button>
         ${N.list.length ? '<button type="button" class="link nt-clear" data-nt-clear title="Xoá mọi thông báo">Xoá hết</button>' : ''}
         <button type="button" class="jb-close" data-nt-close title="Đóng (Esc)">✕</button></div>
       ${N.list.length ? `<div class="jb-filters">${chip('all', 'Tất cả', N.list.length)}${chip('result', 'Có kết quả', N.list.filter(n => n.results.length).length)}${chip('failed', 'Lỗi', N.list.filter(n => n.status === 'failed').length)}</div>` : ''}
       <div class="jb-list">${list.length ? list.map(n => `<div class="nt-row ${n.status} ${n.read ? '' : 'new'}">
-          <span class="nt-ico">${n.status === 'failed' ? '⚠' : '✓'}</span>
+          <span class="nt-ico">${icon(n)}</span>
           <div class="nt-main"><div class="jb-top"><b title="${esc(n.title)}">${esc(n.title)}</b><span class="jb-time">${ago(n.at)}</span>
               <button type="button" class="nt-del" data-nt="del" data-nt-key="${esc(n.key)}" title="Xoá thông báo">✕</button></div>
             ${n.text ? `<p class="nt-err">${esc(n.text)}</p>` : ''}${thumbs(n, true)}${actions(n)}</div></div>`).join('')
@@ -164,6 +211,7 @@
       const b = e.target.closest('button');
       if (!b) return;
       if (b.dataset.ntClose !== undefined) return toggle(false);
+      if (b.dataset.ntSound !== undefined) { setSound(!N.sound); return paint(); }
       if (b.dataset.ntClear !== undefined) { if (!confirm('Xoá mọi thông báo?')) return; N.list = []; save(); paintBadge(); return paint(); }
       if (b.dataset.ntFilter) { N.filter = b.dataset.ntFilter; return paint(); }
       if (b.dataset.nt) { act(b); if (b.dataset.nt !== 'del' && b.dataset.nt !== 'go') paint(); }
@@ -177,5 +225,5 @@
   }
 
   window.addEventListener('pywebviewready', () => setTimeout(init, 200));
-  window.Notify = { feed, toggle };
+  window.Notify = { feed, toggle, push, chime, setSound };
 })();

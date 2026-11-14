@@ -12,9 +12,12 @@ FALLBACK = {"model_text": "chatgpt_browser", "model_video": "grok_browser", "mod
 
 def get(settings) -> dict:
     """Bộ model đang cài; model ảnh trống → model của lần Tạo hình ảnh gần nhất (hoặc GPT Image API)."""
+    from . import api_mode
+
     out = {key: str(settings.get(key) or "") or FALLBACK.get(key, "") for key in (*STUDIO_KEYS.values(), "model_vision")}
     out["model_image"] = out["model_image"] or (settings.get("last_image_form") or {}).get("engine") or "openai_api"
-    return out
+    # 🔑 chỉ dùng model trình duyệt: model API đang cài → bản trình duyệt cùng hãng
+    return {k: v if k.endswith("_profile") else api_mode.pick(v, settings=settings) for k, v in out.items()}
 
 
 def apply_studio(options: dict, settings) -> dict:
