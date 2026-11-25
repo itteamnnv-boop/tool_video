@@ -11,9 +11,19 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PY="${PYTHON:-python3}"
+# claude-agent-sdk, yt-dlp mới cần Python 3.10+ (Ubuntu 22.04 có sẵn 3.10)
+if ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+  echo "✗ Cần Python 3.10 trở lên — '$PY' là: $("$PY" --version 2>&1 || echo 'không chạy được')" >&2
+  echo "  Cài:  sudo apt install python3.12 python3.12-venv      rồi chạy:  PYTHON=python3.12 ./build_linux.sh" >&2
+  exit 1
+fi
 if [ ! -d .venv ]; then "$PY" -m venv .venv; fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
+if ! python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
+  echo "✗ .venv đang dùng $(python --version 2>&1) (tạo từ Python cũ) — xoá rồi chạy lại:  rm -rf .venv && PYTHON=$PY ./build_linux.sh" >&2
+  exit 1
+fi
 pip install -q --upgrade pip
 pip install -q -r requirements.txt pyinstaller
 
@@ -28,6 +38,10 @@ pyinstaller --noconfirm --clean --windowed \
   --add-data "ui:ui" \
   --add-data "templates:templates" \
   --add-data "assets:assets" \
+  --add-data "skills:skills" \
+  --collect-all claude_agent_sdk \
+  --hidden-import app.setup_tools --hidden-import app.api.setup --hidden-import app.tvc_claude \
+  --hidden-import app.tvc_fb --hidden-import app.tvc_ads \
   --collect-all playwright \
   --collect-all edge_tts \
   --collect-all webview \
@@ -43,7 +57,15 @@ pyinstaller --noconfirm --clean --windowed \
   main.py
 
 # ffmpeg / driver Playwright đóng gói kèm phải chạy được
-find dist/VideoAgent -type f \( -name "ffmpeg-*" -o -name "node" \) -exec chmod +x {} + || true
+find dist/VideoAgent -type f \( -name "ffmpeg-*" -o -name "node" -o -name "claude" \) -exec chmod +x {} + || true
+# Tự kiểm bản build (không mở cửa sổ): nạp mọi thư viện + claude đi kèm SDK + ffmpeg + skill
+CHECK="$(mktemp)"
+if ! QT_QPA_PLATFORM=offscreen dist/VideoAgent/VideoAgent --selfcheck "$CHECK"; then
+  cat "$CHECK" 2>/dev/null || true
+  echo "✗ Tự kiểm bản build lỗi (xem các dòng FAIL ở trên)" >&2
+  exit 1
+fi
+cat "$CHECK"
 echo "Xong: dist/VideoAgent"
 
 if [ "${1:-}" = "--skip-deb" ]; then exit 0; fi

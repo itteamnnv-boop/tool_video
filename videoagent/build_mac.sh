@@ -9,9 +9,19 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PY="${PYTHON:-python3}"
+# Python của macOS (Xcode) là 3.9 — claude-agent-sdk, yt-dlp mới cần Python 3.10+ ("No matching distribution found")
+if ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+  echo "✗ Cần Python 3.10 trở lên — '$PY' là: $("$PY" --version 2>&1 || echo 'không chạy được')" >&2
+  echo "  Cài:  brew install python@3.12      rồi chạy:  PYTHON=python3.12 ./build_mac.sh" >&2
+  exit 1
+fi
 if [ ! -d .venv ]; then "$PY" -m venv .venv; fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
+if ! python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
+  echo "✗ .venv đang dùng $(python --version 2>&1) (tạo từ Python cũ) — xoá rồi chạy lại:  rm -rf .venv && PYTHON=$PY ./build_mac.sh" >&2
+  exit 1
+fi
 pip install -q --upgrade pip
 pip install -q -r requirements.txt pyinstaller
 
@@ -28,12 +38,16 @@ pyinstaller --noconfirm --clean --windowed \
   --add-data "ui:ui" \
   --add-data "templates:templates" \
   --add-data "assets:assets" \
+  --add-data "skills:skills" \
   --collect-all playwright \
   --collect-all edge_tts \
   --collect-all webview \
   --collect-all yt_dlp \
   --collect-all curl_cffi \
+  --collect-all claude_agent_sdk \
   --collect-data imageio_ffmpeg \
+  --hidden-import app.setup_tools --hidden-import app.api.setup --hidden-import app.tvc_claude \
+  --hidden-import app.tvc_fb --hidden-import app.tvc_ads \
   main.py
 
 PLIST="dist/VideoAgent.app/Contents/Info.plist"
@@ -45,7 +59,15 @@ PLIST="dist/VideoAgent.app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :NSHighResolutionCapable bool true" "$PLIST" 2>/dev/null || true
 
 # ffmpeg / driver Playwright đóng gói kèm phải chạy được
-find dist/VideoAgent.app -type f \( -name "ffmpeg-*" -o -name "node" \) -exec chmod +x {} + || true
+find dist/VideoAgent.app -type f \( -name "ffmpeg-*" -o -name "node" -o -name "claude" \) -exec chmod +x {} + || true
+# Tự kiểm bản build: nạp mọi thư viện + claude đi kèm SDK + ffmpeg + skill — thiếu → dừng, không ra bộ cài hỏng
+CHECK="$(mktemp -t videoagent_selfcheck)"
+if ! dist/VideoAgent.app/Contents/MacOS/VideoAgent --selfcheck "$CHECK"; then
+  cat "$CHECK" 2>/dev/null || true
+  echo "✗ Tự kiểm bản build lỗi (xem các dòng FAIL ở trên)" >&2
+  exit 1
+fi
+cat "$CHECK"
 # ký ad-hoc (không cần tài khoản Apple) — macOS chip M bắt buộc mọi file chạy phải có chữ ký.
 # Xoá thuộc tính mở rộng trước (com.apple.quarantine, FinderInfo…) — còn sót thì codesign báo
 # "resource fork, Finder information, or similar detritus not allowed".

@@ -650,8 +650,10 @@ def selfcheck(out_file: str = "") -> int:
     try:
         import claude_agent_sdk
 
-        bundled = Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude.exe"
-        lines.append(f"{'OK' if bundled.is_file() or os.name != 'nt' else 'WARN'} claude_agent_sdk/_bundled/claude.exe")
+        base = Path(claude_agent_sdk.__file__).parent / "_bundled"
+        found = next((p for p in (base / "claude.exe", base / "claude") if p.is_file()), None)
+        # thiếu chỉ cảnh báo: Trợ lý TVC vẫn chạy được bằng Claude Code cài trên máy (~/.local/bin/claude)
+        lines.append(f"OK claude đi kèm SDK: {found.name}" if found else f"WARN không thấy claude đi kèm SDK ({base})")
     except Exception:  # noqa: BLE001
         pass
     for n in SKILLS:  # skill đóng gói kèm (VideoAgent.spec datas skills)
