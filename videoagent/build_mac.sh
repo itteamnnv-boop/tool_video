@@ -8,6 +8,22 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# GitHub Actions: lỗi ở bước nào → đẩy 25 dòng log cuối vào annotation của job (đọc được ở trang tóm tắt lần chạy,
+# không cần tải log) để biết ngay nguyên nhân. Chạy trên máy Mac thì không ảnh hưởng.
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  mkdir -p build
+  LOG=build/build_mac.log
+  : > "$LOG"
+  exec > >(tee -a "$LOG") 2>&1
+  on_fail() {
+    local rc=$? line=$1 cmd=$2 tail
+    sleep 1  # chờ tee ghi xong
+    tail=$(tail -n 25 "$LOG" | sed -e 's/%/%25/g' -e 's/\r//g' | awk '{printf "%s%%0A", $0}')
+    echo "::error title=build_mac.sh lỗi ở dòng ${line} (mã ${rc})::${cmd}%0A${tail}"
+  }
+  trap 'on_fail $LINENO "$BASH_COMMAND"' ERR
+fi
+
 PY="${PYTHON:-python3}"
 # Python của macOS (Xcode) là 3.9 — claude-agent-sdk, yt-dlp mới cần Python 3.10+ ("No matching distribution found")
 if ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
