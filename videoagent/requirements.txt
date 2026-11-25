@@ -15,3 +15,6 @@ PyQt6>=6.7; sys_platform == "linux"
 PyQt6-WebEngine>=6.7; sys_platform == "linux"
 curl_cffi>=0.16  # yt-dlp giả lập trình duyệt Chrome — TikTok chặn yêu cầu thường ("Unexpected response from webpage")
 claude-agent-sdk>=0.2.189  # 🎬 Trợ lý TVC: phiên Claude Code chạy skill tvc-livestream-capcut (app/tvc_claude.py)
+# Mac Intel: cryptography >= 49 không còn wheel x86_64 → pip tự biên dịch với OpenSSL của Homebrew, PyInstaller lại gói
+# libssl.3.dylib cũ của Python → "Symbol not found: _SSL_get0_group_name" khi nạp claude_agent_sdk. 48.x có wheel universal2.
+cryptography<49; sys_platform == "darwin" and platform_machine == "x86_64"

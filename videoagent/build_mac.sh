@@ -39,7 +39,8 @@ if ! python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; 
   exit 1
 fi
 pip install -q --upgrade pip
-pip install -q -r requirements.txt pyinstaller
+# --only-binary=cryptography: không có wheel thì báo lỗi ngay, không tự biên dịch (bản tự biên dịch đụng OpenSSL khi đóng gói)
+pip install -q --only-binary=cryptography -r requirements.txt pyinstaller
 
 VERSION=$(python -c 'import re,pathlib; print(re.search(r"__version__\s*=\s*\"([^\"]+)\"", pathlib.Path("app/__init__.py").read_text()).group(1))')
 ARCH=$(uname -m)
