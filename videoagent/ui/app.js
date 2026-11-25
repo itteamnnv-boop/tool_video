@@ -73,6 +73,7 @@ async function boot() {
   initSidebar();
   initImages();
   initFacebook();
+  api('setup_check_bg').catch(() => {});  // 🧰 kiểm tra công cụ trong nền → số mục còn thiếu ở thanh bên
   initAds();
   initProfiles();
   splashStep('Đang tải Studio…');
@@ -152,6 +153,10 @@ function navigate(view) {
   if (view === 'channel') window.ChannelPage.show();
   $('#page-mcp').classList.toggle('hidden', view !== 'mcp');
   if (view === 'mcp') window.McpPage.show();
+  $('#page-tvc').classList.toggle('hidden', view !== 'tvc');
+  if (view === 'tvc') window.TvcPage.show();  // 🎬 Trợ lý TVC
+  $('#page-setup').classList.toggle('hidden', view !== 'setup');
+  if (view === 'setup') window.SetupPage.show();  // 🧰 Cài đặt công cụ
   $('#page-cast').classList.toggle('hidden', view !== 'cast');
   if (view === 'cast') window.CastPage.show();
   $('#page-posts').classList.toggle('hidden', view !== 'posts');
@@ -1995,6 +2000,8 @@ const OfferForm = (() => {
 window.__onBackend = ({ event, data }) => {
   if (event.startsWith('mstudio_')) return window.MuseStudioPage.update(`studio_${event.slice(8)}`, data);  // Studio Muse AI
   if (event.startsWith('mhub_')) return window.MuseHubPage.update(event, data);  // Studio Muse AI · dây chuyền
+  if (event === 'setup_changed') return window.SetupPage && window.SetupPage.update(event, data);  // 🧰
+  if (event.startsWith('tvc_')) return window.TvcPage && window.TvcPage.update(event, data);  // 🎬 Trợ lý TVC
   if (event.startsWith('fcanvas_')) return window.FlowCanvasPage && window.FlowCanvasPage.update(event.slice(1), data);  // 🎬 Grok Canvas
   if (event.startsWith('canvas_')) {  // Canvas — Trợ lý nuôi kênh chạy trên bảng Canvas riêng nên cũng nghe các sự kiện này
     if (window.ChannelPage) window.ChannelPage.update(event, data);

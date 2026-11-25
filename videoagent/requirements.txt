@@ -14,3 +14,4 @@ qtpy>=2.4; sys_platform == "linux"
 PyQt6>=6.7; sys_platform == "linux"
 PyQt6-WebEngine>=6.7; sys_platform == "linux"
 curl_cffi>=0.16  # yt-dlp giả lập trình duyệt Chrome — TikTok chặn yêu cầu thường ("Unexpected response from webpage")
+claude-agent-sdk>=0.2.189  # 🎬 Trợ lý TVC: phiên Claude Code chạy skill tvc-livestream-capcut (app/tvc_claude.py)

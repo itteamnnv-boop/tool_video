@@ -1025,7 +1025,8 @@ class CanvasRunner(CanvasTasksMixin):  # 📋 tác vụ: 1 flow chạy nhiều t
 
                     if not node.get("template") or vt.get(str(node["template"])) is None:
                         node.pop("template", None)
-                    node["build"] = "split" if node.get("build") == "split" else "one"
+                    if "build" in ch or node.get("template"):  # không mẫu + chưa chọn → giữ cách cũ (theo auto_split)
+                        node["build"] = node["build"] if node.get("build") in ("split", "story") else "one"
                     node["tpl_ai"] = node.get("tpl_ai") is not False
                 if "angles" in ch and node["kind"] == "image":  # 🧍 / 📦 preset bảng nhiều góc ("" = ảnh thường)
                     node["angles"] = ch["angles"] if ch["angles"] in ANGLES else ""
@@ -1270,6 +1271,17 @@ class CanvasRunner(CanvasTasksMixin):  # 📋 tác vụ: 1 flow chạy nhiều t
     PART_KEYS = ("engine", "aspect", "duration", "resolution", "voice", "voice_note", "first_frame", "w", "template")
 
     @staticmethod
+    def _build_mode(node: dict) -> str:
+        """Cách dựng lời dài của khối Video chung: "one" = 🎬 Không tách (khối tự chia + quay + ghép bên trong),
+        "split" = ✂ Tách khối (khối Video con + khối Ghép), "single" = 1 video (tắt tự tách, khối cũ không mẫu).
+        Có mẫu: mặc định "one". Không mẫu chưa chọn: theo ô tự tách cũ (auto_split, mặc định bật = "split")."""
+        if node.get("build") in ("split", "story"):  # 🧭 story = Tách khối + AI phân tích lời → prompt riêng, nối ⛓
+            return node["build"]
+        if node.get("template") or node.get("build") == "one":
+            return "one"
+        return "single" if node.get("auto_split") is False else "split"
+
+    @staticmethod
     def _parts_of(board: dict, pid: str) -> list:
         """Các video con tách từ khối Video chung pid, theo thứ tự phần 1 → N."""
         return sorted((n for n in board["nodes"] if n.get("part_of") == pid), key=lambda n: int(n.get("part") or 0))
@@ -1292,7 +1304,7 @@ class CanvasRunner(CanvasTasksMixin):  # 📋 tác vụ: 1 flow chạy nhiều t
             limit = dialogue_limit(node)
             chunks = split_dialogue(spoken, limit)
             parts = self._parts_of(board, nid)
-            if node.get("template") and node.get("build") != "split" and parts:  # 🎞 về "Không tách" → gỡ khối con
+            if self._build_mode(node) == "one" and parts:  # 🎬 về "Không tách" → gỡ khối con
                 chunks = []
             if len(chunks) < 2:
                 if not parts:
@@ -1312,6 +1324,8 @@ class CanvasRunner(CanvasTasksMixin):  # 📋 tác vụ: 1 flow chạy nhiều t
             w = float(node.get("w") or 240)
             step = w * tall + 120
             made, kept, changed = [], [], False
+            story = self._build_mode(node) == "story"  # 🧭 prompt riêng từng cảnh (phân tích lời) + nối ⛓ liền mạch
+            scenes = {s.get("loi"): s for s in (node.get("story") or {}).get("scenes") or [] if isinstance(s, dict)}
             for k, text in enumerate(chunks, 1):
                 if k <= len(parts):
                     c = parts[k - 1]
@@ -1319,9 +1333,19 @@ class CanvasRunner(CanvasTasksMixin):  # 📋 tác vụ: 1 flow chạy nhiều t
                 else:
                     c = self._new_node(board, "video", node["x"] + w + 160, node["y"] + step * (k - 1), [nid], "")
                     made.append(c["id"])
+                prompt = ""
+                if story:  # lời đoạn không đổi → giữ prompt (kể cả bạn đã sửa); đổi → prompt cảnh khớp lời (nếu có)
+                    prompt = c.get("prompt", "") if c.get("dialogue") == text and c.get("prompt") else \
+                        str((scenes.get(text) or {}).get("prompt") or "")
+                prev = kept[-1] if story and kept else ""
+                changed = changed or (c.get("chain_from") or "") != prev or (c.get("prompt") or "") != prompt
                 c.update({key: json.loads(json.dumps(node[key])) for key in self.PART_KEYS if key in node})
-                c.update(inputs=[nid], part_of=nid, part=k, dialogue=text, dialogue_src="", prompt="", prompt_src="own",
-                         auto_split=False, title=f"{base} · {k}/{len(chunks)}")
+                c.update(inputs=[prev, nid] if prev else [nid], part_of=nid, part=k, dialogue=text, dialogue_src="",
+                         prompt=prompt, prompt_src="own", auto_split=False, title=f"{base} · {k}/{len(chunks)}")
+                if prev:
+                    c["chain_from"] = prev  # ⛓ quay tiếp từ khung cuối video khối trước
+                else:
+                    c.pop("chain_from", None)
                 c.pop("roles", None)
                 kept.append(c["id"])
             gone = [c["id"] for c in parts[len(chunks):]]
@@ -1372,11 +1396,12 @@ class CanvasRunner(CanvasTasksMixin):  # 📋 tác vụ: 1 flow chạy nhiều t
 
     def _wants_split(self, bid: str, board: dict, node: dict) -> bool:
         """Khối Video chung cần tách / đồng bộ các phần: bật tự tách và (lời dài hơn mức nói kịp, hoặc đã có phần)."""
-        tpl_split = bool(node.get("template")) and node.get("build") == "split"  # 🎞 mẫu "Tách khối": luôn tự tách
-        if node["kind"] != "video" or node.get("part_of") or node.get("locked") or (
-                node.get("auto_split") is False and not tpl_split):
+        if node["kind"] != "video" or node.get("part_of") or node.get("locked"):
             return False
-        if node.get("template") and not tpl_split:  # 🎞 mẫu "Không tách": khối tự chia + ghép bên trong
+        mode = self._build_mode(node)  # chọn "✂ Tách khối" → luôn tự tách (kể cả khi đã tắt ô tự tách cũ)
+        if mode == "single":
+            return False
+        if mode == "one":  # 🎬 "Không tách": khối tự chia + ghép bên trong
             return bool(self._parts_of(board, node["id"]))  # còn khối con của lần "Tách khối" trước → gỡ
         if self._parts_of(board, node["id"]):
             return True
@@ -1753,11 +1778,14 @@ class CanvasRunner(CanvasTasksMixin):  # 📋 tác vụ: 1 flow chạy nhiều t
             node = self._node(board, nid)
             sig = (self._sig(board, nid, raw=True), self._sig_own(node))  # dấu lúc BẮT ĐẦU (sửa giữa chừng → chạy lại sau)
             parts = self._parts_of(board, nid) if node["kind"] == "video" else []
-            if parts and node.get("template") and node.get("build") != "split":  # 🎞 Không tách: khối tự quay + ghép
+            if parts and self._build_mode(node) == "one":  # 🎬 Không tách: khối tự quay + ghép
                 parts = []
             if parts:  # ✂ khối Video chung: các video con quay từng đoạn → khối chung không quay
-                self._finish(bid, nid, sig, status="done", pct=100, error="", files=[], pick=0, done_at=now(), secs=0,
-                             stage=f"✂ Chia {len(parts)} video: {', '.join(p['id'] for p in parts)}",
+                stage = f"✂ Chia {len(parts)} video: {', '.join(p['id'] for p in parts)}"
+                if self._build_mode(node) == "story":  # 🧭 phân tích lời thoại → prompt riêng từng khối con
+                    stage = self._story_analyze(bid, nid)
+                self._finish(bid, nid, sig, status="done", pct=100, error="", files=[], pick=0, done_at=now(),
+                             secs=round(time.time() - t0, 1), stage=stage,
                              made=_short(self._own_prompt(node) or self._input_text(bid, board, node), 300))
                 return {"board": bid, "node": nid, "files": []}
             head = self._node(board, node["part_of"]) if node.get("part_of") and self._has(board, node["part_of"]) else None
@@ -1774,7 +1802,17 @@ class CanvasRunner(CanvasTasksMixin):  # 📋 tác vụ: 1 flow chạy nhiều t
             prompt = "\n\n".join(x for x in (self._input_text(bid, board, src), self._own_prompt(src)) if x)
             prompt = self._angle_prompt(board, node, prompt)
             tpl = self._template(src) if node["kind"] == "video" else None
-            if head is not None and tpl is not None:  # 🎞 mẫu "Tách khối": khối con k lấy khung cảnh k của mẫu
+            story = head is not None and self._build_mode(head) == "story" and (node.get("prompt") or "").strip()
+            if story:  # 🧭 khối con của Storyboard: prompt riêng của cảnh (đã gồm khung đầu / "ends with …")
+                from . import video_templates as vt
+
+                total = len(self._parts_of(board, head["id"]))
+                k = int(node.get("part") or 1)
+                own = node["prompt"].strip()
+                prompt = vt.finish_prompt(tpl, own, k, total) if tpl is not None else (
+                    f"{own}\n\nPart {k} of {total} of one continuous video: keep exactly the same person, outfit, product and "
+                    "setting as the other parts; start exactly where the previous part ended.")
+            elif head is not None and tpl is not None:  # 🎞 mẫu "Tách khối": khối con k lấy khung cảnh k của mẫu
                 from . import video_templates as vt
 
                 total = len(self._parts_of(board, head["id"]))
@@ -1802,8 +1840,12 @@ class CanvasRunner(CanvasTasksMixin):  # 📋 tác vụ: 1 flow chạy nhiều t
                         first = bool(refs)  # cảnh trước chưa có video → quay từ ảnh bìa (không liền mạch)
                         self.pool.log(f"Cảnh trước ({node['chain_from']}) chưa có video — quay từ ảnh bìa", "warn")
                 node = {**node, "dialogue": self._dialogue_text(bid, board, node), "first_frame": first}
-                if tpl is not None and head is None and node.get("build") != "split":  # 🎞 Không tách: chia + ghép bên trong
+                mode = self._build_mode(node)
+                long = dialogue_words({"dialogue": node["dialogue"]}) > dialogue_limit(node)
+                if tpl is not None and head is None and mode == "one":  # 🎞 Không tách: chia + ghép bên trong
                     files = self._make_templated(bid, node, tpl, refs, videos, prompt)
+                elif tpl is None and head is None and mode == "one" and long:  # 🎬 không mẫu, Không tách, lời dài
+                    files = self._make_templated(bid, node, None, refs, videos, prompt)
                 elif tpl is not None and head is None:  # 🎞 Tách khối nhưng lời vừa 1 clip → 1 video theo mẫu
                     from . import video_templates as vt
 
@@ -2083,10 +2125,143 @@ class CanvasRunner(CanvasTasksMixin):  # 📋 tác vụ: 1 flow chạy nhiều t
             return fill
         return got
 
-    def _make_templated(self, bid: str, node: dict, tpl: dict, images: list, videos: list, idea: str) -> list[str]:
+    STORY_PROMPT = """Bạn là đạo diễn video ngắn. Lời thoại dưới đây ĐÃ được chia sẵn thành {n} đoạn theo thứ tự. Mỗi đoạn là 1 clip
+{secs} giây do model video AI ({model}) quay, khung {aspect}. Các clip được quay NỐI TIẾP: khung ĐẦU clip sau = khung CUỐI
+clip trước, rồi ghép thành 1 video liền mạch.
+Ý tưởng / bối cảnh chung: {idea}
+{tpl}{materials}
+LỜI THOẠI TỪNG ĐOẠN (đã chốt — KHÔNG viết lại, KHÔNG đưa lời vào prompt):
+{lines}
+Bước 1 — PHÂN TÍCH lời thoại: nội dung chính, ai nói, cảm xúc, nhịp kể; nhân vật / sản phẩm / bối cảnh phải giữ nhất quán.
+Bước 2 — STORYBOARD đúng {n} cảnh, cảnh k = đoạn k:
+- "noi_dung": tiếng Việt, 1 câu — hình ảnh diễn ra khi nói đúng đoạn lời đó (minh hoạ đúng ý câu nói).
+- "goc_quay": tiếng Việt — cỡ cảnh · góc máy · chuyển động máy (máy đặt dưới đất; KHÔNG drone / flycam trừ khi ý tưởng yêu cầu).
+- "prompt": TIẾNG ANH, tự đủ nghĩa: chủ thể, hành động khi nói đoạn lời, bối cảnh, ánh sáng, góc máy. Cảnh 2 trở đi BẮT ĐẦU
+  đúng trạng thái kết thúc của cảnh trước (cùng bối cảnh, ánh sáng, vị trí / tư thế nhân vật); mọi cảnh KẾT THÚC bằng
+  "ends with …" mô tả khung cuối. Mô tả nhân vật / trang phục / sản phẩm y hệt nhau ở mọi cảnh. Không chữ trên hình.
+Trả về đúng MỘT khối ```json:
+{{"phan_tich": "tóm tắt phân tích (tiếng Việt)", "nhan_vat": "English: nhân vật / sản phẩm cố định (\\"\\" nếu không có)",
+ "canh": [{{"so": 1, "noi_dung": "", "goc_quay": "", "prompt": "English video prompt ... ends with ..."}}]}}
+Mảng "canh" có ĐÚNG {n} phần tử."""
+
+    @staticmethod
+    def _story_parse(text: str, n: int) -> tuple[dict, list]:
+        """Câu trả lời storyboard → (dữ liệu, [{noi_dung, goc_quay, prompt}] đúng n cảnh có prompt) — sai → (…, [])."""
+        from .llm.base import extract_json
+
+        try:
+            data = extract_json(str(text or ""))
+        except Exception:  # noqa: BLE001
+            return {}, []
+        rows = data.get("canh") if isinstance(data, dict) else None
+        if not isinstance(rows, list) or len(rows) != n:
+            return (data if isinstance(data, dict) else {}), []
+        out = [{"noi_dung": str(r.get("noi_dung") or "").strip()[:400], "goc_quay": str(r.get("goc_quay") or "").strip()[:200],
+                "prompt": str(r.get("prompt") or "").strip()[:2500]} for r in rows if isinstance(r, dict)]
+        return data, out if len(out) == n and all(s["prompt"] for s in out) else []
+
+    def _story_analyze(self, bid: str, nid: str) -> str:
+        """🧭 Khối Video chung (Storyboard): 1 lượt model chữ phân tích lời thoại ĐÃ chia (nguyên văn, vừa clip) → prompt
+        riêng từng khối con (khung đầu = khung cuối cảnh trước, "ends with …"). Lời / ý tưởng / mẫu không đổi và các khối
+        con đã có prompt → không hỏi lại (không tốn lượt). Model lỗi / sai định dạng → khối con dùng prompt chung (cảnh báo)."""
+        board = self.load(bid)
+        head = self._node(board, nid)
+        parts = self._parts_of(board, nid)
+        lines = [str(p.get("dialogue") or "") for p in parts]
+        idea = "\n\n".join(x for x in (self._input_text(bid, board, head), self._own_prompt(head)) if x).strip()
+        tpl = self._template(head)
+        key = hashlib.md5(json.dumps([lines, idea, head.get("template"), head.get("duration"), head.get("aspect"),
+                                      head.get("engine")], ensure_ascii=False).encode()).hexdigest()[:16]
+        if (head.get("story") or {}).get("key") == key and all((p.get("prompt") or "").strip() for p in parts):
+            return f"🧭 Storyboard {len(parts)} cảnh (đã phân tích — sửa prompt ở từng khối con)"
+        from .studio import ask_model
+        from .workflow.nodes import CONTENT_MODELS
+
+        n = len(parts)
+        refs = self._input_images(bid, board, head)
+        m = self.models() or {}
+        model = m.get("text") or self.settings.get("fcanvas_model_text") or "chatgpt_browser"
+        secs = int(str(head.get("duration") or "10s").rstrip("s") or 10)
+        tpl_txt = ""
+        if tpl is not None:
+            tpl_txt = (f"MẪU VIDEO “{tpl['name']}”: phong cách {tpl.get('style') or ''}. Master Prompt: "
+                       f"{tpl.get('master') or ''}\n")
+        mats = f"Ảnh vật liệu đính kèm ({len(refs[:4])} ảnh): nhân vật / sản phẩm / bối cảnh phải giống ảnh.\n" if refs else ""
+        ask = self.STORY_PROMPT.format(
+            n=n, secs=secs, model=VIDEO_ENGINES.get(head.get("engine") or "", {}).get("name", "AI"),
+            aspect=head.get("aspect") or "9:16", idea=idea or "(không có — dựng hình theo lời thoại)", tpl=tpl_txt,
+            materials=mats, lines="\n".join(f"Đoạn {k}: “{t}”" for k, t in enumerate(lines, 1)))
+        self._set_node(bid, nid, pct=5, stage=f"🧭 {CONTENT_MODELS.get(model, model)} phân tích lời thoại {n} cảnh")
+        self.pool.log(f"🧭 {nid}: {CONTENT_MODELS.get(model, model)} phân tích lời thoại → storyboard {n} cảnh liền mạch…")
+        scenes, data, why = [], {}, ""
+        try:
+            raw = ask_model(self.settings, {"model": model, "text_profile": m.get("text_profile", ""), "show_browser": False,
+                                            "timeout": 600}, ask, complete=lambda t: bool(self._story_parse(t, n)[1]),
+                            what="phân tích lời thoại (storyboard)", log=self.pool.log, check_cancel=self.pool.check_cancel,
+                            images=[str(p) for p in refs[:4]] or None)
+            data, scenes = self._story_parse(raw, n)
+            why = "" if scenes else "model trả sai định dạng"
+        except Cancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 — model chữ lỗi → vẫn quay được bằng prompt chung
+            why = str(exc)[:160]
+        char = str(data.get("nhan_vat") or "").strip() if isinstance(data, dict) else ""
+
+        def apply(b):
+            h = self._node(b, nid)
+            h["story"] = {"key": key if scenes else "", "at": now(), "analysis": str(data.get("phan_tich") or "")[:1500]
+                          if isinstance(data, dict) else "", "error": why,
+                          "scenes": [{**s, "loi": lines[i]} for i, s in enumerate(scenes)]}
+            for i, p in enumerate(self._parts_of(b, nid)):
+                if i < len(scenes):
+                    p["prompt"] = (f"{scenes[i]['prompt']}\n\nConsistent character / product: {char}" if char
+                                   else scenes[i]["prompt"])
+                    p["story_scene"] = {"noi_dung": scenes[i]["noi_dung"], "goc_quay": scenes[i]["goc_quay"]}
+        self._edit(bid, apply)
+        for p in parts:
+            self._push(bid, p["id"])
+        if not scenes:
+            self.pool.log(f"🧭 {nid}: chưa phân tích được lời thoại ({why}) — khối con quay bằng prompt chung", "warn")
+            return f"🧭 Chưa phân tích được ({why}) — dùng prompt chung"
+        self.pool.log(f"🧭 {nid}: storyboard {n} cảnh — mỗi khối con có prompt riêng, nối ⛓ liền mạch", "ok")
+        return f"🧭 Storyboard {n} cảnh liền mạch: {', '.join(p['id'] for p in parts)}"
+
+    def story_analyze(self, bid: str, nid: str) -> dict:
+        """🧭 Nút "Phân tích lời thoại": tách / đồng bộ khối con rồi chạy RIÊNG khối chung (1 lượt model chữ, chưa quay video)
+        — luôn phân tích lại (bỏ kết quả cũ), prompt khối con được thay bằng bản mới."""
+        board = self.load(bid)
+        node = self._node(board, nid)
+        if node["kind"] != "video" or node.get("part_of") or self._build_mode(node) != "story":
+            raise CanvasError("Chọn 🧭 Storyboard ở khối Video chung trước")
+        if node.get("status") in ACTIVE:
+            raise CanvasError("Khối đang chạy — chờ xong hoặc dừng")
+        self.auto_split(bid, nid)
+        if not self._parts_of(self.load(bid), nid):
+            raise CanvasError("Lời thoại vừa 1 clip — không cần storyboard nhiều cảnh")
+
+        def clear(b):
+            h = self._node(b, nid)
+            h.pop("story", None)
+            for p in self._parts_of(b, nid):
+                p["prompt"] = ""
+                p.pop("story_scene", None)
+        self._edit(bid, clear)
+        return self.run_flow(bid, "set", only=[nid], label=f"🧭 Phân tích lời thoại {nid}")
+
+    @staticmethod
+    def _plain_prompt(idea: str, k: int, n: int) -> str:
+        """🎬 Khối không mẫu, "Không tách": prompt đoạn k/n = prompt của khối + câu giữ liền mạch (không tốn lượt model chữ)."""
+        if n <= 1:
+            return idea
+        return (f"{idea}\n\nThis is part {k} of {n} of one continuous video: keep exactly the same person, outfit, product "
+                "and setting as the other parts; continue naturally from the previous part.").strip()
+
+    def _make_templated(self, bid: str, node: dict, tpl: dict | None, images: list, videos: list, idea: str) -> list[str]:
         """🎞 Mẫu "Không tách": chia lời thành các đoạn vừa 1 clip → prompt từng đoạn (Master Prompt) → quay lần lượt
         (liền mạch: đoạn sau quay từ khung cuối đoạn trước) → ghép 1 video. Đoạn đã quay giữ lại (thư mục tpl/<nid>):
-        chạy lại sau lỗi chỉ quay đoạn còn thiếu; đổi lời / mẫu / ảnh / prompt → làm lại từ đầu."""
+        chạy lại sau lỗi chỉ quay đoạn còn thiếu; đổi lời / mẫu / ảnh / prompt → làm lại từ đầu.
+        tpl = None: khối không dùng mẫu chọn "🎬 Không tách" — cùng cách chia / quay liền mạch / ghép, prompt từng đoạn
+        = prompt của khối + câu giữ liền mạch (_plain_prompt)."""
         from types import SimpleNamespace
 
         from . import video_templates as vt
@@ -2095,7 +2270,7 @@ class CanvasRunner(CanvasTasksMixin):  # 📋 tác vụ: 1 flow chạy nhiều t
         nid = node["id"]
         spoken = (node.get("dialogue") or "").strip()
         lines = split_dialogue(spoken, dialogue_limit(node)) if spoken else []
-        lines = lines or ([spoken] if spoken else [""] * tpl["segments"])
+        lines = lines or ([spoken] if spoken else [""] * (tpl["segments"] if tpl else 1))
         if len(lines) > vt.MAX_SEGMENTS:
             raise CanvasError(f"Lời thoại quá dài ({len(lines)} đoạn) — tối đa {vt.MAX_SEGMENTS} đoạn, hãy rút gọn lời "
                               "hoặc tăng thời lượng clip")
@@ -2103,7 +2278,8 @@ class CanvasRunner(CanvasTasksMixin):  # 📋 tác vụ: 1 flow chạy nhiều t
         work = self.root / bid / "tpl" / nid
         work.mkdir(parents=True, exist_ok=True)
         stamp = [(str(p), p.stat().st_mtime if p.is_file() else 0) for p in [*images, *videos]]
-        key = hashlib.md5(json.dumps([tpl.get("shots"), tpl.get("style"), tpl.get("master"), tpl.get("continuity"), lines,
+        t = tpl or {}
+        key = hashlib.md5(json.dumps([t.get("shots"), t.get("style"), t.get("master"), t.get("continuity"), lines,
                                       idea, stamp, node.get("engine"), node.get("duration"), node.get("aspect"),
                                       node.get("resolution"), node.get("voice"), node.get("tpl_ai") is not False],
                                      ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()[:16]
@@ -2112,12 +2288,17 @@ class CanvasRunner(CanvasTasksMixin):  # 📋 tác vụ: 1 flow chạy nhiều t
         if state.get("key") != key or len(state.get("clips") or []) != n:
             state = {"key": key, "lines": lines, "prompts": [], "clips": [""] * n}
         if len(state.get("prompts") or []) != n:
-            self.pool.log(f"🎞 Mẫu “{tpl['name']}”: {n} đoạn × {node.get('duration')} · "
-                          + ("liền mạch" if tpl["continuity"] == "flow" else "cắt cảnh"))
-            self._set_node(bid, nid, pct=1, stage=f"🎞 Viết prompt {n} đoạn")
-            raw = self._template_prompts(node, tpl, lines, idea, images)
-            state["prompts"] = [vt.finish_prompt(tpl, raw[k - 1], k, n) for k in range(1, n + 1)]
+            if tpl is None:  # 🎬 không mẫu: prompt của khối + câu giữ liền mạch, không gọi model chữ
+                self.pool.log(f"🎬 Không tách: chia lời thành {n} đoạn × {node.get('duration')} · liền mạch, ghép trong khối")
+                state["prompts"] = [self._plain_prompt(idea, k, n) for k in range(1, n + 1)]
+            else:
+                self.pool.log(f"🎞 Mẫu “{tpl['name']}”: {n} đoạn × {node.get('duration')} · "
+                              + ("liền mạch" if tpl["continuity"] == "flow" else "cắt cảnh"))
+                self._set_node(bid, nid, pct=1, stage=f"🎞 Viết prompt {n} đoạn")
+                raw = self._template_prompts(node, tpl, lines, idea, images)
+                state["prompts"] = [vt.finish_prompt(tpl, raw[k - 1], k, n) for k in range(1, n + 1)]
             write_json(state_file, state)
+        flow = tpl is None or tpl["continuity"] == "flow"
         clips = state["clips"]
         for k in range(1, n + 1):
             done = work / clips[k - 1] if clips[k - 1] else None
@@ -2125,7 +2306,7 @@ class CanvasRunner(CanvasTasksMixin):  # 📋 tác vụ: 1 flow chạy nhiều t
                 self.pool.log(f"🎞 Đoạn {k}/{n}: đã có từ lần chạy trước — giữ lại")
                 continue
             imgs, first, vids = list(images), node.get("first_frame", True), list(videos)
-            if tpl["continuity"] == "flow" and k > 1:
+            if flow and k > 1:
                 tail = self._last_frame(bid, f"{nid}_seg{k}", work / clips[k - 2])
                 if tail is not None:
                     imgs, first, vids = [tail], True, []

@@ -421,5 +421,8 @@
     });
   }
 
-  window.AdBotPage = { show };
+  // mở đúng 1 kế hoạch từ màn khác (Trợ lý TVC → yêu cầu quảng cáo "Mở để duyệt")
+  function openPlan(id) { A.cur = { id }; navigate('adbot'); }
+
+  window.AdBotPage = { show, openPlan };
 })();

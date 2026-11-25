@@ -105,6 +105,172 @@
         </div>`).join('')}</div>`;
   }
 
+  /* ------------------------------------------------------------ 🧠 model chữ: Trình duyệt hay CLI (+ cài / đăng nhập ngay) */
+  const CLI_SITE_VI = { claude: 'Claude', chatgpt: 'ChatGPT / OpenAI', gemini: 'Gemini', grok: 'Grok', muse: 'muse.ai' };
+  // muse.ai (muse-cli): đăng nhập = cookie muse.ai — lấy từ profile Muse của app hoặc dán tay; trạng thái + nút riêng
+  function museLoginHtml(c, py, busy) {
+    const lg = c.muse_login || {};
+    return `<div class="set-cli-muse">
+      ${py.ok ? '' : `<small class="warn-text">✗ Chưa có Python 3.10+ (hoặc uv / pipx) để cài muse-cli${py.version ? ` — máy đang có Python ${esc(py.version)} (quá cũ)` : ''}</small>
+        <button class="btn ghost sm" type="button" data-cli-act="python" data-cli-site="" ${busy ? 'disabled' : ''}>⬇ Cài Python</button>`}
+      <small class="${lg.logged_in ? 'ok-text' : 'muted'}">${lg.logged_in ? `✓ Đã có đăng nhập muse.ai${lg.updated ? ` (lưu ${esc(lg.updated)})` : ''}` : '✗ Chưa đăng nhập muse-cli'}</small>
+      <button class="btn ghost sm" type="button" data-muse-login="profile" ${c.installed ? '' : 'disabled'} title="Mở ẩn profile Muse của app, đọc cookie muse.ai rồi ghi cho muse-cli (không gửi tin nhắn)">🔑 Lấy từ profile Muse</button>
+      <button class="btn ghost sm" type="button" data-muse-login="paste" ${c.installed ? '' : 'disabled'} title="Dán cookie muse.ai (cần hatch_sess) copy từ DevTools">📋 Dán cookie</button>
+      <button class="btn ghost sm" type="button" data-muse-check ${c.installed && lg.logged_in ? '' : 'disabled'} title="muse-cli status — đọc danh tính, không gửi tin, không tốn lượt">✓ Kiểm tra</button>
+      <div class="set-cli-paste hidden"><textarea rows="2" autocomplete="off" spellcheck="false" placeholder="hatch_sess=…; cookie_khac=…  (hoặc {&quot;hatch_sess&quot;: &quot;…&quot;})"></textarea>
+        <button class="btn primary sm" type="button" data-muse-save>Lưu cookie</button></div>
+      <small class="muted">muse-cli là công cụ cộng đồng (không chính thức của Meta), có thể hỏng khi muse.ai đổi giao thức → lượt đó tự chạy bằng trình duyệt. Cookie lưu ở <code>${esc(lg.file || '~/.config/muse-cli/cookies.txt')}</code>, không gửi đi đâu khác.</small></div>`;
+  }
+  let cliPoll = null;
+  async function renderCliBox(refresh) {
+    const box = $('#setCliBox');
+    if (!box) return;
+    const res = await api('llm_cli_status', !!refresh);
+    if (!res || !res.ok || !$('#setCliBox')) return;
+    const nd = res.node || {};
+    const busy = res.job && res.job.running;
+    const keep = {};  // giữ lựa chọn chưa lưu khi vẽ lại
+    box.querySelectorAll('[data-cli-mode]').forEach(el => { keep[el.dataset.cliMode] = el.value; });
+    const grokKey = $('#setGrokKey') ? $('#setGrokKey').value : '';
+    box.innerHTML = `<div class="set-cli-node">${nd.npm ? `<small class="ok-text">✓ Node.js ${esc(nd.version || '')} · npm có sẵn</small>`
+      : `<small class="warn-text">✗ Chưa có Node.js / npm — cần để cài Claude / Codex / Gemini / Grok CLI</small>
+         <button class="btn ghost sm" type="button" data-cli-act="node" data-cli-site="" ${busy ? 'disabled' : ''}>⬇ Cài Node.js${nd.winget ? '' : ' (mở trang tải)'}</button>`}</div>
+      <div class="set-cli-rows">${res.clis.map(c => {
+        const py = res.python || {};
+        const needNpm = (!!c.npm_pkg && !nd.npm) || (c.site === 'muse' && !py.ok);
+        const mode = keep[c.site] || c.mode;
+        return `<div class="set-cli-row" data-cli-row="${esc(c.site)}">
+        <b>${esc(CLI_SITE_VI[c.site] || c.site)}</b>
+        <small class="${c.installed ? 'ok-text' : 'muted'}" title="${esc(c.path || '')}">${c.installed ? `✓ ${esc(c.name)}${c.version ? ` · ${esc(c.version)}` : ''}` : `✗ Chưa cài ${esc(c.name)}`}</small>
+        <select data-cli-mode="${esc(c.site)}" title="${esc(c.login)}">
+          <option value="browser" ${mode !== 'cli' ? 'selected' : ''}>🌐 Trình duyệt</option>
+          <option value="cli" ${mode === 'cli' ? 'selected' : ''} ${c.installed ? '' : 'disabled'}>🧠 CLI${c.installed ? '' : ' (chưa cài)'}</option></select>
+        <span class="set-cli-btns">
+          ${c.installed ? `<button class="btn ghost sm" type="button" data-cli-act="update" data-cli-site="${esc(c.site)}" ${busy ? 'disabled' : ''} title="Cập nhật lên bản mới nhất">⟳ Cập nhật</button>`
+            : `<button class="btn primary sm" type="button" data-cli-act="install" data-cli-site="${esc(c.site)}" ${busy || needNpm ? 'disabled' : ''} title="${needNpm ? (c.site === 'muse' ? 'Cài Python trước' : 'Cài Node.js trước') : esc(c.install)}">⬇ Cài</button>`}
+          ${c.can_login ? `<button class="btn ghost sm" type="button" data-cli-login="${esc(c.site)}" ${c.installed ? '' : 'disabled'} title="Mở cửa sổ Terminal để đăng nhập">🔑 Đăng nhập</button>` : ''}
+          <button class="btn ghost sm" type="button" data-cli-test="${esc(c.site)}" ${c.installed ? '' : 'disabled'} title="Gửi 1 câu rất ngắn để kiểm tra CLI chạy + đã đăng nhập (tốn 1 lượt)">Thử</button></span>
+        ${c.quota ? `<small class="warn-text set-cli-note" title="${esc(c.quota.msg || '')}">⏳ CLI hết lượt / hết credit đến ${esc(c.quota.until)} — việc chữ của hãng này đang tự chạy bằng trình duyệt
+          <button class="btn ghost sm" type="button" data-cli-quota="${esc(c.site)}" title="Đã nạp thêm credit / đổi tài khoản → thử lại CLI ngay">↻ Thử lại CLI</button></small>` : ''}
+        <small class="muted set-cli-note">${c.images ? 'Nhận được ảnh đính kèm' : 'Chưa nhận ảnh — lượt có ảnh chạy bằng trình duyệt'} · ${c.installed ? `Đăng nhập: ${esc(c.login)}` : `Lệnh cài: <code>${esc(c.install)}</code>`}${c.site === 'muse' ? ' · chỉ việc chữ, mỗi lượt 1 cuộc trò chuyện mới (tạo ảnh / video Muse vẫn qua trình duyệt)' : ''}</small>
+        ${c.site === 'muse' ? museLoginHtml(c, py, busy) : ''}
+        ${c.site === 'grok' ? `<label class="field set-cli-key"><span>xAI API key cho Grok CLI ${res.grok_key ? '<small class="ok-text">(đã lưu)</small>' : ''}</span>
+          <input id="setGrokKey" type="password" autocomplete="off" placeholder="${res.grok_key ? '•••••••• (để trống = giữ nguyên)' : 'xai-…'}" value="${esc(grokKey)}"></label>` : ''}</div>`;
+      }).join('')}</div>
+      <div class="row"><button class="btn ghost sm" type="button" data-cli-refresh>↻ Kiểm tra lại</button></div>
+      <div class="set-cli-job ${res.job && res.job.log && res.job.log.length ? '' : 'hidden'}">
+        <div class="row"><b data-cli-job-title></b><span class="cv-sp"></span><button class="btn ghost sm" type="button" data-cli-cancel ${busy ? '' : 'hidden'}>⏹ Huỷ</button></div>
+        <pre data-cli-log></pre></div>`;
+    box.querySelectorAll('[data-cli-mode]').forEach(el => { el.onchange = () => setDirty(true); });
+    if ($('#setGrokKey')) $('#setGrokKey').oninput = () => setDirty(true);
+    box.querySelector('[data-cli-refresh]').onclick = () => renderCliBox(true);
+    box.querySelectorAll('[data-cli-act]').forEach(b => {
+      b.onclick = async () => {
+        const site = b.dataset.cliSite, act = b.dataset.cliAct;
+        const row = res.clis.find(c => c.site === site);
+        const museCmd = act === 'update' ? 'muse-cli update' : 'uv tool install muse-cli / pipx install muse-cli / py -m pip install --user muse-cli (tuỳ máy có gì)';
+        const what = act === 'node' ? 'Node.js (winget install OpenJS.NodeJS.LTS)'
+          : act === 'python' ? 'Python 3.12 (winget install Python.Python.3.12)'
+          : `${row.name}${act === 'update' ? ' lên bản mới nhất' : ''}\n\nLệnh: ${site === 'muse' ? museCmd : act === 'update' && row.npm_pkg ? `npm i -g ${row.npm_pkg}@latest` : row.install}`;
+        if (!confirm(`${act === 'update' ? 'Cập nhật' : 'Cài'} ${what}\n\nChạy bằng quyền người dùng hiện tại${site === 'muse' ? ', tải gói muse-cli từ PyPI' : ', tải từ nguồn chính thức'}. Tiếp tục?`)) return;
+        const r = await api('llm_cli_install', site, act);
+        if (!r || !r.ok) return toast((r && r.error) || 'Không bắt đầu được', 'error');
+        if (r.job && r.job.opened) { toast(`Máy chưa có winget — đã mở trang tải ${act === 'python' ? 'Python' : 'Node.js'}`, 'warn'); return; }
+        watchCliJob();
+      };
+    });
+    box.querySelectorAll('[data-cli-login]').forEach(b => {
+      b.onclick = async () => {
+        const r = await api('llm_cli_login', b.dataset.cliLogin);
+        if (!r || !r.ok) return toast((r && r.error) || 'Không mở được cửa sổ đăng nhập', 'error');
+        toast(`Đã mở cửa sổ đăng nhập (${r.command}) — đăng nhập xong bấm “Thử”`, 'ok');
+      };
+    });
+    box.querySelector('[data-cli-cancel]').onclick = async () => { await api('llm_cli_cancel'); };
+    box.querySelectorAll('[data-cli-quota]').forEach(b => {
+      b.onclick = async () => { await api('llm_cli_quota_clear', b.dataset.cliQuota); toast('Lượt sau sẽ thử lại CLI', 'ok'); renderCliBox(false); };
+    });
+    const museDone = (r, b, label) => {
+      if (b) { b.disabled = false; b.textContent = label; }
+      if (!r || !r.ok) return toast((r && r.error) || 'muse-cli lỗi', 'error');
+      const ck = r.check || {};
+      toast(ck.ok ? `✓ muse-cli đã đăng nhập${ck.who ? ` (${ck.who})` : ''}` : `Đã lưu cookie nhưng kiểm tra chưa được: ${ck.error || ''}`, ck.ok ? 'ok' : 'warn');
+      renderCliBox(true);
+    };
+    box.querySelectorAll('[data-muse-login]').forEach(b => {
+      b.onclick = async () => {
+        if (b.dataset.museLogin === 'paste') { box.querySelector('.set-cli-paste').classList.toggle('hidden'); return; }
+        if (!confirm('Lấy đăng nhập muse.ai từ profile Muse của app cho muse-cli?\n\nApp mở ẩn profile Muse, vào muse.ai (chỉ đọc, không gửi tin nhắn), rồi ghi cookie đăng nhập vào file của muse-cli trên máy này. Bất kỳ ai dùng muse-cli trên máy đều dùng được tài khoản Muse này. Tiếp tục?')) return;
+        const label = b.textContent; b.disabled = true; b.textContent = '⏳…';
+        museDone(await api('llm_muse_login', 'profile', ''), b, label);
+      };
+    });
+    const save = box.querySelector('[data-muse-save]');
+    if (save) save.onclick = async () => {
+      const ta = box.querySelector('.set-cli-paste textarea');
+      const text = ta.value.trim();
+      if (!/hatch_sess/.test(text)) return toast('Cookie cần có hatch_sess (DevTools → Application → Cookies → muse.ai)', 'error');
+      const label = save.textContent; save.disabled = true; save.textContent = '⏳…';
+      const r = await api('llm_muse_login', 'paste', text);
+      if (r && r.ok) ta.value = '';
+      museDone(r, save, label);
+    };
+    const chk = box.querySelector('[data-muse-check]');
+    if (chk) chk.onclick = async () => {
+      const label = chk.textContent; chk.disabled = true; chk.textContent = '⏳…';
+      const r = await api('llm_muse_check');
+      chk.disabled = false; chk.textContent = label;
+      const ck = (r && r.check) || {};
+      toast(ck.ok ? `✓ muse-cli đã đăng nhập${ck.who ? ` (${ck.who})` : ''}` : (ck.error || 'muse-cli lỗi'), ck.ok ? 'ok' : 'error');
+    };
+    box.querySelectorAll('[data-cli-test]').forEach(b => {
+      b.onclick = async () => {
+        const name = CLI_SITE_VI[b.dataset.cliTest] || b.dataset.cliTest;
+        const isGrok = b.dataset.cliTest === 'grok';
+        const typedKey = isGrok && $('#setGrokKey') ? $('#setGrokKey').value.trim() : '';
+        if (isGrok && !typedKey && !res.grok_key) {  // chưa có key → không chạy CLI, chỉ nhắc nhập key
+          $('#setGrokKey') && $('#setGrokKey').focus();
+          return toast('Grok CLI cần xAI API key — nhập vào ô “xAI API key cho Grok CLI” bên dưới (lấy ở console.x.ai) rồi bấm Thử / Lưu', 'error');
+        }
+        if (!confirm(`Thử ${name} CLI: gửi 1 câu rất ngắn — tốn 1 lượt của ${name}${isGrok ? ' (tính tiền API xAI)' : ''}. Tiếp tục?`)) return;
+        const label = b.textContent;
+        b.disabled = true; b.textContent = '⏳…';
+        const r = await api('llm_cli_test', b.dataset.cliTest, typedKey);
+        b.disabled = false; b.textContent = label;
+        if (!r || !r.ok) return toast((r && r.error) || 'CLI lỗi', 'error');
+        toast(`✓ ${name} CLI trả lời “${r.reply}” sau ${r.secs}s`, 'ok');
+      };
+    });
+    drawCliJob(res.job);
+    if (busy) watchCliJob();
+  }
+  function drawCliJob(j) {
+    const wrap = $('#setCliBox .set-cli-job');
+    if (!wrap || !j || !(j.log || []).length) return;
+    wrap.classList.remove('hidden');
+    const who = j.action === 'node' ? 'Node.js' : j.action === 'python' ? 'Python' : (CLI_SITE_VI[j.site] || j.site);
+    wrap.querySelector('[data-cli-job-title]').textContent = j.running ? `⏳ Đang ${j.action === 'update' ? 'cập nhật' : 'cài'} ${who}…`
+      : j.ok ? `✓ Đã ${j.action === 'update' ? 'cập nhật' : 'cài'} ${who}` : `✗ ${who}: ${j.error || 'lỗi'}`;
+    wrap.querySelector('[data-cli-cancel]').classList.toggle('hidden', !j.running);
+    const pre = wrap.querySelector('[data-cli-log]');
+    pre.textContent = (j.log || []).join('\n');
+    pre.scrollTop = pre.scrollHeight;
+  }
+  function watchCliJob() {
+    clearInterval(cliPoll);
+    cliPoll = setInterval(async () => {
+      if (!$('#setCliBox')) { clearInterval(cliPoll); return; }
+      const r = await api('llm_cli_job');
+      if (!r || !r.ok) return;
+      drawCliJob(r.job);
+      if (!r.job.running) {
+        clearInterval(cliPoll);
+        toast(r.job.ok ? '✓ Cài đặt xong' : `Cài đặt chưa xong: ${r.job.error || ''}`, r.job.ok ? 'ok' : 'error');
+        renderCliBox(true);
+      }
+    }, 1000);
+  }
+
   /* ------------------------------------------------------------ 🔒 khoá từng màn (Bảo mật) */
   const NO_LOCK = ['settings', 'help', 'folder', 'profiles'];  // nút / màn đã có khoá riêng
   function screenLocksHtml() {
@@ -202,6 +368,11 @@
           <select id="setChannel">${opt([['chrome', 'Google Chrome'], ['msedge', 'Microsoft Edge'], ['chromium', 'Chromium (Playwright)']], s.browser_channel)}</select></label>
         <label class="check"><input type="checkbox" id="setShowBrowser" ${s.show_browser ? 'checked' : ''}> Hiện cửa sổ Chrome khi model chạy qua trình duyệt</label>
         <label class="check"><input type="checkbox" id="setKeepAlive" ${s.browser_keepalive ? 'checked' : ''}> Giữ Chrome mở sẵn cho mỗi tài khoản (chỉ với Chrome thật)</label>
+        <div class="set-cli"><div class="field"><span>🧠 Cách gọi model chữ — Trình duyệt hay CLI</span>
+          <small class="muted">Chọn CLI cho hãng nào thì mọi việc CHỮ của hãng đó (viết content, AI viết, storyboard, Trợ lý, chấm, phân tích video) chạy qua CLI
+            dùng tài khoản đã đăng nhập — không mở Chrome. Tạo ảnh / video vẫn qua trình duyệt. CLI chạy trong thư mục tạm, chỉ trả lời chữ (không sửa file, không chạy lệnh).</small></div>
+          <div id="setCliBox"><p class="hint">Đang kiểm tra CLI trên máy…</p></div>
+          <label class="check"><input type="checkbox" id="setCliFallback" ${s.llm_cli_fallback !== false ? 'checked' : ''}> CLI lỗi (chưa cài, chưa đăng nhập, hết lượt…) → lượt đó tự chạy bằng trình duyệt</label></div>
         <details class="set-more"><summary>Giải thích</summary>
           <p class="hint">Chrome thật giữ “vân tay” giống Chrome bạn dùng hằng ngày nên ít bị Muse, Grok, Gemini… nghi là bot; gặp lỗi thì chuyển về Playwright.
             Giữ Chrome mở sẵn: lượt sau nhanh hơn, phiên đăng nhập luôn sẵn; rảnh 20 phút tự đóng, thoát app thì đóng hết (cổng gỡ lỗi chỉ trên 127.0.0.1).
@@ -425,6 +596,7 @@
       toast('Đã đổi mật khẩu quản trị', 'ok');
     };
     bindScreenLocks();
+    renderCliBox(false);
     bindFbSettings();
     if (window.ZaloSettings) window.ZaloSettings.mount();
     renderModelSettings(false);
@@ -511,6 +683,9 @@
       show_browser: $('#setShowBrowser').checked,
       browser_engine: $('#setBrowserEngine').value,
       browser_keepalive: $('#setKeepAlive').checked,
+      ...Object.fromEntries($$('[data-cli-mode]').map(el => [`llm_mode_${el.dataset.cliMode}`, el.value])),  // 🧠 Trình duyệt / CLI
+      ...($('#setCliFallback') ? { llm_cli_fallback: $('#setCliFallback').checked } : {}),
+      ...($('#setGrokKey') && $('#setGrokKey').value.trim() ? { grok_cli_key: $('#setGrokKey').value.trim() } : {}),
       browser_channel: $('#setChannel').value,
       gemini_model: $('#setModel').value.trim(),
       veo_model: $('#setVeoModel').value.trim() || 'veo-3.1-generate-preview',

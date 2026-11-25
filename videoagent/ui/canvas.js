@@ -1155,7 +1155,7 @@ function createCanvasPage(CFG) {
             <select data-dlg-src title="Lấy lời thoại từ khối chữ đang nối vào (Văn bản, AI viết…) hoặc tự nhập"></select><small data-dlg-count></small>
             <button class="btn ghost sm hidden" data-dlg-split type="button" title="Tách lời thoại ở cuối câu thành nhiều node Video (mỗi node nói kịp trong clip, cùng ảnh / prompt), nối sẵn vào khối phía sau — không tốn lượt AI">✂ Tách</button></div>
           <textarea data-dlg rows="3" placeholder="Câu nhân vật nói trong video (tiếng Việt, đúng nguyên văn). Mỗi dòng 1 câu; nhiều người: Tên: câu nói"></textarea>
-          <label class="cv-opt-check cv-auto-split${FLOWSCREEN && n.template ? ' hidden' : ''}" title="Khi chạy, lời thoại dài hơn mức nói kịp trong clip → app tự tách ở cuối câu thành nhiều video (cùng ảnh / prompt), quay từng video rồi ghép lại thành 1 — không hỏi lại, không tốn lượt AI để tách"><input type="checkbox" data-auto-split ${n.auto_split === false ? '' : 'checked'}> ✂ Lời dài → tự tách nhiều video rồi ghép thành 1</label></div>` : ''}
+          <label class="cv-opt-check cv-auto-split${FLOWSCREEN ? ' hidden' : ''}" title="Khi chạy, lời thoại dài hơn mức nói kịp trong clip → app tự tách ở cuối câu thành nhiều video (cùng ảnh / prompt), quay từng video rồi ghép lại thành 1 — không hỏi lại, không tốn lượt AI để tách"><input type="checkbox" data-auto-split ${n.auto_split === false ? '' : 'checked'}> ✂ Lời dài → tự tách nhiều video rồi ghép thành 1</label></div>` : ''}
         <div class="cv-opts"></div><div class="cv-qc-box"></div>
         <div class="cv-panel-row cv-panel-foot"><span class="cv-sp"></span>
           <button class="btn ghost sm" data-p="enhance" title="Nhờ model chữ (Cài đặt → Model AI) viết lại prompt chi tiết hơn">✨ Viết lại prompt</button>
@@ -1251,7 +1251,7 @@ function createCanvasPage(CFG) {
       dlg.classList.toggle('from-src', fromSrc);
       if (head) srcSel.disabled = true;
       const autoRow = panel.querySelector('.cv-auto-split');
-      if (autoRow) autoRow.classList.toggle('hidden', !!head);
+      if (autoRow) autoRow.classList.toggle('hidden', !!head || FLOWSCREEN);  // Grok Canvas: chọn ở 🎞 Mẫu video (Không tách / Tách khối)
       dlg.placeholder = fromSrc ? `Khối ${n.dialogue_src} chưa có chữ — chạy nó trước, hoặc ▶ Chạy toàn bộ`
         : 'Câu nhân vật nói trong video (tiếng Việt, đúng nguyên văn). Mỗi dòng 1 câu; nhiều người: Tên: câu nói';
       const want = head || !n.dialogue_src ? (n.dialogue || '') : sourceText(node(n.dialogue_src), n, 'loi');
@@ -1271,6 +1271,15 @@ function createCanvasPage(CFG) {
         if (b.dataset.set === 'build') autoSplit(n.id);  // 🎞 đổi sang Tách khối → tách ngay nếu lời dài
       };
     });
+    const storyGo = panel.querySelector('[data-story-go]');
+    if (storyGo) storyGo.onclick = async () => {  // 🧭 phân tích lời thoại → prompt riêng từng khối con (chưa quay)
+      const model = ((C.meta.flow || {}).names || {}).text || 'model chữ';
+      if (!confirm(`🧭 Phân tích lời thoại của ${n.id} thành storyboard liền mạch?\n\nTốn 1 lượt ${model}, chưa quay video. Prompt các khối con sẽ được thay bằng bản mới.`)) return;
+      storyGo.disabled = true;
+      const res = await call('canvas_story_analyze', C.board.id, n.id);
+      if (res) toast(`🧭 ${n.id}: đang phân tích lời thoại…`, 'ok');
+      else storyGo.disabled = false;
+    };
     const go = panel.querySelector('[data-p="go"]');
     go.textContent = busy ? `⏹ Dừng (${Math.round(n.pct || 0)}%)` : n.locked ? '🔒 Đã khoá' : has ? '↻ Tạo lại' : '✦ Tạo';
     go.classList.toggle('danger', busy);
@@ -1559,8 +1568,8 @@ function createCanvasPage(CFG) {
   async function autoSplit(id) {
     // ✂ tự tách ngay khi lời thoại (tự nhập / lấy từ khối kịch bản) dài hơn mức nói kịp — không cần bấm nút
     const n = node(id);
-    const tplSplit = n && n.template && n.build === 'split';  // 🎞 mẫu "Tách khối": luôn tự tách
-    if (!n || n.kind !== 'video' || (n.auto_split === false && !tplSplit) || isBusy(n)) return null;
+    // 🎬 Không tách: chỉ gọi để gỡ khối con cũ (app tự biết) · ✂ Tách khối: luôn tự tách · 1 video: không tách
+    if (!n || n.kind !== 'video' || buildMode(n) === 'single' || isBusy(n)) return null;
     const res = await call('canvas_auto_split', C.board.id, id);
     const r = res && res.result;
     if (!r || !r.split) return null;
@@ -1581,13 +1590,13 @@ function createCanvasPage(CFG) {
     el.className = words > limit ? 'warn-text' : 'muted';
     const split = panel.querySelector('[data-dlg-split]');
     if (split) {  // ✂ lời dài → gợi ý tách (số video thật do app tính khi tách, cắt ở cuối câu)
-      split.classList.toggle('hidden', !(words > limit) || isBusy(n) || n.auto_split !== false);  // tự tách bật → không cần nút
+      split.classList.toggle('hidden', !(words > limit) || isBusy(n) || buildMode(n) !== 'single');  // tự tách / tự chia → không cần nút
       split.textContent = `✂ Tách thành ~${Math.ceil(words / limit)} video`;
     }
     const kids = (C.board.nodes || []).filter(x => x.part_of === n.id).length;
-    const tplOne = FLOWSCREEN && n.template && n.build !== 'split';  // 🎞 mẫu Không tách: khối tự chia + ghép bên trong
+    const tplOne = buildMode(n) === 'one';  // 🎬 Không tách (có / không mẫu): khối tự chia + ghép bên trong
     if (split && tplOne) split.classList.add('hidden');
-    const long = kids ? ` — ✂ đã chia ${kids} video con` : tplOne ? ` — 🎞 tự chia ~${Math.ceil(words / limit)} đoạn rồi ghép trong khối` : n.auto_split === false ? ' — dài, dễ nói vội / bị cắt' : ` — tự tách ~${Math.ceil(words / limit)} video rồi ghép`;
+    const long = kids ? ` — ${buildMode(n) === 'story' ? '🧭' : '✂'} đã chia ${kids} video con` : buildMode(n) === 'story' ? ` — 🧭 storyboard ~${Math.ceil(words / limit)} cảnh liền mạch` : tplOne ? ` — 🎬 tự chia ~${Math.ceil(words / limit)} đoạn rồi ghép trong khối` : buildMode(n) === 'single' ? ' — dài, dễ nói vội / bị cắt' : ` — tự tách ~${Math.ceil(words / limit)} video rồi ghép`;
     if (kids) el.className = 'muted';
     el.textContent = n.part_of ? `phần ${n.part} · ${words}/${limit} chữ — sửa lời ở khối chung ${n.part_of}`
       : words ? `${words}/${limit} chữ cho ${secs} giây${words > limit ? long : ''}` : `nói kịp ~${limit} chữ trong ${secs} giây`;
@@ -3595,11 +3604,46 @@ function createCanvasPage(CFG) {
     return C.tpls;
   }
   const tplOf = id => ((C.tpls || {}).templates || []).find(t => t.id === id) || null;
+  // cách dựng lời dài (giống CanvasRunner._build_mode): one = 🎬 Không tách (chia + ghép trong khối) · split = ✂ Tách khối
+  // · single = 1 video (khối cũ không mẫu đã tắt tự tách)
+  // · story = 🧭 Storyboard (Tách khối + AI phân tích lời → prompt riêng từng khối con, nối ⛓ liền mạch)
+  const buildMode = n => (n.build === 'split' || n.build === 'story') ? n.build : (n.template || n.build === 'one') ? 'one' : (n.auto_split === false ? 'single' : 'split');
+  const BUILD_TXT = {
+    split: 'Lời dài → mỗi đoạn 1 khối Video con + khối Ghép (xem / tạo lại từng đoạn), cùng ảnh / prompt của khối này.',
+    one: 'Khối tự chia lời thành các đoạn vừa 1 clip, quay liền mạch (đoạn sau quay từ khung cuối đoạn trước) rồi ghép thành 1 video. Đoạn lỗi → chạy lại chỉ quay đoạn đó. Không tốn lượt model chữ.',
+    story: 'Lời được chia nguyên văn theo clip → AI phân tích lời thoại, viết storyboard: mỗi khối Video con có prompt riêng (hành động khớp câu nói, góc máy, khung cuối) → các khối nối ⛓ quay tiếp từ khung cuối khối trước → Ghép thành 1 video.',
+    single: 'Đang quay 1 video (lời dài có thể bị nói vội / cắt) — chọn cách dựng ở trên.',
+  };
+  function buildSeg(n) {
+    const mode = buildMode(n);
+    const b = (val, icon, label, tip) => `<button type="button" data-set="build" data-val="${val}" class="${mode === val ? 'on' : ''}" aria-pressed="${mode === val}" title="${tip}"><i>${icon}</i>${label}</button>`;
+    return `<div class="cv-seg2 cv-seg3" role="radiogroup" title="Cách dựng video khi lời thoại dài hơn 1 clip">
+        ${b('one', '🎬', 'Không tách', 'Khối tự chia + quay liền mạch + ghép bên trong')}
+        ${b('split', '✂', 'Tách khối', 'Khối Video con (cùng prompt) + khối Ghép')}
+        ${b('story', '🧭', 'Storyboard', 'AI phân tích lời thoại → khối Video con prompt riêng, nối liền mạch + Ghép')}</div>`;
+  }
+  function storyHtml(n) {
+    // 🧭 storyboard đã phân tích (n.story) + nút phân tích lại — chỉ ở khối Video chung chế độ Storyboard
+    if (buildMode(n) !== 'story') return '';
+    const st = n.story || {};
+    const sc = st.scenes || [];
+    const kids = (C.board.nodes || []).filter(x => x.part_of === n.id).length;
+    const model = ((C.meta.flow || {}).names || {}).text || 'model chữ';
+    return `<div class="cv-story">
+      <div class="row"><b>🧭 Storyboard${sc.length ? ` · ${sc.length} cảnh` : ''}</b><span class="cv-sp"></span>
+        <button class="btn ghost sm" type="button" data-story-go ${kids ? '' : 'disabled'} title="${kids ? `1 lượt ${esc(model)} — chưa quay video` : 'Lời thoại vừa 1 clip — chưa cần tách'}">🧭 ${sc.length ? 'Phân tích lại' : 'Phân tích lời thoại'}</button></div>
+      ${st.error ? `<small class="warn-text">Chưa phân tích được (${esc(st.error)}) — khối con đang dùng prompt chung</small>` : ''}
+      ${st.analysis ? `<small class="muted">${esc(st.analysis)}</small>` : ''}
+      ${sc.length ? `<ol class="cv-story-list">${sc.map(s => `<li><b>${esc(s.noi_dung || '')}</b>${s.goc_quay ? ` <small class="muted">· ${esc(s.goc_quay)}</small>` : ''}<small class="cv-story-loi">“${esc(s.loi || '')}”</small></li>`).join('')}</ol>
+        <small class="muted">Prompt từng cảnh nằm ở khối Video con (sửa được). ✦ Tạo / ▶ Chạy toàn bộ → quay lần lượt rồi ghép.</small>`
+        : `<small class="muted">${kids ? `Đã chia ${kids} đoạn — bấm 🧭 Phân tích (hoặc ✦ Tạo: tự phân tích trước khi quay).` : 'Lời thoại vừa 1 clip — chưa cần storyboard.'}</small>`}</div>`;
+  }
   function tplChip(n) {
     const t = n.kind === 'video' && !n.part_of && n.template ? tplOf(n.template) : null;
     if (!t) return '';
+    const m = buildMode(n);
     return `<div class="cv-flow-card-chips cv-tpl-chips"><span>${esc(t.icon)} ${esc(t.name)}</span>`
-      + `<span>${n.build === 'split' ? '✂ Tách khối' : '🎬 Tự chia + ghép'}</span></div>`;
+      + `<span>${m === 'split' ? '✂ Tách khối' : m === 'story' ? '🧭 Storyboard' : '🎬 Tự chia + ghép'}</span></div>`;
   }
   function tplHtml(n) {
     const list = (C.tpls || {}).templates || [];
@@ -3610,19 +3654,24 @@ function createCanvasPage(CFG) {
     const head = `<div class="cv-tpl-sec"><div class="cv-tpl-h"><b>🎞 Mẫu video</b>
       <button class="btn ghost sm" type="button" data-tpl-lib="${esc(n.id)}" title="Xem / sửa / tạo mẫu: phong cách, Master Prompt, khung cảnh">📚 Thư viện mẫu</button></div>
       <label title="Chọn mẫu → khối chỉ cần ảnh vật liệu + lời thoại"><select data-f="template">${opts}</select></label>`;
-    if (!t) return `${head}<small class="muted">Chọn 1 mẫu: chỉ cần nối ảnh vật liệu (nhân vật, sản phẩm, bối cảnh) + lời thoại — khối tự làm video chuyên nghiệp.</small></div>`;
+    if (!t) {  // 🎬 không dùng mẫu: vẫn chọn được cách dựng khi lời dài
+      const mode = buildMode(n);
+      return `${head}<small class="muted">Chọn 1 mẫu: chỉ cần nối ảnh vật liệu (nhân vật, sản phẩm, bối cảnh) + lời thoại — khối tự làm video chuyên nghiệp.</small>
+        <small><b>Lời thoại dài hơn 1 clip:</b></small>${buildSeg(n)}
+        <small class="muted">${BUILD_TXT[mode]}</small>${storyHtml(n)}</div>`;
+    }
     const cont = ((C.tpls || {}).continuity || {})[t.continuity] || '';
     const mats = (t.materials || []).map(k => ((C.tpls || {}).materials || {})[k]).filter(Boolean).join(' · ');
     return `${head}<small class="muted">${esc(t.desc)}</small>
       <div class="cv-flow-chips"><span>${esc(cont.split('—')[0].trim())}</span><span>~${t.segments} cảnh mẫu</span><span>${secs} giây / đoạn</span></div>
       ${mats ? `<small class="muted">Vật liệu nên có: ${esc(mats)}</small>` : ''}
-      <div class="cv-seg2" role="radiogroup" title="Cách dựng video dài">
-        <button type="button" data-set="build" data-val="one" class="${n.build !== 'split' ? 'on' : ''}" aria-pressed="${n.build !== 'split'}"><i>🎬</i>Không tách</button>
-        <button type="button" data-set="build" data-val="split" class="${n.build === 'split' ? 'on' : ''}" aria-pressed="${n.build === 'split'}"><i>✂</i>Tách khối</button></div>
-      <small class="muted">${n.build === 'split'
+      ${buildSeg(n)}
+      <small class="muted">${buildMode(n) === 'split'
     ? 'Lời dài → mỗi đoạn 1 khối Video con + khối Ghép (xem / tạo lại từng đoạn). Mỗi khối con lấy khung cảnh của mẫu.'
-    : 'Khối tự chia lời thành các đoạn vừa 1 clip, quay lần lượt rồi ghép thành 1 video. Đoạn lỗi → chạy lại chỉ quay đoạn đó.'}</small>
-      ${n.build !== 'split' ? `<label class="cv-opt-check" title="Tắt: điền prompt theo khung cảnh của mẫu (không tốn lượt model chữ)"><input type="checkbox" data-f="tpl_ai" ${n.tpl_ai !== false ? 'checked' : ''}> ✍ AI viết prompt từng đoạn (1 lượt ${esc(((C.meta.flow || {}).names || {}).text || 'ChatGPT')})</label>` : ''}</div>`;
+    : buildMode(n) === 'story' ? `${BUILD_TXT.story} Storyboard theo phong cách / Master Prompt của mẫu.`
+      : 'Khối tự chia lời thành các đoạn vừa 1 clip, quay lần lượt rồi ghép thành 1 video. Đoạn lỗi → chạy lại chỉ quay đoạn đó.'}</small>
+      ${storyHtml(n)}
+      ${buildMode(n) === 'one' ? `<label class="cv-opt-check" title="Tắt: điền prompt theo khung cảnh của mẫu (không tốn lượt model chữ)"><input type="checkbox" data-f="tpl_ai" ${n.tpl_ai !== false ? 'checked' : ''}> ✍ AI viết prompt từng đoạn (1 lượt ${esc(((C.meta.flow || {}).names || {}).text || 'ChatGPT')})</label>` : ''}</div>`;
   }
 
   async function templatesDialog(forNode) {

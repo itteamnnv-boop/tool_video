@@ -1146,11 +1146,26 @@ def ask_model(settings, options: dict, prompt: str, *, complete=None, what: str 
         return RoleAI("studio", log, check_cancel).complete(model[4:], system, prompt, max_tokens=8000)[0]
     from .llm import make_provider
     from .llm.browser_chat import BrowserChatProvider
+    from .llm.cli_chat import CliChatProvider
 
     provider = make_provider(model, settings, show_browser=bool(options.get("show_browser")))
     if provider is None:
         raise StudioError("Model viết chữ không hợp lệ")
     with task_context(options.get("text_profile", ""), check_cancel=check_cancel, log=log):
+        if isinstance(provider, CliChatProvider):
+            # 🧠 CLI: kiểm tra định dạng như trình duyệt (complete) — sai / cụt → lượt đó chạy lại bằng trình duyệt với
+            # đúng thời gian chờ + cuộc trò chuyện cũ như khi chạy trình duyệt trực tiếp
+            timeout = int(options.get("timeout") or STORYBOARD_TIMEOUT)
+            provider.timeout_s = timeout
+            fb = provider.fallback
+            if fb is not None and hasattr(fb, "timeout_s"):
+                fb.timeout_s = timeout
+            if isinstance(fb, BrowserChatProvider):
+                fb.start_url = str(options.get("chat_url") or "")
+            text = provider.generate(system + "\n\n" + prompt, images=images or None, complete=complete)
+            if provider.last_url:
+                options["_last_url"] = provider.last_url
+            return text
         if isinstance(provider, BrowserChatProvider):
             # trả lời dài (storyboard 8–10 cảnh JSON) → chờ lâu hơn, và chỉ nhận câu trả lời khi JSON đã đọc được đủ
             # (ChatGPT hay dừng suy nghĩ giữa chừng → trước đây app lấy bản viết dở, JSON cụt)

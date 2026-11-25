@@ -761,6 +761,12 @@
 .cv-seg2 button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 8px;border-radius:8px;border:1px solid var(--cv-line2);background:var(--cv-card2);color:var(--cv-ink);cursor:pointer;font-size:12.5px}
 .cv-seg2 button i{font-style:normal;font-size:15px;line-height:1}
 .cv-seg2 button.on{border-color:#4f8cff;background:rgba(79,140,255,.16);color:#cfe0ff}
+.cv-seg3 button{padding:7px 4px;font-size:12px;gap:4px}
+.cv-story{display:flex;flex-direction:column;gap:6px;margin-top:6px;padding:8px;border:1px dashed var(--cv-line2);border-radius:10px}
+.cv-story .row{display:flex;align-items:center;gap:6px}
+.cv-story-list{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto;font-size:12px}
+.cv-story-list small{font-size:11.5px;display:inline;margin:0}
+.cv-story-list small.cv-story-loi{display:block;margin-top:2px}
 .cv-flow-chips{display:flex;flex-wrap:wrap;gap:4px}
 .cv-flow-chips span{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--cv-card2);border:1px solid var(--cv-line2);color:var(--cv-mute)}
 .cv-menu-blocks b.cv-menu-flow{color:#9cc3ff}

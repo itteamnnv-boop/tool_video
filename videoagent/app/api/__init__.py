@@ -33,12 +33,14 @@ from .musehub import MuseHubApi
 from .profiles import ProfilesApi
 from .seedance import SeedanceApi
 from .studio import StudioApi
+from .setup import SetupApi
 from .system import SystemApi
+from .tvc import TvcApi
 from .workflow import WorkflowApi
 
 
 class Api(CoreApi, WorkflowApi, MediaApi, SeedanceApi, ProfilesApi, FacebookApi, AdsApi, CampaignApi, StudioApi,
-          CastApi, ContentApi, MuseHubApi, SystemApi, CanvasApi, ChannelApi, McpApi):
+          CastApi, ContentApi, MuseHubApi, SystemApi, CanvasApi, ChannelApi, McpApi, TvcApi, SetupApi):
     """Đối tượng duy nhất đưa cho pywebview (js_api)."""
 
     def _screen_locked(self, screen: str) -> dict | None:
@@ -66,13 +68,17 @@ class Api(CoreApi, WorkflowApi, MediaApi, SeedanceApi, ProfilesApi, FacebookApi,
 
 # 🔒 lệnh backend của từng màn bị chặn khi màn đó khoá (thao tác ghi / dữ liệu nhạy cảm). Lệnh đọc dùng chung với màn
 # khác (fb_state, ads_status, ads_accounts…) và đăng bài từ quy trình Canvas / lịch đã duyệt vẫn chạy bình thường.
-SCREEN_NAMES = {"settings": "Cài đặt", "ads": "Quảng cáo Facebook", "posts": "Quản lý bài đăng"}
+SCREEN_NAMES = {"settings": "Cài đặt", "ads": "Quảng cáo Facebook", "posts": "Quản lý bài đăng", "tvc": "Trợ lý TVC", "setup": "Cài đặt công cụ"}
 SCREEN_APIS = {
     # 📣 Fanpage Facebook đã chuyển vào Cài đặt → Facebook · Meta: theo khoá Cài đặt
     "settings": ("fb_save_app", "fb_connect_token", "fb_logout", "fb_load_pages", "fb_set_connected", "fb_post"),
     "ads": ("ads_overview", "ads_list", "ads_set_status", "ads_set_budget", "ads_page_posts", "ads_create_boost"),
     "posts": ("post_save", "post_delete", "post_publish", "post_schedule", "post_reject", "post_unschedule",
               "post_publish_now"),
+    "tvc": ("tvc_chat_send", "tvc_chat_answer", "tvc_chat_upload", "tvc_chat_delete", "tvc_settings_save",
+            "tvc_pick_root", "tvc_ad_cancel", "tvc_chat_hide",
+            "tvc_auto_start", "tvc_auto_stop", "tvc_web_images_save"),  # 🎬 Trợ lý TVC
+    "setup": ("setup_install", "setup_cancel", "setup_skill_install"),  # 🧰 Cài đặt công cụ
 }
 
 

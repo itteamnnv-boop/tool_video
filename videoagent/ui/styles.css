@@ -733,3 +733,21 @@ select option{background:#1c231d}
 .nt-pop.review .nt-err,.nt-row.review .nt-err{color:#ffd88a}
 .nt-pop.review{border-color:#7a5a1a}
 .nt-sound{margin-left:auto;font-size:15px;text-decoration:none}
+/* 🧠 model chữ: Trình duyệt hay CLI (Cài đặt → Trình duyệt) */
+.set-cli{margin-top:12px;padding-top:10px;border-top:1px solid var(--line2);display:flex;flex-direction:column;gap:8px}
+.set-cli-rows{display:flex;flex-direction:column;gap:6px;margin-bottom:6px}
+.set-cli-row{display:grid;grid-template-columns:140px minmax(0,1fr) 150px auto;gap:6px 10px;align-items:center;padding:8px;border:1px solid var(--line2);border-radius:10px}
+.set-cli-row code{font-size:11px}
+.set-cli-note{grid-column:1 / -1}
+.set-cli-row .ok-text{color:var(--teal,#5fd3b0)}
+@media (max-width:760px){.set-cli-row{grid-template-columns:1fr}}
+.set-cli-node{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.set-cli-btns{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.set-cli-row{grid-template-columns:140px minmax(0,1fr) 150px auto}
+.set-cli-key{grid-column:1 / -1;margin:0}
+.set-cli-muse{grid-column:1 / -1;display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap}
+.set-cli-muse > small:last-child{flex-basis:100%}
+.set-cli-paste{flex-basis:100%;display:flex;gap:6px;align-items:flex-start}
+.set-cli-paste textarea{flex:1;min-width:0;font-family:ui-monospace,Consolas,monospace;font-size:11px}
+.set-cli-job{border:1px solid var(--line2);border-radius:10px;padding:8px;display:flex;flex-direction:column;gap:6px}
+.set-cli-job pre{max-height:180px;overflow:auto;margin:0;font-size:11px;white-space:pre-wrap;background:var(--card2,#111);padding:6px;border-radius:6px}

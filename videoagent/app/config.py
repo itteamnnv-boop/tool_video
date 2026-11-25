@@ -22,6 +22,14 @@ DEFAULTS = {
     "fcanvas_model_video": "grok_browser", "fcanvas_model_assist": "claude_browser",
     # 📋 tác vụ Canvas: số tác vụ chạy cùng lúc (còn lại chờ) — Canvas / Grok Canvas
     "canvas_task_parallel": 2, "fcanvas_task_parallel": 2,
+    # 🧠 cách gọi model CHỮ theo hãng: "browser" (trình duyệt) | "cli" (Claude Code / Codex / Gemini CLI / Grok CLI);
+    # CLI lỗi → lượt đó chạy bằng trình duyệt (llm_cli_fallback)
+    "llm_mode_claude": "browser", "llm_mode_chatgpt": "browser", "llm_mode_gemini": "browser", "llm_mode_grok": "browser",
+    "llm_mode_muse": "browser", "llm_cli_fallback": True,
+    "grok_cli_key": "",  # xAI API key cho Grok CLI (chỉ truyền vào lượt chạy Grok CLI)
+    # 🎬 Trợ lý TVC: Claude Code chạy skill tvc-livestream-capcut — thư mục làm việc ("" = D:/CapCut), model Claude ("" = mặc
+    # định của Claude Code)
+    "tvc_root": "", "tvc_claude_model": "", "tvc_rubric": "",
     # 🔒 màn bị khoá bằng mật khẩu quản trị (Cài đặt → Bảo mật → Khoá màn hình) — mã màn (data-view) ở thanh bên
     "locked_screens": [],
     "fcanvas_profile_text": "", "fcanvas_profile_image": "", "fcanvas_profile_video": "", "fcanvas_profile_assist": "",

@@ -346,6 +346,11 @@ class CanvasApi:
     def canvas_delete_nodes(self, bid: str, ids: list) -> dict:
         return self._cv_edit("board", self._canvas.delete_nodes, bid, list(ids or []))
 
+    def canvas_story_analyze(self, bid: str, nid: str) -> dict:
+        """🧭 Khối Video chung (Storyboard): phân tích lại lời thoại → prompt riêng từng khối con (1 lượt model chữ,
+        chưa quay video). Chạy như ✦ Tạo → không cần mở khoá quản trị."""
+        return self._cv("result", self._canvas.story_analyze, bid, nid)
+
     def canvas_generate(self, bid: str, nid: str) -> dict:
         return self._cv("board", self._canvas.generate, bid, nid)
 

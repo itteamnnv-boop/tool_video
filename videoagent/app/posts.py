@@ -49,7 +49,7 @@ SCHEDULE_MIN, SCHEDULE_MAX = 10 * 60, 30 * 24 * 3600  # Facebook: hẹn giờ 10
 APP_SCHEDULE_MIN, APP_SCHEDULE_MAX = 60, 365 * 24 * 3600  # lên lịch app tự đăng: 1 phút → 1 năm
 GRACE = 15 * 60  # mở app trễ hơn giờ hẹn quá 15 phút → không tự đăng (lỡ lịch), chờ người dùng
 SOURCES = {"manual": "Tạo tay", "quick": "Đăng nhanh (Fanpage)", "library": "Thư viện video", "workflow": "Workflow",
-           "campaign": "Chiến dịch", "canvas": "Canvas"}
+           "campaign": "Chiến dịch", "canvas": "Canvas", "tvc": "Trợ lý TVC"}
 REVIEW_WHEN = ("now", "app", "at")  # bài chờ duyệt: đăng ngay / app tự đăng lúc… / hẹn giờ trên Facebook
 MAX_POSTS = 3000
 MAX_FILES = 10

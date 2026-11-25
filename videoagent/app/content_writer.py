@@ -71,10 +71,18 @@ def models(settings) -> list[dict]:
     """Model dùng được cho block này, kèm trạng thái sẵn sàng (có khoá / cần đăng nhập)."""
     from .campaign import ai
 
+    from .llm import cli_chat
+
     keys = ai.key_status()
-    out = [{"id": mid, "name": f"{name} (trình duyệt)", "group": "Trình duyệt — tài khoản đã đăng nhập", "ready": True,
-            "site": mid.removesuffix("_browser"), "note": f"Cần đăng nhập {name} trong Profile trình duyệt"}
-           for mid, name in BROWSER_MODELS.items()]
+    # 🧠 hãng đang chạy việc chữ qua CLI (Cài đặt → Trình duyệt) → nhãn "· CLI (…)" — id giữ nguyên, cấu hình cũ không đổi
+    out = []
+    for mid, name in BROWSER_MODELS.items():
+        site = mid.removesuffix("_browser")
+        cli = cli_chat.via_cli(settings, site)
+        out.append({"id": mid, "name": cli_chat.label(settings, site, name), "group": "Trình duyệt — tài khoản đã đăng nhập",
+                    "ready": True, "site": site, "cli": cli,
+                    "note": f"Chạy qua CLI ({cli_chat.CLI_SHORT.get(site, '')}) — lỗi thì lượt đó chạy bằng trình duyệt"
+                    if cli else f"Cần đăng nhập {name} trong Profile trình duyệt"})
     out.append({"id": "gemini_api", "name": f"Gemini API ({settings.get('gemini_model') or 'gemini-2.5-flash'})",
                 "group": "API key", "ready": bool(settings.get("gemini_api_key")), "note": "Gemini API key ở Cài đặt → API & kết nối"})
     out += [{"id": f"api:{m}", "name": f"Claude · {m}", "group": "API key", "ready": keys["anthropic"],

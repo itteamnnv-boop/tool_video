@@ -64,6 +64,139 @@ def _first_line(text, n: int = 90) -> str:
 
 
 class SystemApi:
+    # ---- 🧠 model chữ qua CLI (Cài đặt → Trình duyệt → Cách gọi model chữ)
+    def llm_cli_status(self, refresh: bool = False) -> dict:
+        """Mỗi hãng: đã cài CLI chưa, phiên bản, lệnh cài / đăng nhập + đang chọn Trình duyệt hay CLI (không gọi model)."""
+        from ..config import settings
+        from ..llm import cli_chat
+
+        from ..llm import cli_install
+
+        if refresh:
+            cli_install.refresh_path()
+        return _ok(clis=[{**cli_chat.status(site, bool(refresh)), "mode": cli_chat.mode(settings, site),
+                          "npm_pkg": cli_chat.NPM_PKG.get(site, ""), "can_login": site in cli_chat.LOGIN_ARGS}
+                         for site in cli_chat.CLIS], fallback=settings.get("llm_cli_fallback", True) is not False,
+                   node=cli_install.node_status(), job=cli_install.job(),
+                   python=cli_install.python_status(bool(refresh)),  # cài muse-cli cần Python 3.10+ / uv / pipx
+                   grok_key=bool(cli_chat.grok_key()))  # Cài đặt / GROK_API_KEY / ~/.grok/user-settings.json
+
+    def _settings_locked(self) -> dict | None:
+        """Cài / cập nhật / đăng nhập CLI nằm trong Cài đặt → cần Cài đặt đang mở khoá (đã đặt mật khẩu)."""
+        lock = self._admin_lock()
+        if lock.has_password() and not lock.unlocked():
+            return {"ok": False, "locked": True, "error": "Cài đặt đang khoá — nhập mật khẩu quản trị"}
+        lock.touch()
+        return None
+
+    def llm_cli_node(self) -> dict:
+        """Node.js / npm / winget / PowerShell có trên máy không (để cài CLI)."""
+        from ..llm import cli_install
+
+        return _ok(node=cli_install.node_status())
+
+    def llm_cli_install(self, site: str, action: str = "install") -> dict:
+        """⬇ Cài / ⟳ cập nhật CLI (npm; muse-cli: uv / pipx / pip) hoặc Node.js / Python (action="node" / "python") — chạy nền."""
+        from ..llm import cli_install
+
+        locked = self._settings_locked()
+        if locked:
+            return locked
+        if action not in ("install", "update", "node", "python"):
+            return {"ok": False, "error": "Thao tác không hợp lệ"}
+        try:
+            return _ok(job=cli_install.start(str(site or ""), action))
+        except RuntimeError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def llm_cli_job(self) -> dict:
+        from ..llm import cli_install
+
+        return _ok(job=cli_install.job())
+
+    def llm_cli_cancel(self) -> dict:
+        from ..llm import cli_install
+
+        return _ok(cancelled=cli_install.cancel())
+
+    def llm_cli_login(self, site: str) -> dict:
+        """🔑 Mở cửa sổ Terminal chạy lệnh đăng nhập CLI (đăng nhập cần tương tác trên trình duyệt)."""
+        from ..llm import cli_install
+
+        locked = self._settings_locked()
+        if locked:
+            return locked
+        try:
+            return _ok(**cli_install.login(str(site or "")))
+        except (RuntimeError, OSError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def llm_muse_login(self, method: str, cookie: str = "") -> dict:
+        """🔑 Đăng nhập muse-cli = ghi file cookie: method "profile" (lấy từ profile Muse của app — giao diện hỏi xác nhận
+        trước) | "paste" (cookie người dùng dán). Không trả cookie về giao diện. Xong → `muse-cli status` (không gửi tin)."""
+        from ..config import settings
+        from ..llm import cli_chat, muse_cli
+        from ..llm.base import LLMError
+
+        locked = self._settings_locked()
+        if locked:
+            return locked
+        try:
+            if method == "profile":
+                pairs = muse_cli.cookies_from_profile(settings.get("browser_channel") or "")
+            elif method == "paste":
+                pairs = muse_cli.parse_cookies(cookie)
+            else:
+                return {"ok": False, "error": "Cách đăng nhập không hợp lệ"}
+            state = muse_cli.save_cookies(pairs)
+        except LLMError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001 — profile bận / trình duyệt lỗi
+            return {"ok": False, "error": f"Không lấy được đăng nhập: {str(exc)[:200]}"}
+        with cli_chat._status_lock:
+            cli_chat._status_cache.pop("muse", None)
+        check = self._muse_check()
+        return _ok(login=state, check=check)
+
+    def _muse_check(self) -> dict:
+        from ..llm import cli_chat, muse_cli
+        from ..llm.base import LLMError
+
+        path = cli_chat.which("muse")
+        if not path:
+            return {"ok": False, "error": "Chưa cài muse-cli"}
+        try:
+            return muse_cli.check(path)
+        except LLMError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def llm_muse_check(self) -> dict:
+        """Kiểm tra muse-cli đã đăng nhập (`muse-cli status`: đọc danh tính / số phiên — không gửi tin, không hỏi model)."""
+        return _ok(check=self._muse_check())
+
+    def llm_cli_quota_clear(self, site: str) -> dict:
+        """⏳ Bỏ trạng thái "CLI hết lượt" (đã nạp thêm credit / đổi tài khoản) → lượt sau thử lại CLI."""
+        from ..llm import cli_chat
+
+        cli_chat.clear_exhausted(str(site or ""))
+        return _ok(cleared=True)
+
+    def llm_cli_test(self, site: str, key: str = "") -> dict:
+        """Thử CLI bằng 1 câu rất ngắn (TỐN 1 lượt của hãng đó — giao diện hỏi xác nhận trước).
+        key: xAI key đang gõ ở ô Grok (chưa Lưu) — chỉ dùng cho lượt thử này, không lưu, không trả về giao diện."""
+        from ..llm import cli_chat
+        from ..llm.base import LLMError
+
+        if site not in cli_chat.CLIS:
+            return {"ok": False, "error": "Hãng không hợp lệ"}
+        t0 = time.time()
+        try:
+            text = cli_chat.run(site, "Chỉ trả lời đúng một từ: OK", timeout_s=180,
+                                grok_key_override=str(key or "") if site == "grok" else "")
+        except LLMError as exc:
+            return {"ok": False, "error": str(exc)}
+        return _ok(reply=text[:200], secs=round(time.time() - t0, 1))
+
     def _file_results(self, paths) -> list:
         """File trong thư mục lưu → [{kind, url, path}] (URL /media/ của server nội bộ)."""
         base, out = Path(self._settings_output()), []

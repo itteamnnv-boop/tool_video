@@ -128,9 +128,10 @@ def fetch_page(url: str, timeout: int = 20) -> dict:
     else:
         title, text = "", html.strip()
     images, product = page_images(html, final) if is_html else ([], False)
+    gallery = gallery_images(html, final) if is_html else []
     if not text and not images:
         raise ResearchError(f"{url}: trang không có chữ (có thể cần đăng nhập / chạy JavaScript)")
-    return {"url": url, "title": title, "text": text, "images": images, "product": product}
+    return {"url": url, "title": title, "text": text, "images": images, "product": product, "gallery": gallery}
 
 
 def _guess_encoding(body: bytes) -> str:
@@ -210,6 +211,40 @@ def page_images(html: str, base: str) -> tuple[list[str], bool]:
         if u.startswith(("http://", "https://")) and not _SKIP_IMG.search(u) and u not in out:
             out.append(u)
     return out[:8], product
+
+
+_IMG = re.compile(r"<img\b[^>]*>", re.I)
+_GALLERY_HINT = re.compile(r"wp-post-image|product|gallery|zoom|large_image|slide|main-image", re.I)
+_THUMB = re.compile(r"-(\d{2,3})x(\d{2,3})\.(?:jpe?g|png|webp)(\?|$)", re.I)
+
+
+def gallery_images(html: str, base: str, limit: int = 12) -> list[str]:
+    """Ảnh lớn trong thư viện ảnh sản phẩm (thẻ <img> có dấu hiệu gallery / product / zoom, hoặc ảnh tải lên của trang):
+    ưu tiên bản lớn (data-large_image / data-zoom-image / srcset lớn nhất / data-src); bỏ logo, icon, svg, ảnh thu nhỏ."""
+    out: list[str] = []
+    for tag in _IMG.findall(html or ""):
+        cands = [_attr(tag, a) for a in ("data-large_image", "data-zoom-image", "data-full", "data-src", "src")]
+        srcset = _attr(tag, "srcset") or _attr(tag, "data-srcset")
+        if srcset:  # "a.jpg 300w, b.jpg 1024w" → bản rộng nhất
+            parts = [p.strip().rsplit(" ", 1) for p in srcset.split(",") if p.strip()]
+            best = max(parts, key=lambda p: int(re.sub(r"\D", "", p[1]) or 0) if len(p) == 2 else 0, default=None)
+            if best:
+                cands.insert(0, best[0])
+        url = next((c for c in cands if c and not c.startswith("data:")), "")
+        if not url:
+            continue
+        url = urljoin(base, url)
+        hint = _GALLERY_HINT.search(tag) or "/uploads/" in url or "/product" in url.lower()
+        if not hint or _SKIP_IMG.search(url) or _SKIP_IMG.search(tag) or not url.startswith(("http://", "https://")):
+            continue
+        m = _THUMB.search(url)
+        if m and max(int(m.group(1)), int(m.group(2))) < 300:  # ảnh thu nhỏ WordPress (-150x150) → bỏ
+            continue
+        if url not in out:
+            out.append(url)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def download_image(url: str, dest: Path, timeout: int = 30) -> Path | None:
@@ -346,7 +381,8 @@ def ask_gemini(settings, prompt: str, log) -> tuple[str, list[dict]]:
 def ask_browser(provider: str, settings, prompt: str, show_browser: bool) -> tuple[str, list[dict]]:
     from .llm import make_provider
 
-    llm = make_provider(provider, settings, show_browser=show_browser)
+    # 🌐 tra cứu cần model tự tìm trên mạng → luôn dùng trình duyệt (CLI chạy chế độ an toàn, không lên web)
+    llm = make_provider(provider, settings, show_browser=show_browser, cli=False)
     if llm is None:
         raise ResearchError("Model AI không hợp lệ")
     return str(llm.generate(prompt) or "").strip(), []

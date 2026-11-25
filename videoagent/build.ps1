@@ -31,25 +31,19 @@ VSVersionInfo(
 )
 "@ | Set-Content -Encoding utf8 build\version_info.txt
 
-& .venv\Scripts\pyinstaller --noconfirm --clean --windowed `
-    --name VideoAgent `
-    --icon assets\icon.ico `
-    --version-file build\version_info.txt `
-    --python-option "X utf8" `
-    --add-data "ui;ui" `
-    --add-data "templates;templates" `
-    --add-data "assets;assets" `
-    --collect-all playwright `
-    --collect-all edge_tts `
-    --collect-all webview `
-    --collect-all pythonnet `
-    --collect-all clr_loader `
-    --collect-all yt_dlp `
-    --collect-all curl_cffi `
-    --collect-data imageio_ffmpeg `
-    main.py
+# Dựng từ VideoAgent.spec (1 nguồn duy nhất: thư viện collect_all, hiddenimports, icon, UTF-8…). KHÔNG truyền tham số
+# PyInstaller ở đây — chạy kiểu "pyinstaller ... main.py" sẽ ghi đè spec và làm rơi thư viện (VD claude-agent-sdk).
+& .venv\Scripts\pyinstaller --noconfirm --clean VideoAgent.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller lỗi" }
 Write-Host "Xong: dist\VideoAgent\VideoAgent.exe"
+
+# Tự kiểm bản build: nạp mọi thư viện + claude.exe đi kèm SDK + ffmpeg. Thiếu → dừng, không ra bộ cài hỏng.
+$check = Join-Path $env:TEMP "videoagent_selfcheck.txt"
+Remove-Item $check -ErrorAction SilentlyContinue
+$p = Start-Process -FilePath "dist\VideoAgent\VideoAgent.exe" -ArgumentList "--selfcheck", "`"$check`"" -Wait -PassThru
+if (Test-Path $check) { Get-Content $check -Encoding utf8 | Write-Host }
+if ($p.ExitCode -ne 0 -or -not (Test-Path $check)) { throw "Tự kiểm bản build lỗi (xem danh sách FAIL ở trên)" }
+Write-Host "Tự kiểm: OK"
 if ($SkipInstaller) { return }
 
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",

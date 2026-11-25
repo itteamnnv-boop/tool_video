@@ -46,4 +46,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if "--selfcheck" in sys.argv:  # build.ps1: bản build nạp đủ thư viện chưa (ghi kết quả ra file, exe không có console)
+        from app.setup_tools import selfcheck
+
+        i = sys.argv.index("--selfcheck")
+        sys.exit(selfcheck(sys.argv[i + 1] if len(sys.argv) > i + 1 else ""))
     main()

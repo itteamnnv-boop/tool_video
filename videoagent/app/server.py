@@ -97,6 +97,13 @@ class Handler(BaseHTTPRequestHandler):
             from .muse_hub.common import STORE as MHUB_STORE
 
             base, rel = MHUB_STORE, path[len("/mhub-asset/"):]
+        elif path.startswith("/tvc/"):
+            # 🎬 Trợ lý TVC: ảnh / clip / preview của dự án trong thư mục gốc TVC (không trả *.json, *.md…)
+            from .tvc_assistant import MEDIA_EXT
+
+            if Path(path).suffix.lower() not in MEDIA_EXT:
+                return self.send_error(404)
+            base, rel = Path(str(settings.get("tvc_root") or "D:/CapCut")).expanduser(), path[len("/tvc/"):]
         elif path.startswith("/seedance-image/"):
             base, rel = DATA_DIR / "seedance" / "images", path[len("/seedance-image/"):]
         elif path.startswith("/media/"):

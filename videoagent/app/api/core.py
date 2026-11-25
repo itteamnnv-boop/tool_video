@@ -274,6 +274,7 @@ class CoreApi:
             "seedance_images": ("Ảnh (*.png;*.jpg;*.jpeg;*.webp;*.gif;*.avif)",),
             "media": ("Ảnh và video (*.png;*.jpg;*.jpeg;*.webp;*.mp4;*.mov;*.webm;*.m4v)",),
             "srt": ("Phụ đề SRT (*.srt)",),
+            "skill": ("Skill Claude (*.skill;*.zip)",),
             "audio": ("Âm thanh (*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.flac)",),
             "docs": ("Tài liệu (*.txt;*.md;*.csv;*.json;*.docx;*.srt;*.vtt)",),
             "cast_refs": ("Ảnh và ghi chú (*.png;*.jpg;*.jpeg;*.webp;*.txt;*.md)",),

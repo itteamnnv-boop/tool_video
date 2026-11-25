@@ -45,6 +45,8 @@
 <link rel="stylesheet" href="canvas.css">
 <link rel="stylesheet" href="settings.css">
 <link rel="stylesheet" href="imglib.css">
+<link rel="stylesheet" href="tvc.css">
+<link rel="stylesheet" href="setup.css">
 </head>
 <body>
 <div id="splash" role="status" aria-label="Đang khởi động VideoAgent">
@@ -148,9 +150,17 @@
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2.5" y="4" width="7" height="9" rx="1.5"/><rect x="14.5" y="11" width="7" height="9" rx="1.5"/><path d="M9.5 8.5c4 0 1 7 5 7"/><path d="M16 5.5l3 1.7-3 1.7z"/></svg></span>
     <span class="sb-label">Grok Canvas</span>
   </button>
+  <button class="sb-item" data-view="tvc" title="Trợ lý TVC — video livestream bán hàng 9:16 (người mẫu tự nói, khung live, phụ đề, hiệu ứng) → draft CapCut, theo quy trình skill tvc-livestream-capcut">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><circle cx="12" cy="9.5" r="2.4"/><path d="M8.5 15.5c.8-1.6 2-2.4 3.5-2.4s2.7.8 3.5 2.4"/><circle cx="9" cy="5.3" r=".7" fill="currentColor"/><path d="M10.5 5.3h4"/></svg></span>
+    <span class="sb-label">Trợ lý TVC</span>
+  </button>
   <button class="sb-item" data-view="channel" title="Trợ lý nuôi kênh — giao việc, Claude điều phối ChatGPT / Gemini / Grok / Muse tạo ảnh bám tài nguyên của kênh, tự chấm, bạn góp ý">
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/><path d="M17.5 3.5l1 2 2 1"/></svg></span>
     <span class="sb-label">Trợ lý nuôi kênh</span>
+  </button>
+  <button class="sb-item" data-view="setup" title="Cài đặt công cụ — kiểm tra / cài Node, Python, ffmpeg, Claude Code, Codex, capcut-cli, skill TVC… cho máy này">
+    <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.7 6.3a4 4 0 0 0-5.2 5.2L4 17v3h3l5.5-5.5a4 4 0 0 0 5.2-5.2l-2.4 2.4-2.3-.6-.6-2.3z"/></svg></span>
+    <span class="sb-label">Cài đặt công cụ</span><span class="sb-badge hidden" id="sbSetupCount">0</span>
   </button>
   <button class="sb-item" data-view="mcp" title="Kết nối MCP — nối app với nguồn dữ liệu (thư mục, cơ sở dữ liệu, Drive…); Trợ lý Canvas chỉ đọc qua các công cụ bạn cho phép">
     <span class="sb-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 3v4M15 3v4"/><rect x="6" y="7" width="12" height="6" rx="2"/><path d="M12 13v3a4 4 0 0 1-4 4H6"/></svg></span>
@@ -603,6 +613,14 @@
   <div id="mcpBody"></div>
 </section>
 
+<section class="panel page hidden" id="page-setup">
+  <div id="setupBody"></div>
+</section>
+
+<section class="panel page hidden" id="page-tvc">
+  <div id="tvcBody"></div>
+</section>
+
 <section class="panel page hidden" id="page-adbot">
   <!-- tiêu đề gọn 1 hàng: tên màn + tab + ghi chú an toàn (mô tả đầy đủ ở tooltip) -->
   <div class="ad-head">
@@ -1015,5 +1033,7 @@
 <script src="posts.js"></script>
 <script src="cast.js"></script>
 <script src="canvas.js"></script>
+<script src="tvc.js"></script>
+<script src="setup.js"></script>
 </body>
 </html>
